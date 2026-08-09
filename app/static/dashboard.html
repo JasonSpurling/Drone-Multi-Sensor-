@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drone Multi-Sensor Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #161d2e;
+    --border: #263049;
+    --text: #e6e9f0;
+    --muted: #8b93a7;
+    --active: #2e9e4f;
+    --lost: #d99b1f;
+    --closed: #6b7280;
+    --drone: #e5484d;
+    --aircraft: #3b82f6;
+    --bird: #34a853;
+    --friendly: #14b8b0;
+    --unknown: #8b93a7;
+    --critical: #b91c1c;
+    --high: #e5484d;
+    --medium: #d99b1f;
+    --low: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    font-size: 14px;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  #status-line { color: var(--muted); font-size: 12px; }
+  main {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 14px;
+    padding: 14px 20px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 10px 0;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #1d2740; }
+  tbody tr.selected { background: #22304f; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0f1420;
+  }
+  .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  #map-wrap { grid-column: 1; grid-row: 2; }
+  #tracks-wrap { grid-column: 1; grid-row: 1; }
+  #alerts-wrap { grid-column: 2; grid-row: 1; }
+  #details-wrap { grid-column: 2; grid-row: 2; }
+  svg#map { width: 100%; height: 260px; background: #0b0f19; border-radius: 6px; }
+  .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
+  .alert-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .alert-item .top-row { display: flex; justify-content: space-between; align-items: center; }
+  .alert-item .desc { color: var(--muted); margin: 6px 0; }
+  button {
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover { background: #1d4ed8; }
+  button:disabled { background: var(--border); color: var(--muted); cursor: default; }
+  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; }
+  .kv .k { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Drone Multi-Sensor Dashboard</h1>
+  <div id="status-line">loading…</div>
+</header>
+
+<main>
+  <section class="panel" id="tracks-wrap">
+    <h2>Live Tracks</h2>
+    <div id="tracks-table"></div>
+  </section>
+
+  <section class="panel" id="alerts-wrap">
+    <h2>Active Alerts</h2>
+    <div id="alerts-list"></div>
+  </section>
+
+  <section class="panel" id="map-wrap">
+    <h2>Map</h2>
+    <svg id="map" viewBox="0 0 600 260"></svg>
+  </section>
+
+  <section class="panel" id="details-wrap">
+    <h2>Selected Track</h2>
+    <div id="track-details"></div>
+  </section>
+</main>
+
+<script>
+const POLL_MS = 3000;
+const NS = "http://www.w3.org/2000/svg";
+
+const state = { tracks: [], incidents: [], zones: [], selectedTrackId: null };
+
+const CLASS_COLOR = {
+  drone: "var(--drone)", aircraft: "var(--aircraft)", bird: "var(--bird)",
+  friendly: "var(--friendly)", unknown: "var(--unknown)",
+};
+const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
+const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+
+async function fetchJSON(url, opts) {
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  return res.json();
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  return new Date(iso + (iso.endsWith("Z") ? "" : "Z")).toLocaleTimeString();
+}
+
+function badge(text, color) {
+  return `<span class="badge" style="background:${color}">${text}</span>`;
+}
+
+function selectTrack(id) {
+  state.selectedTrackId = id;
+  renderTracks();
+  renderMap();
+  renderDetails();
+}
+
+async function acknowledge(id) {
+  try {
+    await fetchJSON(`/api/incidents/${id}/acknowledge`, { method: "POST" });
+    await refresh();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderTracks() {
+  const el = document.getElementById("tracks-table");
+  if (state.tracks.length === 0) {
+    el.innerHTML = '<div class="empty">No tracks yet.</div>';
+    return;
+  }
+  const rows = state.tracks
+    .slice()
+    .sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1))
+    .map((t) => {
+      const sel = t.id === state.selectedTrackId ? "selected" : "";
+      const pos = t.latitude != null ? `${t.latitude.toFixed(4)}, ${t.longitude.toFixed(4)}` : "—";
+      return `<tr class="${sel}" data-id="${t.id}">
+        <td>${t.id}</td>
+        <td>${badge(t.classification, CLASS_COLOR[t.classification] || CLASS_COLOR.unknown)}</td>
+        <td>${badge(t.status, STATUS_COLOR[t.status] || STATUS_COLOR.closed)}</td>
+        <td>${pos}</td>
+        <td>${fmtTime(t.last_seen)}</td>
+      </tr>`;
+    })
+    .join("");
+  el.innerHTML = `<table>
+    <thead><tr><th>ID</th><th>Class</th><th>Status</th><th>Position</th><th>Last seen</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  el.querySelectorAll("tbody tr").forEach((tr) => {
+    tr.addEventListener("click", () => selectTrack(Number(tr.dataset.id)));
+  });
+}
+
+function renderAlerts() {
+  const el = document.getElementById("alerts-list");
+  const active = state.incidents.filter((i) => i.status !== "resolved");
+  if (active.length === 0) {
+    el.innerHTML = '<div class="empty">No active alerts.</div>';
+    return;
+  }
+  const zoneName = (id) => state.zones.find((z) => z.id === id)?.name ?? `zone ${id}`;
+  el.innerHTML = active
+    .slice()
+    .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1))
+    .map((i) => `
+      <div class="alert-item">
+        <div class="top-row">
+          ${badge(i.severity, SEVERITY_COLOR[i.severity] || SEVERITY_COLOR.low)}
+          ${badge(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
+        </div>
+        <div class="desc">${i.description || i.incident_type}${i.zone_id ? " · " + zoneName(i.zone_id) : ""}</div>
+        <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtTime(i.opened_at)}</div>
+        ${i.status === "open" ? `<div style="margin-top:6px;"><button data-id="${i.id}">Acknowledge</button></div>` : ""}
+      </div>
+    `)
+    .join("");
+  el.querySelectorAll("button[data-id]").forEach((btn) => {
+    btn.addEventListener("click", () => acknowledge(Number(btn.dataset.id)));
+  });
+}
+
+function renderDetails() {
+  const el = document.getElementById("track-details");
+  const track = state.tracks.find((t) => t.id === state.selectedTrackId);
+  if (!track) {
+    el.innerHTML = '<div class="empty">Click a track to see details.</div>';
+    return;
+  }
+  const related = state.incidents.filter((i) => i.track_id === track.id);
+  el.innerHTML = `
+    <div class="kv">
+      <div class="k">ID</div><div>${track.id}</div>
+      <div class="k">UID</div><div>${track.track_uid}</div>
+      <div class="k">Status</div><div>${badge(track.status, STATUS_COLOR[track.status])}</div>
+      <div class="k">Classification</div><div>${badge(track.classification, CLASS_COLOR[track.classification])}</div>
+      <div class="k">First seen</div><div>${fmtTime(track.first_seen)}</div>
+      <div class="k">Last seen</div><div>${fmtTime(track.last_seen)}</div>
+      <div class="k">Position</div><div>${track.latitude != null ? `${track.latitude}, ${track.longitude}` : "—"}</div>
+      <div class="k">Altitude</div><div>${track.altitude_m != null ? track.altitude_m + " m" : "—"}</div>
+      <div class="k">Incidents</div><div>${related.length}</div>
+    </div>
+  `;
+}
+
+function renderMap() {
+  const svg = document.getElementById("map");
+  svg.innerHTML = "";
+  const W = 600, H = 260, PAD = 20;
+
+  const pts = state.tracks.filter((t) => t.latitude != null && t.longitude != null);
+  const zonePts = state.zones.flatMap((z) => z.polygon);
+  const all = [...pts.map((t) => [t.latitude, t.longitude]), ...zonePts];
+
+  if (all.length === 0) {
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", W / 2); t.setAttribute("y", H / 2);
+    t.setAttribute("fill", "#8b93a7"); t.setAttribute("text-anchor", "middle");
+    t.textContent = "No position data yet";
+    svg.appendChild(t);
+    return;
+  }
+
+  let minLat = Math.min(...all.map((p) => p[0])), maxLat = Math.max(...all.map((p) => p[0]));
+  let minLon = Math.min(...all.map((p) => p[1])), maxLon = Math.max(...all.map((p) => p[1]));
+  if (minLat === maxLat) { minLat -= 0.01; maxLat += 0.01; }
+  if (minLon === maxLon) { minLon -= 0.01; maxLon += 0.01; }
+
+  const project = (lat, lon) => {
+    const x = PAD + ((lon - minLon) / (maxLon - minLon)) * (W - 2 * PAD);
+    const y = H - PAD - ((lat - minLat) / (maxLat - minLat)) * (H - 2 * PAD);
+    return [x, y];
+  };
+
+  state.zones.forEach((z) => {
+    const poly = document.createElementNS(NS, "polygon");
+    const points = z.polygon.map(([lat, lon]) => project(lat, lon).join(",")).join(" ");
+    poly.setAttribute("points", points);
+    poly.setAttribute("fill", "rgba(229,72,77,0.12)");
+    poly.setAttribute("stroke", "var(--drone)");
+    poly.setAttribute("stroke-width", "1");
+    svg.appendChild(poly);
+  });
+
+  pts.forEach((t) => {
+    const [x, y] = project(t.latitude, t.longitude);
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("cx", x); c.setAttribute("cy", y);
+    c.setAttribute("r", t.id === state.selectedTrackId ? 7 : 5);
+    c.setAttribute("fill", CLASS_COLOR[t.classification] || CLASS_COLOR.unknown);
+    c.setAttribute("stroke", t.id === state.selectedTrackId ? "#fff" : "none");
+    c.setAttribute("stroke-width", "2");
+    c.style.cursor = "pointer";
+    c.addEventListener("click", () => selectTrack(t.id));
+    svg.appendChild(c);
+  });
+}
+
+async function refresh() {
+  try {
+    const [tracks, incidents, zones] = await Promise.all([
+      fetchJSON("/api/tracks"),
+      fetchJSON("/api/incidents"),
+      fetchJSON("/api/zones"),
+    ]);
+    state.tracks = tracks;
+    state.incidents = incidents;
+    state.zones = zones;
+    renderTracks();
+    renderAlerts();
+    renderMap();
+    renderDetails();
+    document.getElementById("status-line").textContent =
+      `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${incidents.filter(i => i.status !== "resolved").length} active alerts`;
+  } catch (e) {
+    document.getElementById("status-line").textContent = "connection error — retrying…";
+    console.error(e);
+  }
+}
+
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
