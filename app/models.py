@@ -69,12 +69,12 @@ class Detection(BaseModel):
     """A single raw detection reported by one sensor."""
 
     id: int | None = None
-    sensor_id: str
+    sensor_id: str = Field(min_length=1, max_length=100)
     sensor_type: SensorType
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     track_id: int | None = None
-    latitude: float | None = None
-    longitude: float | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
     altitude_m: float | None = None
     azimuth_deg: float | None = None
     range_m: float | None = None
