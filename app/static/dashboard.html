@@ -22,6 +22,9 @@
     --high: #e5484d;
     --medium: #d99b1f;
     --low: #6b7280;
+    --online: #2e9e4f;
+    --stale: #d99b1f;
+    --offline: #6b7280;
   }
   * { box-sizing: border-box; }
   body {
@@ -43,7 +46,7 @@
   main {
     display: grid;
     grid-template-columns: 1.3fr 1fr;
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     gap: 14px;
     padding: 14px 20px;
   }
@@ -86,6 +89,7 @@
   #tracks-wrap { grid-column: 1; grid-row: 1; }
   #alerts-wrap { grid-column: 2; grid-row: 1; }
   #details-wrap { grid-column: 2; grid-row: 2; }
+  #sensors-wrap { grid-column: 1 / span 2; grid-row: 3; }
   svg#map { width: 100%; height: 260px; background: #0b0f19; border-radius: 6px; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
   .alert-item {
@@ -138,13 +142,18 @@
     <h2>Selected Track</h2>
     <div id="track-details"></div>
   </section>
+
+  <section class="panel" id="sensors-wrap">
+    <h2>Sensor Health</h2>
+    <div id="sensors-table"></div>
+  </section>
 </main>
 
 <script>
 const POLL_MS = 3000;
 const NS = "http://www.w3.org/2000/svg";
 
-const state = { tracks: [], incidents: [], zones: [], selectedTrackId: null };
+const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null };
 
 const CLASS_COLOR = {
   drone: "var(--drone)", aircraft: "var(--aircraft)", bird: "var(--bird)",
@@ -152,6 +161,7 @@ const CLASS_COLOR = {
 };
 const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
 
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
@@ -318,20 +328,43 @@ function renderMap() {
   });
 }
 
+function renderSensors() {
+  const el = document.getElementById("sensors-table");
+  if (state.sensors.length === 0) {
+    el.innerHTML = '<div class="empty">No sensor data yet.</div>';
+    return;
+  }
+  const rows = state.sensors
+    .map((s) => `<tr>
+        <td>${s.sensor_id}</td>
+        <td>${s.sensor_type}</td>
+        <td>${badge(s.status, SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline)}</td>
+        <td>${fmtTime(s.last_seen)}</td>
+      </tr>`)
+    .join("");
+  el.innerHTML = `<table>
+    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Last seen</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 async function refresh() {
   try {
-    const [tracks, incidents, zones] = await Promise.all([
+    const [tracks, incidents, zones, sensors] = await Promise.all([
       fetchJSON("/api/tracks"),
       fetchJSON("/api/incidents"),
       fetchJSON("/api/zones"),
+      fetchJSON("/api/sensors"),
     ]);
     state.tracks = tracks;
     state.incidents = incidents;
     state.zones = zones;
+    state.sensors = sensors;
     renderTracks();
     renderAlerts();
     renderMap();
     renderDetails();
+    renderSensors();
     document.getElementById("status-line").textContent =
       `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${incidents.filter(i => i.status !== "resolved").length} active alerts`;
   } catch (e) {

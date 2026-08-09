@@ -17,6 +17,12 @@ class SensorType(str, Enum):
     OTHER = "other"
 
 
+class SensorStatus(str, Enum):
+    ONLINE = "online"
+    STALE = "stale"
+    OFFLINE = "offline"
+
+
 class TrackStatus(str, Enum):
     ACTIVE = "active"
     LOST = "lost"
@@ -117,3 +123,12 @@ class Zone(BaseModel):
     min_altitude_m: float | None = None
     max_altitude_m: float | None = None
     active: bool = True
+
+
+class SensorHealth(BaseModel):
+    """Derived liveness status for a sensor, based on its most recent detection."""
+
+    sensor_id: str
+    sensor_type: SensorType
+    last_seen: datetime
+    status: SensorStatus

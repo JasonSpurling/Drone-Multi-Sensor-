@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -16,6 +17,8 @@ from app.models import (
     ZoneType,
 )
 from app.zones import zones_containing_point
+
+logger = logging.getLogger(__name__)
 
 _SEVERITY_BY_CLASSIFICATION = {
     Classification.DRONE: IncidentSeverity.HIGH,
@@ -40,19 +43,22 @@ def check_zone_incidents(track: Track) -> list[Incident]:
             continue
         if get_open_incident(track.id, zone.id, IncidentType.ZONE_INCURSION.value) is not None:
             continue
+        severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
         incident = create_incident(
             Incident(
                 incident_uid=str(uuid.uuid4()),
                 incident_type=IncidentType.ZONE_INCURSION,
-                severity=_SEVERITY_BY_CLASSIFICATION.get(
-                    track.classification, IncidentSeverity.MEDIUM
-                ),
+                severity=severity,
                 status=IncidentStatus.OPEN,
                 track_id=track.id,
                 zone_id=zone.id,
                 opened_at=datetime.utcnow(),
                 description=f"Track {track.track_uid} entered restricted zone '{zone.name}'",
             )
+        )
+        logger.warning(
+            "Incident opened: track %s entered restricted zone '%s' (severity=%s)",
+            track.track_uid, zone.name, severity.value,
         )
         opened.append(incident)
     return opened

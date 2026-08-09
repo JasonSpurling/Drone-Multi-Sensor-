@@ -9,9 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+from app.config import DB_PATH
 from app.models import Detection, Incident, Track, Zone
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "drone_sensor.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 

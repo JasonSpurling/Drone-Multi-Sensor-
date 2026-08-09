@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import uuid
 from datetime import datetime, timedelta
 
 from app.classification import classify
+from app.config import (
+    TRACK_DISTANCE_GATE_M,
+    TRACK_DROP_SECONDS,
+    TRACK_STALE_SECONDS,
+    TRACK_TIME_GATE_SECONDS,
+)
 from app.db import create_detection, create_track, list_tracks, update_track
 from app.incidents import check_zone_incidents
 from app.models import Classification, Detection, Track, TrackStatus
 
-# Association gates: a detection may only join a track if it arrives within
-# TIME_GATE_SECONDS of the track's last update and within DISTANCE_GATE_M of
-# its last known position.
-TIME_GATE_SECONDS = 30
-DISTANCE_GATE_M = 500.0
-
-# Lifecycle: an active track with no new detections for TRACK_STALE_SECONDS
-# becomes "lost"; a lost track with no recovery for TRACK_DROP_SECONDS becomes
-# "closed" and stops accepting associations.
-TRACK_STALE_SECONDS = 30
-TRACK_DROP_SECONDS = 300
+logger = logging.getLogger(__name__)
 
 _EARTH_RADIUS_M = 6_371_000.0
 
@@ -42,11 +39,13 @@ def expire_stale_tracks(now: datetime | None = None) -> None:
         if now - track.last_seen > timedelta(seconds=TRACK_STALE_SECONDS):
             track.status = TrackStatus.LOST
             update_track(track)
+            logger.info("Track %s -> lost (last seen %s)", track.track_uid, track.last_seen)
 
     for track in list_tracks(status=TrackStatus.LOST.value):
         if now - track.last_seen > timedelta(seconds=TRACK_DROP_SECONDS):
             track.status = TrackStatus.CLOSED
             update_track(track)
+            logger.info("Track %s -> closed (last seen %s)", track.track_uid, track.last_seen)
 
 
 def _find_matching_track(detection: Detection) -> Track | None:
@@ -54,11 +53,11 @@ def _find_matching_track(detection: Detection) -> Track | None:
         return None
 
     best_track: Track | None = None
-    best_distance = DISTANCE_GATE_M
+    best_distance = TRACK_DISTANCE_GATE_M
     for track in list_tracks(status=TrackStatus.ACTIVE.value):
         if track.latitude is None or track.longitude is None:
             continue
-        if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TIME_GATE_SECONDS):
+        if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
             continue
         distance = haversine_distance_m(
             detection.latitude, detection.longitude, track.latitude, track.longitude
@@ -90,6 +89,10 @@ def associate_detection(detection: Detection) -> Detection:
                 altitude_m=detection.altitude_m,
             )
         )
+        logger.info(
+            "New track %s (%s) from sensor=%s confidence=%.2f",
+            track.track_uid, label.value, detection.sensor_id, detection.confidence,
+        )
     else:
         track.last_seen = detection.timestamp
         track.latitude = detection.latitude
@@ -98,6 +101,7 @@ def associate_detection(detection: Detection) -> Detection:
         if track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
             track.classification = label
         update_track(track)
+        logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
 
     check_zone_incidents(track)
 

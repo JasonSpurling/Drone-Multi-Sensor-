@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
+from app.config import ZONES_SEED_PATH
 from app.db import create_zone, get_zone_by_name, list_zones
 from app.models import Zone
 
-DEFAULT_SEED_PATH = Path(__file__).resolve().parent / "zones.seed.json"
+logger = logging.getLogger(__name__)
 
 
-def load_zones_from_file(path: Path = DEFAULT_SEED_PATH) -> list[Zone]:
+def load_zones_from_file(path: Path = ZONES_SEED_PATH) -> list[Zone]:
     """Insert any zones from the JSON file that aren't already in the database
     (matched by name), so this is safe to call on every startup.
     """
     if not path.exists():
+        logger.warning("Zone seed file not found: %s", path)
         return []
 
     loaded: list[Zone] = []
@@ -23,6 +26,7 @@ def load_zones_from_file(path: Path = DEFAULT_SEED_PATH) -> list[Zone]:
         zone = Zone.model_validate(raw)
         if get_zone_by_name(zone.name) is None:
             zone = create_zone(zone)
+            logger.info("Loaded zone '%s' (%s) from seed file", zone.name, zone.zone_type.value)
         loaded.append(zone)
     return loaded
 

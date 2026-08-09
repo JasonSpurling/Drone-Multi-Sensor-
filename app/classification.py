@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
+from app.config import BIRD_CONFIDENCE_THRESHOLD, DRONE_CONFIDENCE_THRESHOLD
 from app.models import Classification, SensorType
-
-DRONE_CONFIDENCE_THRESHOLD = 0.75
-BIRD_CONFIDENCE_THRESHOLD = 0.4
 
 
 def classify(sensor_type: SensorType, confidence: float) -> Classification:
