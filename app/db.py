@@ -213,6 +213,37 @@ def get_incident(incident_id: int) -> Incident | None:
     return _row_to_incident(row) if row else None
 
 
+def update_incident(incident: Incident) -> Incident:
+    with db_session() as conn:
+        conn.execute(
+            """
+            UPDATE incident
+            SET status = ?, closed_at = ?, description = ?
+            WHERE id = ?
+            """,
+            (
+                incident.status.value,
+                incident.closed_at.isoformat() if incident.closed_at else None,
+                incident.description,
+                incident.id,
+            ),
+        )
+    return incident
+
+
+def get_open_incident(track_id: int, zone_id: int, incident_type: str) -> Incident | None:
+    with db_session() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM incident
+            WHERE track_id = ? AND zone_id = ? AND incident_type = ? AND status != 'resolved'
+            ORDER BY opened_at DESC LIMIT 1
+            """,
+            (track_id, zone_id, incident_type),
+        ).fetchone()
+    return _row_to_incident(row) if row else None
+
+
 def list_incidents(status: str | None = None) -> list[Incident]:
     with db_session() as conn:
         if status is not None:
@@ -264,6 +295,12 @@ def create_zone(zone: Zone) -> Zone:
 def get_zone(zone_id: int) -> Zone | None:
     with db_session() as conn:
         row = conn.execute("SELECT * FROM zone WHERE id = ?", (zone_id,)).fetchone()
+    return _row_to_zone(row) if row else None
+
+
+def get_zone_by_name(name: str) -> Zone | None:
+    with db_session() as conn:
+        row = conn.execute("SELECT * FROM zone WHERE name = ?", (name,)).fetchone()
     return _row_to_zone(row) if row else None
 
 

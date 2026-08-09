@@ -6,8 +6,10 @@ import math
 import uuid
 from datetime import datetime, timedelta
 
+from app.classification import classify
 from app.db import create_detection, create_track, list_tracks, update_track
-from app.models import Detection, Track, TrackStatus
+from app.incidents import check_zone_incidents
+from app.models import Classification, Detection, Track, TrackStatus
 
 # Association gates: a detection may only join a track if it arrives within
 # TIME_GATE_SECONDS of the track's last update and within DISTANCE_GATE_M of
@@ -72,6 +74,7 @@ def associate_detection(detection: Detection) -> Detection:
     track, persist the detection against it, and return the stored detection.
     """
     expire_stale_tracks(detection.timestamp)
+    label = classify(detection.sensor_type, detection.confidence)
 
     track = _find_matching_track(detection)
     if track is None:
@@ -81,6 +84,7 @@ def associate_detection(detection: Detection) -> Detection:
                 first_seen=detection.timestamp,
                 last_seen=detection.timestamp,
                 status=TrackStatus.ACTIVE,
+                classification=label,
                 latitude=detection.latitude,
                 longitude=detection.longitude,
                 altitude_m=detection.altitude_m,
@@ -91,7 +95,11 @@ def associate_detection(detection: Detection) -> Detection:
         track.latitude = detection.latitude
         track.longitude = detection.longitude
         track.altitude_m = detection.altitude_m
+        if track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
+            track.classification = label
         update_track(track)
+
+    check_zone_incidents(track)
 
     detection.track_id = track.id
     return create_detection(detection)

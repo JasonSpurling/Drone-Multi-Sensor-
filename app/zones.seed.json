@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Central London Restricted Zone",
+    "zone_type": "restricted",
+    "polygon": [
+      [51.49, -0.11],
+      [51.49, -0.09],
+      [51.51, -0.09],
+      [51.51, -0.11]
+    ],
+    "min_altitude_m": null,
+    "max_altitude_m": null,
+    "active": true
+  }
+]
