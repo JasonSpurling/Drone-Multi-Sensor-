@@ -17,6 +17,12 @@ ZONES_SEED_PATH = Path(
 
 LOG_LEVEL = os.getenv("DRONE_LOG_LEVEL", "INFO")
 
+# When unset (the default), the API requires no authentication -- fine as
+# long as it's only bound to 127.0.0.1. Set this before exposing the app
+# beyond localhost, and every request must then send a matching
+# X-API-Key header.
+API_KEY = os.getenv("DRONE_API_KEY", "")
+
 # Track association gates: a detection may only join a track if it arrives
 # within TRACK_TIME_GATE_SECONDS of the track's last update and within
 # TRACK_DISTANCE_GATE_M of its last known position.

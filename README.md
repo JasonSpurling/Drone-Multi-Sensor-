@@ -42,6 +42,7 @@ take `-d`/`-H` the way you'd expect, so use `Invoke-RestMethod` instead):
 ```powershell
 $body = @{ sensor_id = "radar-1"; sensor_type = "radar"; timestamp = "2026-08-09T12:00:00"; latitude = 51.5; longitude = -0.1; altitude_m = 90; confidence = 0.9 } | ConvertTo-Json
 Invoke-RestMethod -Uri http://127.0.0.1:8000/api/detections -Method Post -ContentType "application/json" -Body $body
+# If DRONE_API_KEY is set, add: -Headers @{ "X-API-Key" = "<your key>" }
 ```
 
 Bash / macOS / Linux:
@@ -49,6 +50,7 @@ Bash / macOS / Linux:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/detections \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <your key, if DRONE_API_KEY is set>" \
   -d '{"sensor_id":"radar-1","sensor_type":"radar","timestamp":"2026-08-09T12:00:00","latitude":51.5,"longitude":-0.1,"altitude_m":90,"confidence":0.9}'
 ```
 
@@ -65,6 +67,7 @@ a bird.
 ```
 .venv\Scripts\python.exe simulator.py
 .venv\Scripts\python.exe simulator.py --ticks 50 --interval 0.5 --seed 42
+.venv\Scripts\python.exe simulator.py --api-key <your key>   # if DRONE_API_KEY is set on the server
 ```
 
 Watch the dashboard while it runs to see tracks appear, get classified, and
@@ -94,6 +97,7 @@ needs to be set to run locally.
 | `DRONE_DB_PATH` | `data/drone_sensor.db` | SQLite file location |
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
+| `DRONE_API_KEY` | *(unset)* | If set, all endpoints except `/api/health` require a matching `X-API-Key` header |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |
 | `DRONE_TRACK_STALE_SECONDS` | `30` | Active track goes `lost` after this many quiet seconds |
@@ -102,6 +106,27 @@ needs to be set to run locally.
 | `DRONE_BIRD_CONFIDENCE_THRESHOLD` | `0.4` | Below this, a camera/acoustic detection is classified `bird` |
 | `DRONE_SENSOR_ONLINE_SECONDS` | `60` | Sensor shows `online` if seen within this window |
 | `DRONE_SENSOR_STALE_SECONDS` | `300` | Sensor shows `stale` up to this window, `offline` beyond it |
+
+## Security
+
+By default the app binds to `127.0.0.1` and requires no authentication —
+fine as-is, since nothing outside this machine can reach it. If you ever
+want to reach it from another device (phone, another PC on your LAN),
+**set `DRONE_API_KEY` before changing `DRONE_HOST`**:
+
+```powershell
+$env:DRONE_API_KEY = "some long random string"
+.venv\Scripts\python.exe main.py
+```
+
+Once set, every `/api/*` request (except `/api/health`) needs a matching
+`X-API-Key` header, or it gets a 401. The dashboard will prompt for the key
+inline the first time it hits a 401, then remembers it in the browser's
+`localStorage`. The simulator picks it up from `--api-key` or the
+`DRONE_API_KEY` environment variable.
+
+Without a key set, don't expose the port beyond localhost — anyone who can
+reach it could inject fake detections or acknowledge (silence) real alerts.
 
 ## Project layout
 
@@ -113,6 +138,7 @@ app/
   schema.sql          SQLite schema
   config.py           Environment-variable settings
   logging_config.py   Logging setup
+  auth.py              API key check (active only if DRONE_API_KEY is set)
   classification.py   Sensor + confidence -> label rules
   tracking.py          Track association, update, expiry
   incidents.py         Zone-incursion incident creation

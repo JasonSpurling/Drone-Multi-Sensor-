@@ -122,6 +122,12 @@
   <div id="status-line">loading…</div>
 </header>
 
+<div id="auth-bar" style="display:none; padding:10px 20px; background:#2a1620; border-bottom:1px solid var(--border); gap:8px; align-items:center;">
+  <span style="color:var(--drone);">API key required or rejected.</span>
+  <input id="auth-input" type="password" placeholder="X-API-Key" style="background:#0b0f19; border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 8px;">
+  <button id="auth-save">Save key</button>
+</div>
+
 <main>
   <section class="panel" id="tracks-wrap">
     <h2>Live Tracks</h2>
@@ -154,6 +160,7 @@ const POLL_MS = 3000;
 const NS = "http://www.w3.org/2000/svg";
 
 const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null };
+let apiKey = localStorage.getItem("droneApiKey") || "";
 
 const CLASS_COLOR = {
   drone: "var(--drone)", aircraft: "var(--aircraft)", bird: "var(--bird)",
@@ -163,10 +170,18 @@ const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "va
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
 const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
 
+class AuthError extends Error {}
+
 async function fetchJSON(url, opts) {
-  const res = await fetch(url, opts);
+  const headers = { ...(opts && opts.headers), ...(apiKey ? { "X-API-Key": apiKey } : {}) };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) throw new AuthError(`${url} -> 401`);
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
   return res.json();
+}
+
+function showAuthBar(show) {
+  document.getElementById("auth-bar").style.display = show ? "flex" : "none";
 }
 
 function fmtTime(iso) {
@@ -199,6 +214,7 @@ async function acknowledge(id) {
     await fetchJSON(`/api/incidents/${id}/acknowledge`, { method: "POST" });
     await refresh();
   } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
     console.error(e);
   }
 }
@@ -369,6 +385,7 @@ async function refresh() {
     state.incidents = incidents;
     state.zones = zones;
     state.sensors = sensors;
+    showAuthBar(false);
     renderTracks();
     renderAlerts();
     renderMap();
@@ -377,10 +394,25 @@ async function refresh() {
     document.getElementById("status-line").textContent =
       `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${incidents.filter(i => i.status !== "resolved").length} active alerts`;
   } catch (e) {
-    document.getElementById("status-line").textContent = "connection error — retrying…";
+    if (e instanceof AuthError) {
+      showAuthBar(true);
+      document.getElementById("status-line").textContent = "waiting for API key…";
+    } else {
+      document.getElementById("status-line").textContent = "connection error — retrying…";
+    }
     console.error(e);
   }
 }
+
+document.getElementById("auth-save").addEventListener("click", () => {
+  const input = document.getElementById("auth-input");
+  apiKey = input.value.trim();
+  localStorage.setItem("droneApiKey", apiKey);
+  refresh();
+});
+document.getElementById("auth-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("auth-save").click();
+});
 
 refresh();
 setInterval(refresh, POLL_MS);

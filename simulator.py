@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import time
 import urllib.error
@@ -83,11 +84,12 @@ def build_entities() -> list[SimulatedEntity]:
     ]
 
 
-def post_detection(url: str, payload: dict) -> dict:
+def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=5) as resp:
         return json.loads(resp.read())
 
@@ -98,6 +100,10 @@ def main() -> None:
     parser.add_argument("--ticks", type=int, default=30, help="Number of simulation ticks")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between ticks")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument(
+        "--api-key", default=os.getenv("DRONE_API_KEY", ""),
+        help="X-API-Key header value; defaults to $DRONE_API_KEY, only needed if the server has one set",
+    )
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -109,7 +115,7 @@ def main() -> None:
             entity.step(args.interval)
             payload = entity.detection_payload()
             try:
-                result = post_detection(args.url, payload)
+                result = post_detection(args.url, payload, args.api_key)
                 print(
                     f"[tick {tick:>3}] {entity.sensor_id:<12} -> track {result['track_id']} "
                     f"({payload['latitude']:.5f}, {payload['longitude']:.5f}) "
