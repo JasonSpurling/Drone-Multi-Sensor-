@@ -344,6 +344,19 @@ function initMap() {
     )
     .addTo(leafletMap);
 
+  // The labels overlay only makes sense on top of Satellite -- drop it
+  // automatically when switching to a different base layer, since Leaflet
+  // doesn't couple overlays to a specific base layer on its own. Deferred
+  // via setTimeout so it runs after the control's own click handling
+  // finishes -- removing it synchronously happens while Leaflet's internal
+  // _handlingClick guard is still set, which silently skips re-syncing the
+  // control's checkbox even though the layer is actually removed.
+  leafletMap.on("baselayerchange", (e) => {
+    if (e.name !== "Satellite" && leafletMap.hasLayer(satelliteLabels)) {
+      setTimeout(() => leafletMap.removeLayer(satelliteLabels), 0);
+    }
+  });
+
   zoneLayer = L.layerGroup().addTo(leafletMap);
   trackLayer = L.layerGroup().addTo(leafletMap);
 }
