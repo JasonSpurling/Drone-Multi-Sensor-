@@ -36,10 +36,20 @@ To run without auto-reload (e.g. for testing):
 
 ## Sending a detection
 
+PowerShell (`curl` is aliased to `Invoke-WebRequest` there, which doesn't
+take `-d`/`-H` the way you'd expect, so use `Invoke-RestMethod` instead):
+
+```powershell
+$body = @{ sensor_id = "radar-1"; sensor_type = "radar"; timestamp = "2026-08-09T12:00:00"; latitude = 51.5; longitude = -0.1; altitude_m = 90; confidence = 0.9 } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/detections -Method Post -ContentType "application/json" -Body $body
 ```
-curl -X POST http://127.0.0.1:8000/api/detections ^
-  -H "Content-Type: application/json" ^
-  -d "{\"sensor_id\":\"radar-1\",\"sensor_type\":\"radar\",\"timestamp\":\"2026-08-09T12:00:00\",\"latitude\":51.5,\"longitude\":-0.1,\"altitude_m\":90,\"confidence\":0.9}"
+
+Bash / macOS / Linux:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/detections \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_id":"radar-1","sensor_type":"radar","timestamp":"2026-08-09T12:00:00","latitude":51.5,"longitude":-0.1,"altitude_m":90,"confidence":0.9}'
 ```
 
 The response includes the `track_id` the detection was associated with (a

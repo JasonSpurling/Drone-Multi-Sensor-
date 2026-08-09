@@ -174,8 +174,17 @@ function fmtTime(iso) {
   return new Date(iso + (iso.endsWith("Z") ? "" : "Z")).toLocaleTimeString();
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function badge(text, color) {
-  return `<span class="badge" style="background:${color}">${text}</span>`;
+  return `<span class="badge" style="background:${color}">${escapeHtml(text)}</span>`;
 }
 
 function selectTrack(id) {
@@ -241,7 +250,7 @@ function renderAlerts() {
           ${badge(i.severity, SEVERITY_COLOR[i.severity] || SEVERITY_COLOR.low)}
           ${badge(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
         </div>
-        <div class="desc">${i.description || i.incident_type}${i.zone_id ? " · " + zoneName(i.zone_id) : ""}</div>
+        <div class="desc">${escapeHtml(i.description || i.incident_type)}${i.zone_id ? " · " + escapeHtml(zoneName(i.zone_id)) : ""}</div>
         <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtTime(i.opened_at)}</div>
         ${i.status === "open" ? `<div style="margin-top:6px;"><button data-id="${i.id}">Acknowledge</button></div>` : ""}
       </div>
@@ -263,7 +272,7 @@ function renderDetails() {
   el.innerHTML = `
     <div class="kv">
       <div class="k">ID</div><div>${track.id}</div>
-      <div class="k">UID</div><div>${track.track_uid}</div>
+      <div class="k">UID</div><div>${escapeHtml(track.track_uid)}</div>
       <div class="k">Status</div><div>${badge(track.status, STATUS_COLOR[track.status])}</div>
       <div class="k">Classification</div><div>${badge(track.classification, CLASS_COLOR[track.classification])}</div>
       <div class="k">First seen</div><div>${fmtTime(track.first_seen)}</div>
@@ -336,8 +345,8 @@ function renderSensors() {
   }
   const rows = state.sensors
     .map((s) => `<tr>
-        <td>${s.sensor_id}</td>
-        <td>${s.sensor_type}</td>
+        <td>${escapeHtml(s.sensor_id)}</td>
+        <td>${escapeHtml(s.sensor_type)}</td>
         <td>${badge(s.status, SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline)}</td>
         <td>${fmtTime(s.last_seen)}</td>
       </tr>`)
