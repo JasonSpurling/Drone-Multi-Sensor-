@@ -146,7 +146,7 @@ app/
   sensors.py           Sensor health
   zones.seed.json     Sample restricted zone
   api/                 Route handlers, one module per resource
-  static/dashboard.html  Self-contained dashboard (no build step)
+  static/dashboard.html  Dashboard (no build step; loads Leaflet + map tiles from a CDN, so it needs internet access)
 simulator.py            Posts realistic detections against a running server
 main.py                  Entrypoint (python main.py)
 ```

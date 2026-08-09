@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Drone Multi-Sensor Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
     --bg: #0f1420;
@@ -90,7 +91,9 @@
   #alerts-wrap { grid-column: 2; grid-row: 1; }
   #details-wrap { grid-column: 2; grid-row: 2; }
   #sensors-wrap { grid-column: 1 / span 2; grid-row: 3; }
-  svg#map { width: 100%; height: 260px; background: #0b0f19; border-radius: 6px; }
+  #map { width: 100%; height: 260px; border-radius: 6px; overflow: hidden; background: #0b0f19; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
+  .leaflet-container { font-family: inherit; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
   .alert-item {
     border: 1px solid var(--border);
@@ -141,7 +144,7 @@
 
   <section class="panel" id="map-wrap">
     <h2>Map</h2>
-    <svg id="map" viewBox="0 0 600 260"></svg>
+    <div id="map"></div>
   </section>
 
   <section class="panel" id="details-wrap">
@@ -155,9 +158,9 @@
   </section>
 </main>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const POLL_MS = 3000;
-const NS = "http://www.w3.org/2000/svg";
 
 const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null };
 let apiKey = localStorage.getItem("droneApiKey") || "";
@@ -300,57 +303,61 @@ function renderDetails() {
   `;
 }
 
+let leafletMap = null;
+let zoneLayer = null;
+let trackLayer = null;
+let mapFitted = false;
+
+function initMap() {
+  leafletMap = L.map("map").setView([51.5, -0.1], 11);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors ' +
+      '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: "abcd",
+    maxZoom: 19,
+  }).addTo(leafletMap);
+  zoneLayer = L.layerGroup().addTo(leafletMap);
+  trackLayer = L.layerGroup().addTo(leafletMap);
+}
+
 function renderMap() {
-  const svg = document.getElementById("map");
-  svg.innerHTML = "";
-  const W = 600, H = 260, PAD = 20;
-
-  const pts = state.tracks.filter((t) => t.latitude != null && t.longitude != null);
-  const zonePts = state.zones.flatMap((z) => z.polygon);
-  const all = [...pts.map((t) => [t.latitude, t.longitude]), ...zonePts];
-
-  if (all.length === 0) {
-    const t = document.createElementNS(NS, "text");
-    t.setAttribute("x", W / 2); t.setAttribute("y", H / 2);
-    t.setAttribute("fill", "#8b93a7"); t.setAttribute("text-anchor", "middle");
-    t.textContent = "No position data yet";
-    svg.appendChild(t);
-    return;
-  }
-
-  let minLat = Math.min(...all.map((p) => p[0])), maxLat = Math.max(...all.map((p) => p[0]));
-  let minLon = Math.min(...all.map((p) => p[1])), maxLon = Math.max(...all.map((p) => p[1]));
-  if (minLat === maxLat) { minLat -= 0.01; maxLat += 0.01; }
-  if (minLon === maxLon) { minLon -= 0.01; maxLon += 0.01; }
-
-  const project = (lat, lon) => {
-    const x = PAD + ((lon - minLon) / (maxLon - minLon)) * (W - 2 * PAD);
-    const y = H - PAD - ((lat - minLat) / (maxLat - minLat)) * (H - 2 * PAD);
-    return [x, y];
-  };
+  zoneLayer.clearLayers();
+  trackLayer.clearLayers();
 
   state.zones.forEach((z) => {
-    const poly = document.createElementNS(NS, "polygon");
-    const points = z.polygon.map(([lat, lon]) => project(lat, lon).join(",")).join(" ");
-    poly.setAttribute("points", points);
-    poly.setAttribute("fill", "rgba(229,72,77,0.12)");
-    poly.setAttribute("stroke", "var(--drone)");
-    poly.setAttribute("stroke-width", "1");
-    svg.appendChild(poly);
+    L.polygon(z.polygon, {
+      color: "var(--drone)",
+      weight: 1,
+      fillColor: "var(--drone)",
+      fillOpacity: 0.12,
+    })
+      .bindPopup(escapeHtml(z.name))
+      .addTo(zoneLayer);
   });
 
+  const pts = state.tracks.filter((t) => t.latitude != null && t.longitude != null);
   pts.forEach((t) => {
-    const [x, y] = project(t.latitude, t.longitude);
-    const c = document.createElementNS(NS, "circle");
-    c.setAttribute("cx", x); c.setAttribute("cy", y);
-    c.setAttribute("r", t.id === state.selectedTrackId ? 7 : 5);
-    c.setAttribute("fill", CLASS_COLOR[t.classification] || CLASS_COLOR.unknown);
-    c.setAttribute("stroke", t.id === state.selectedTrackId ? "#fff" : "none");
-    c.setAttribute("stroke-width", "2");
-    c.style.cursor = "pointer";
-    c.addEventListener("click", () => selectTrack(t.id));
-    svg.appendChild(c);
+    const selected = t.id === state.selectedTrackId;
+    L.circleMarker([t.latitude, t.longitude], {
+      radius: selected ? 8 : 6,
+      color: selected ? "#fff" : "transparent",
+      weight: 2,
+      fillColor: CLASS_COLOR[t.classification] || CLASS_COLOR.unknown,
+      fillOpacity: 1,
+    })
+      .bindPopup(`Track ${t.id} &middot; ${escapeHtml(t.classification)}`)
+      .on("click", () => selectTrack(t.id))
+      .addTo(trackLayer);
   });
+
+  if (!mapFitted) {
+    const allPts = [...pts.map((t) => [t.latitude, t.longitude]), ...state.zones.flatMap((z) => z.polygon)];
+    if (allPts.length > 0) {
+      leafletMap.fitBounds(allPts, { padding: [20, 20], maxZoom: 15 });
+      mapFitted = true;
+    }
+  }
 }
 
 function renderSensors() {
@@ -414,6 +421,7 @@ document.getElementById("auth-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("auth-save").click();
 });
 
+initMap();
 refresh();
 setInterval(refresh, POLL_MS);
 </script>
