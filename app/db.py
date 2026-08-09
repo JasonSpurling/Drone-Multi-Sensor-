@@ -127,6 +127,28 @@ def create_track(track: Track) -> Track:
     return track
 
 
+def update_track(track: Track) -> Track:
+    with db_session() as conn:
+        conn.execute(
+            """
+            UPDATE track
+            SET last_seen = ?, status = ?, classification = ?,
+                latitude = ?, longitude = ?, altitude_m = ?
+            WHERE id = ?
+            """,
+            (
+                track.last_seen.isoformat(),
+                track.status.value,
+                track.classification.value,
+                track.latitude,
+                track.longitude,
+                track.altitude_m,
+                track.id,
+            ),
+        )
+    return track
+
+
 def get_track(track_id: int) -> Track | None:
     with db_session() as conn:
         row = conn.execute("SELECT * FROM track WHERE id = ?", (track_id,)).fetchone()
