@@ -7,6 +7,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from app.util import utcnow
+
 
 class SensorType(str, Enum):
     RADAR = "radar"
@@ -72,7 +74,7 @@ class Detection(BaseModel):
     id: int | None = None
     sensor_id: str = Field(min_length=1, max_length=100)
     sensor_type: SensorType
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utcnow)
     track_id: int | None = None
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
@@ -114,7 +116,7 @@ class Incident(BaseModel):
     status: IncidentStatus = IncidentStatus.OPEN
     track_id: int | None = None
     zone_id: int | None = None
-    opened_at: datetime = Field(default_factory=datetime.utcnow)
+    opened_at: datetime = Field(default_factory=utcnow)
     closed_at: datetime | None = None
     description: str | None = None
 

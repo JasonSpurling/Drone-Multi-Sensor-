@@ -6,15 +6,32 @@ shows it all on a live dashboard.
 
 ## Setup
 
-```
+Windows (PowerShell):
+
+```powershell
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+macOS / Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
 ## Run
 
-```
+Windows:
+
+```powershell
 .venv\Scripts\python.exe main.py
+```
+
+macOS / Linux:
+
+```bash
+.venv/bin/python main.py
 ```
 
 This starts the API + dashboard at **http://127.0.0.1:8000** (auto-reload
@@ -30,8 +47,12 @@ API docs.
 
 To run without auto-reload (e.g. for testing):
 
-```
+```powershell
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 ## Sending a detection
@@ -64,10 +85,20 @@ server: a drone flying into the seeded restricted zone, an ADS-B aircraft
 passing well clear of it, and a low-confidence camera return that reads as
 a bird.
 
-```
+Windows:
+
+```powershell
 .venv\Scripts\python.exe simulator.py
 .venv\Scripts\python.exe simulator.py --ticks 50 --interval 0.5 --seed 42
 .venv\Scripts\python.exe simulator.py --api-key <your key>   # if DRONE_API_KEY is set on the server
+```
+
+macOS / Linux:
+
+```bash
+.venv/bin/python simulator.py
+.venv/bin/python simulator.py --ticks 50 --interval 0.5 --seed 42
+.venv/bin/python simulator.py --api-key <your key>   # if DRONE_API_KEY is set on the server
 ```
 
 Watch the dashboard while it runs to see tracks appear, get classified, and
@@ -84,14 +115,26 @@ Each test runs against an isolated, temporary SQLite database (see
 `tests/conftest.py`), so the suite never touches `data/drone_sensor.db`.
 CI runs the same suite on every push/PR (`.github/workflows/tests.yml`).
 
+## Docker
+
+```
+docker build -t drone-multi-sensor .
+docker run -p 8000:8000 -v drone-data:/app/data drone-multi-sensor
+```
+
+The image binds to `0.0.0.0:8000` inside the container (so `docker run -p`
+can reach it) and stores the SQLite database in `/app/data` — the `-v` above
+keeps it across container restarts. Set `-e DRONE_API_KEY=<key>` if the
+container's port will be reachable beyond your own machine.
+
 ## API
 
 | Endpoint | Description |
 |---|---|
 | `GET /api/health` | Liveness check |
 | `POST /api/detections` | Ingest a detection; runs Kalman track association, classification, and zone-incident checks |
-| `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`) |
-| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`) |
+| `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
+| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
 | `GET /api/zones` | List active zones |
 | `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
@@ -148,6 +191,10 @@ want to reach it from another device (phone, another PC on your LAN),
 ```powershell
 $env:DRONE_API_KEY = "some long random string"
 .venv\Scripts\python.exe main.py
+```
+
+```bash
+DRONE_API_KEY="some long random string" .venv/bin/python main.py
 ```
 
 Once set, every `/api/*` request (except `/api/health`) needs a matching

@@ -7,8 +7,12 @@ router = APIRouter()
 
 
 @router.get("/incidents", response_model=list[Incident])
-def get_incidents(status: IncidentStatus | None = Query(default=None)) -> list[Incident]:
-    return list_incidents(status=status.value if status else None)
+def get_incidents(
+    status: IncidentStatus | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[Incident]:
+    return list_incidents(status=status.value if status else None, limit=limit, offset=offset)
 
 
 @router.post("/incidents/{incident_id}/acknowledge", response_model=Incident)

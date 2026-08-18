@@ -8,9 +8,13 @@ router = APIRouter()
 
 
 @router.get("/tracks", response_model=list[Track])
-def get_tracks(status: TrackStatus | None = Query(default=None)) -> list[Track]:
+def get_tracks(
+    status: TrackStatus | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[Track]:
     expire_stale_tracks()
-    return list_tracks(status=status.value if status else None)
+    return list_tracks(status=status.value if status else None, limit=limit, offset=offset)
 
 
 @router.get("/tracks/{track_id}", response_model=Track)

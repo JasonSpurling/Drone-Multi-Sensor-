@@ -41,6 +41,7 @@ from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.incidents import check_predicted_incursions, check_zone_incidents
 from app.kalman import ConstantVelocityKalmanFilter
 from app.models import Classification, Detection, Track, TrackStatus
+from app.util import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def _apply_filter_to_track(track: Track, kf: ConstantVelocityKalmanFilter, ref_l
 
 def expire_stale_tracks(now: datetime | None = None) -> None:
     """Sweep tracks: active -> lost -> closed once each has gone quiet too long."""
-    now = now or datetime.utcnow()
+    now = now or utcnow()
 
     for track in list_tracks(status=TrackStatus.ACTIVE.value):
         if now - track.last_seen > timedelta(seconds=TRACK_STALE_SECONDS):
