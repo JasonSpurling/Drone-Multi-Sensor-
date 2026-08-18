@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import uuid
 from datetime import datetime, timedelta
 
@@ -21,6 +22,12 @@ from app.models import Classification, Detection, Track, TrackStatus
 logger = logging.getLogger(__name__)
 
 _EARTH_RADIUS_M = 6_371_000.0
+
+# Guards the read-then-write track association/incident-creation sequence
+# below. FastAPI runs sync routes (like POST /api/detections) in a thread
+# pool, so concurrent requests can otherwise both miss each other's
+# in-flight track/incident and create duplicates.
+_association_lock = threading.Lock()
 
 
 def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -72,38 +79,48 @@ def associate_detection(detection: Detection) -> Detection:
     """Gate an incoming detection against existing tracks, update or spawn a
     track, persist the detection against it, and return the stored detection.
     """
-    expire_stale_tracks(detection.timestamp)
     label = classify(detection.sensor_type, detection.confidence)
 
-    track = _find_matching_track(detection)
-    if track is None:
-        track = create_track(
-            Track(
-                track_uid=str(uuid.uuid4()),
-                first_seen=detection.timestamp,
-                last_seen=detection.timestamp,
-                status=TrackStatus.ACTIVE,
-                classification=label,
-                latitude=detection.latitude,
-                longitude=detection.longitude,
-                altitude_m=detection.altitude_m,
+    with _association_lock:
+        expire_stale_tracks(detection.timestamp)
+
+        track = _find_matching_track(detection)
+        if track is None:
+            track = create_track(
+                Track(
+                    track_uid=str(uuid.uuid4()),
+                    first_seen=detection.timestamp,
+                    last_seen=detection.timestamp,
+                    status=TrackStatus.ACTIVE,
+                    classification=label,
+                    latitude=detection.latitude,
+                    longitude=detection.longitude,
+                    altitude_m=detection.altitude_m,
+                )
             )
-        )
-        logger.info(
-            "New track %s (%s) from sensor=%s confidence=%.2f",
-            track.track_uid, label.value, detection.sensor_id, detection.confidence,
-        )
-    else:
-        track.last_seen = detection.timestamp
-        track.latitude = detection.latitude
-        track.longitude = detection.longitude
-        track.altitude_m = detection.altitude_m
-        if track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
-            track.classification = label
-        update_track(track)
-        logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
+            logger.info(
+                "New track %s (%s) from sensor=%s confidence=%.2f",
+                track.track_uid, label.value, detection.sensor_id, detection.confidence,
+            )
+        else:
+            track.last_seen = detection.timestamp
+            track.latitude = detection.latitude
+            track.longitude = detection.longitude
+            track.altitude_m = detection.altitude_m
+            # A detection can always upgrade a track to DRONE (except away
+            # from the trusted ADS-B AIRCRAFT label) even if it was already
+            # classified as something else, since misidentifying a real
+            # drone as a bird/unknown and never re-flagging it is the unsafe
+            # failure mode. Any other non-UNKNOWN label only fills in a
+            # still-unknown classification, never overwrites one.
+            if label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
+                track.classification = label
+            elif track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
+                track.classification = label
+            update_track(track)
+            logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
 
-    check_zone_incidents(track)
+        check_zone_incidents(track)
 
-    detection.track_id = track.id
-    return create_detection(detection)
+        detection.track_id = track.id
+        return create_detection(detection)

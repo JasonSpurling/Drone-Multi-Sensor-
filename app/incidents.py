@@ -38,7 +38,7 @@ def check_zone_incidents(track: Track) -> list[Incident]:
         return []
 
     opened: list[Incident] = []
-    for zone in zones_containing_point(track.latitude, track.longitude):
+    for zone in zones_containing_point(track.latitude, track.longitude, track.altitude_m):
         if zone.zone_type != ZoneType.RESTRICTED or zone.id is None:
             continue
         if get_open_incident(track.id, zone.id, IncidentType.ZONE_INCURSION.value) is not None:
