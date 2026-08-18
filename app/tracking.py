@@ -17,8 +17,8 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
-from app.classification import classify
 from app.config import (
+    FUSION_HISTORY_LIMIT,
     KALMAN_INITIAL_VELOCITY_SIGMA_MPS,
     KALMAN_MEASUREMENT_SIGMA_M,
     KALMAN_PROCESS_NOISE,
@@ -33,11 +33,14 @@ from app.db import (
     create_detection,
     create_track,
     get_kalman_state,
+    list_recent_detections,
     list_tracks,
     update_track,
     upsert_kalman_state,
 )
+from app.fusion import fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
+from app.georeference import georeference
 from app.incidents import check_predicted_incursions, check_zone_incidents
 from app.kalman import ConstantVelocityKalmanFilter
 from app.models import Classification, Detection, Track, TrackStatus
@@ -166,7 +169,7 @@ def associate_detection(detection: Detection) -> Detection:
     """Gate an incoming detection against existing tracks, update or spawn a
     track, persist the detection against it, and return the stored detection.
     """
-    label = classify(detection.sensor_type, detection.confidence)
+    detection = georeference(detection)
     measurement_variance = _measurement_variance(detection.confidence)
 
     with _association_lock:
@@ -183,7 +186,7 @@ def associate_detection(detection: Detection) -> Detection:
                     first_seen=detection.timestamp,
                     last_seen=detection.timestamp,
                     status=TrackStatus.ACTIVE,
-                    classification=label,
+                    classification=Classification.UNKNOWN,
                     latitude=detection.latitude,
                     longitude=detection.longitude,
                     altitude_m=detection.altitude_m,
@@ -198,10 +201,9 @@ def associate_detection(detection: Detection) -> Detection:
                 )
                 _save_filter(track.id, detection.latitude, detection.longitude, kf, detection.timestamp)
                 _apply_filter_to_track(track, kf, detection.latitude, detection.longitude)
-                update_track(track)
             logger.info(
-                "New track %s (%s) from sensor=%s confidence=%.2f",
-                track.track_uid, label.value, detection.sensor_id, detection.confidence,
+                "New track %s from sensor=%s confidence=%.2f",
+                track.track_uid, detection.sensor_id, detection.confidence,
             )
         else:
             track, kf, ref_lat, ref_lon = match.track, match.kf, match.ref_lat, match.ref_lon
@@ -212,21 +214,29 @@ def associate_detection(detection: Detection) -> Detection:
 
             track.last_seen = detection.timestamp
             track.altitude_m = detection.altitude_m
-            # A detection can always upgrade a track to DRONE (except away
-            # from the trusted ADS-B AIRCRAFT label) even if it was already
-            # classified as something else, since misidentifying a real
-            # drone as a bird/unknown and never re-flagging it is the unsafe
-            # failure mode. Any other non-UNKNOWN label only fills in a
-            # still-unknown classification, never overwrites one.
-            if label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
-                track.classification = label
-            elif track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
-                track.classification = label
-            update_track(track)
             logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
+
+        # Persist the detection before fusing classification, so this
+        # detection's own vote is included in the track's history.
+        detection.track_id = track.id
+        persisted = create_detection(detection)
+
+        # Multi-sensor classification fusion (app/fusion.py): the fused
+        # label from every recent detection decides, not just this one.
+        # A detection can always upgrade a track to DRONE (except away
+        # from the trusted ADS-B AIRCRAFT label), since misidentifying a
+        # real drone as a bird/unknown/friendly and never re-flagging it
+        # is the unsafe failure mode. Any other non-UNKNOWN label only
+        # fills in a still-unknown classification, never overwrites one.
+        history = list_recent_detections(track.id, FUSION_HISTORY_LIMIT)
+        fused_label = fuse_classification(history)
+        if fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
+            track.classification = fused_label
+        elif track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN:
+            track.classification = fused_label
+        update_track(track)
 
         check_zone_incidents(track)
         check_predicted_incursions(track)
 
-        detection.track_id = track.id
-        return create_detection(detection)
+        return persisted

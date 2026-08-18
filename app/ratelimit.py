@@ -1,0 +1,53 @@
+"""A minimal in-memory token-bucket rate limiter, keyed per sensor_id.
+
+This is a backstop against a malfunctioning or malicious sensor flooding
+POST /api/detections, not a general-purpose limiter: state is in-process
+(resets on restart, isn't shared across multiple app processes/replicas).
+A multi-process deployment behind PostgreSQL would need this pushed into
+something shared (Redis, or a Postgres-backed bucket) to hold across
+replicas -- fine for the single-process deployment this app targets.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+
+from app.config import RATE_LIMIT_BURST, RATE_LIMIT_PER_SECOND
+
+
+class _TokenBucket:
+    def __init__(self, rate_per_second: float, burst: float, now: float) -> None:
+        self.rate_per_second = rate_per_second
+        self.burst = burst
+        self.tokens = burst
+        self.last_refill = now
+
+    def allow(self, now: float) -> bool:
+        elapsed = max(0.0, now - self.last_refill)
+        self.last_refill = now
+        self.tokens = min(self.burst, self.tokens + elapsed * self.rate_per_second)
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return True
+        return False
+
+
+class RateLimiter:
+    def __init__(self, rate_per_second: float, burst: float) -> None:
+        self.rate_per_second = rate_per_second
+        self.burst = burst
+        self._buckets: dict[str, _TokenBucket] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                bucket = _TokenBucket(self.rate_per_second, self.burst, now)
+                self._buckets[key] = bucket
+            return bucket.allow(now)
+
+
+detection_rate_limiter = RateLimiter(RATE_LIMIT_PER_SECOND, RATE_LIMIT_BURST)

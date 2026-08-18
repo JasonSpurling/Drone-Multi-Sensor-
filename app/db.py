@@ -1,41 +1,44 @@
-"""SQLite connection management and storage helpers."""
+"""Database engine and storage helpers, portable across SQLite (default)
+and PostgreSQL (DRONE_DATABASE_URL). Queries are plain SQL via SQLAlchemy
+Core's text(), not the ORM -- the schema is small and the raw-SQL shape
+made porting from the original sqlite3-only version mechanical and easy to
+verify against both backends.
+"""
 
 from __future__ import annotations
 
 import json
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Iterator
 
-from app.config import DB_PATH
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import Connection, Engine
+
+from app.config import DATABASE_URL
 from app.models import Detection, Incident, Track, Zone
+from app.schema import metadata
 
-SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+engine: Engine = create_engine(DATABASE_URL, future=True)
 
 
-def get_connection() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+    if engine.dialect.name == "sqlite":
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.close()
 
 
 @contextmanager
-def db_session() -> Iterator[sqlite3.Connection]:
-    conn = get_connection()
-    try:
+def db_session() -> Iterator[Connection]:
+    with engine.begin() as conn:
         yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
-# Columns added to `track` after its initial release. CREATE TABLE IF NOT
-# EXISTS in schema.sql only creates the table on a fresh database, so an
-# existing database needs these added explicitly to pick them up.
+# Columns added to `track` after its initial release. metadata.create_all
+# only creates a table on a fresh database, so an existing database needs
+# these added explicitly to pick them up.
 _TRACK_MIGRATION_COLUMNS = {
     "heading_deg": "REAL",
     "speed_mps": "REAL",
@@ -43,51 +46,57 @@ _TRACK_MIGRATION_COLUMNS = {
 }
 
 
-def _migrate_track_columns(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(track)")}
-    for column, sql_type in _TRACK_MIGRATION_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE track ADD COLUMN {column} {sql_type}")
+def _migrate_track_columns() -> None:
+    existing = {col["name"] for col in inspect(engine).get_columns("track")}
+    with engine.begin() as conn:
+        for column, sql_type in _TRACK_MIGRATION_COLUMNS.items():
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE track ADD COLUMN {column} {sql_type}"))
 
 
 def init_db() -> None:
-    with db_session() as conn:
-        conn.executescript(SCHEMA_PATH.read_text())
-        _migrate_track_columns(conn)
+    metadata.create_all(engine, checkfirst=True)
+    _migrate_track_columns()
 
 
 # --- Detection helpers -----------------------------------------------------
 
 def create_detection(detection: Detection) -> Detection:
     with db_session() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO detection
-                (sensor_id, sensor_type, timestamp, track_id, latitude, longitude,
-                 altitude_m, azimuth_deg, range_m, confidence, raw_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                detection.sensor_id,
-                detection.sensor_type.value,
-                detection.timestamp.isoformat(),
-                detection.track_id,
-                detection.latitude,
-                detection.longitude,
-                detection.altitude_m,
-                detection.azimuth_deg,
-                detection.range_m,
-                detection.confidence,
-                json.dumps(detection.raw_data) if detection.raw_data is not None else None,
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO detection
+                    (sensor_id, sensor_type, timestamp, track_id, latitude, longitude,
+                     altitude_m, azimuth_deg, range_m, confidence, raw_data)
+                VALUES (:sensor_id, :sensor_type, :timestamp, :track_id, :latitude, :longitude,
+                        :altitude_m, :azimuth_deg, :range_m, :confidence, :raw_data)
+                RETURNING id
+                """
             ),
-        )
-        detection.id = cur.lastrowid
+            {
+                "sensor_id": detection.sensor_id,
+                "sensor_type": detection.sensor_type.value,
+                "timestamp": detection.timestamp.isoformat(),
+                "track_id": detection.track_id,
+                "latitude": detection.latitude,
+                "longitude": detection.longitude,
+                "altitude_m": detection.altitude_m,
+                "azimuth_deg": detection.azimuth_deg,
+                "range_m": detection.range_m,
+                "confidence": detection.confidence,
+                "raw_data": json.dumps(detection.raw_data) if detection.raw_data is not None else None,
+            },
+        ).one()
+        detection.id = row.id
     return detection
 
 
 def get_detection(detection_id: int) -> Detection | None:
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM detection WHERE id = ?", (detection_id,)).fetchone()
+        row = conn.execute(
+            text("SELECT * FROM detection WHERE id = :id"), {"id": detection_id}
+        ).mappings().fetchone()
     return _row_to_detection(row) if row else None
 
 
@@ -96,19 +105,44 @@ def list_detections(
 ) -> list[Detection]:
     with db_session() as conn:
         if track_id is not None:
-            query = "SELECT * FROM detection WHERE track_id = ? ORDER BY timestamp"
-            params: tuple = (track_id,)
+            query = "SELECT * FROM detection WHERE track_id = :track_id ORDER BY timestamp"
+            params: dict = {"track_id": track_id}
         else:
             query = "SELECT * FROM detection ORDER BY timestamp"
-            params = ()
+            params = {}
         if limit is not None:
-            query += " LIMIT ? OFFSET ?"
-            params += (limit, offset)
-        rows = conn.execute(query, params).fetchall()
+            query += " LIMIT :limit OFFSET :offset"
+            params.update(limit=limit, offset=offset)
+        rows = conn.execute(text(query), params).mappings().all()
     return [_row_to_detection(row) for row in rows]
 
 
-def _row_to_detection(row: sqlite3.Row) -> Detection:
+def list_recent_detections(track_id: int, limit: int) -> list[Detection]:
+    """Most recent `limit` detections for a track, for classification
+    fusion (app/fusion.py) -- order doesn't matter to a weighted vote, only
+    which detections are included.
+    """
+    with db_session() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT * FROM detection WHERE track_id = :track_id "
+                "ORDER BY timestamp DESC LIMIT :limit"
+            ),
+            {"track_id": track_id, "limit": limit},
+        ).mappings().all()
+    return [_row_to_detection(row) for row in rows]
+
+
+def purge_old_detections(before: datetime) -> int:
+    """Delete detections older than `before`. Returns the number removed."""
+    with db_session() as conn:
+        result = conn.execute(
+            text("DELETE FROM detection WHERE timestamp < :before"), {"before": before.isoformat()}
+        )
+    return result.rowcount
+
+
+def _row_to_detection(row) -> Detection:
     return Detection(
         id=row["id"],
         sensor_id=row["sensor_id"],
@@ -129,61 +163,71 @@ def _row_to_detection(row: sqlite3.Row) -> Detection:
 
 def create_track(track: Track) -> Track:
     with db_session() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO track
-                (track_uid, first_seen, last_seen, status, classification,
-                 latitude, longitude, altitude_m, heading_deg, speed_mps,
-                 position_uncertainty_m)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                track.track_uid,
-                track.first_seen.isoformat(),
-                track.last_seen.isoformat(),
-                track.status.value,
-                track.classification.value,
-                track.latitude,
-                track.longitude,
-                track.altitude_m,
-                track.heading_deg,
-                track.speed_mps,
-                track.position_uncertainty_m,
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO track
+                    (track_uid, first_seen, last_seen, status, classification,
+                     latitude, longitude, altitude_m, heading_deg, speed_mps,
+                     position_uncertainty_m)
+                VALUES (:track_uid, :first_seen, :last_seen, :status, :classification,
+                        :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
+                        :position_uncertainty_m)
+                RETURNING id
+                """
             ),
-        )
-        track.id = cur.lastrowid
+            {
+                "track_uid": track.track_uid,
+                "first_seen": track.first_seen.isoformat(),
+                "last_seen": track.last_seen.isoformat(),
+                "status": track.status.value,
+                "classification": track.classification.value,
+                "latitude": track.latitude,
+                "longitude": track.longitude,
+                "altitude_m": track.altitude_m,
+                "heading_deg": track.heading_deg,
+                "speed_mps": track.speed_mps,
+                "position_uncertainty_m": track.position_uncertainty_m,
+            },
+        ).one()
+        track.id = row.id
     return track
 
 
 def update_track(track: Track) -> Track:
     with db_session() as conn:
         conn.execute(
-            """
-            UPDATE track
-            SET last_seen = ?, status = ?, classification = ?,
-                latitude = ?, longitude = ?, altitude_m = ?,
-                heading_deg = ?, speed_mps = ?, position_uncertainty_m = ?
-            WHERE id = ?
-            """,
-            (
-                track.last_seen.isoformat(),
-                track.status.value,
-                track.classification.value,
-                track.latitude,
-                track.longitude,
-                track.altitude_m,
-                track.heading_deg,
-                track.speed_mps,
-                track.position_uncertainty_m,
-                track.id,
+            text(
+                """
+                UPDATE track
+                SET last_seen = :last_seen, status = :status, classification = :classification,
+                    latitude = :latitude, longitude = :longitude, altitude_m = :altitude_m,
+                    heading_deg = :heading_deg, speed_mps = :speed_mps,
+                    position_uncertainty_m = :position_uncertainty_m
+                WHERE id = :id
+                """
             ),
+            {
+                "last_seen": track.last_seen.isoformat(),
+                "status": track.status.value,
+                "classification": track.classification.value,
+                "latitude": track.latitude,
+                "longitude": track.longitude,
+                "altitude_m": track.altitude_m,
+                "heading_deg": track.heading_deg,
+                "speed_mps": track.speed_mps,
+                "position_uncertainty_m": track.position_uncertainty_m,
+                "id": track.id,
+            },
         )
     return track
 
 
 def get_track(track_id: int) -> Track | None:
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM track WHERE id = ?", (track_id,)).fetchone()
+        row = conn.execute(
+            text("SELECT * FROM track WHERE id = :id"), {"id": track_id}
+        ).mappings().fetchone()
     return _row_to_track(row) if row else None
 
 
@@ -192,19 +236,19 @@ def list_tracks(
 ) -> list[Track]:
     with db_session() as conn:
         if status is not None:
-            query = "SELECT * FROM track WHERE status = ? ORDER BY last_seen DESC"
-            params: tuple = (status,)
+            query = "SELECT * FROM track WHERE status = :status ORDER BY last_seen DESC"
+            params: dict = {"status": status}
         else:
             query = "SELECT * FROM track ORDER BY last_seen DESC"
-            params = ()
+            params = {}
         if limit is not None:
-            query += " LIMIT ? OFFSET ?"
-            params += (limit, offset)
-        rows = conn.execute(query, params).fetchall()
+            query += " LIMIT :limit OFFSET :offset"
+            params.update(limit=limit, offset=offset)
+        rows = conn.execute(text(query), params).mappings().all()
     return [_row_to_track(row) for row in rows]
 
 
-def _row_to_track(row: sqlite3.Row) -> Track:
+def _row_to_track(row) -> Track:
     return Track(
         id=row["id"],
         track_uid=row["track_uid"],
@@ -254,34 +298,38 @@ class KalmanStateRecord:
 def upsert_kalman_state(record: KalmanStateRecord) -> None:
     with db_session() as conn:
         conn.execute(
-            """
-            INSERT INTO track_kalman_state
-                (track_id, ref_lat, ref_lon, x_m, y_m, vx_mps, vy_mps, covariance, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (track_id) DO UPDATE SET
-                x_m = excluded.x_m, y_m = excluded.y_m,
-                vx_mps = excluded.vx_mps, vy_mps = excluded.vy_mps,
-                covariance = excluded.covariance, updated_at = excluded.updated_at
-            """,
-            (
-                record.track_id,
-                record.ref_lat,
-                record.ref_lon,
-                record.x_m,
-                record.y_m,
-                record.vx_mps,
-                record.vy_mps,
-                json.dumps(record.covariance),
-                record.updated_at.isoformat(),
+            text(
+                """
+                INSERT INTO track_kalman_state
+                    (track_id, ref_lat, ref_lon, x_m, y_m, vx_mps, vy_mps, covariance, updated_at)
+                VALUES (:track_id, :ref_lat, :ref_lon, :x_m, :y_m, :vx_mps, :vy_mps,
+                        :covariance, :updated_at)
+                ON CONFLICT (track_id) DO UPDATE SET
+                    x_m = excluded.x_m, y_m = excluded.y_m,
+                    vx_mps = excluded.vx_mps, vy_mps = excluded.vy_mps,
+                    covariance = excluded.covariance, updated_at = excluded.updated_at
+                """
             ),
+            {
+                "track_id": record.track_id,
+                "ref_lat": record.ref_lat,
+                "ref_lon": record.ref_lon,
+                "x_m": record.x_m,
+                "y_m": record.y_m,
+                "vx_mps": record.vx_mps,
+                "vy_mps": record.vy_mps,
+                "covariance": json.dumps(record.covariance),
+                "updated_at": record.updated_at.isoformat(),
+            },
         )
 
 
 def get_kalman_state(track_id: int) -> KalmanStateRecord | None:
     with db_session() as conn:
         row = conn.execute(
-            "SELECT * FROM track_kalman_state WHERE track_id = ?", (track_id,)
-        ).fetchone()
+            text("SELECT * FROM track_kalman_state WHERE track_id = :track_id"),
+            {"track_id": track_id},
+        ).mappings().fetchone()
     if row is None:
         return None
     return KalmanStateRecord(
@@ -301,49 +349,60 @@ def get_kalman_state(track_id: int) -> KalmanStateRecord | None:
 
 def create_incident(incident: Incident) -> Incident:
     with db_session() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO incident
-                (incident_uid, incident_type, severity, status, track_id, zone_id,
-                 opened_at, closed_at, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                incident.incident_uid,
-                incident.incident_type.value,
-                incident.severity.value,
-                incident.status.value,
-                incident.track_id,
-                incident.zone_id,
-                incident.opened_at.isoformat(),
-                incident.closed_at.isoformat() if incident.closed_at else None,
-                incident.description,
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO incident
+                    (incident_uid, incident_type, severity, status, track_id, zone_id,
+                     opened_at, closed_at, description, acknowledged_by)
+                VALUES (:incident_uid, :incident_type, :severity, :status, :track_id, :zone_id,
+                        :opened_at, :closed_at, :description, :acknowledged_by)
+                RETURNING id
+                """
             ),
-        )
-        incident.id = cur.lastrowid
+            {
+                "incident_uid": incident.incident_uid,
+                "incident_type": incident.incident_type.value,
+                "severity": incident.severity.value,
+                "status": incident.status.value,
+                "track_id": incident.track_id,
+                "zone_id": incident.zone_id,
+                "opened_at": incident.opened_at.isoformat(),
+                "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
+                "description": incident.description,
+                "acknowledged_by": incident.acknowledged_by,
+            },
+        ).one()
+        incident.id = row.id
     return incident
 
 
 def get_incident(incident_id: int) -> Incident | None:
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM incident WHERE id = ?", (incident_id,)).fetchone()
+        row = conn.execute(
+            text("SELECT * FROM incident WHERE id = :id"), {"id": incident_id}
+        ).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
 
 def update_incident(incident: Incident) -> Incident:
     with db_session() as conn:
         conn.execute(
-            """
-            UPDATE incident
-            SET status = ?, closed_at = ?, description = ?
-            WHERE id = ?
-            """,
-            (
-                incident.status.value,
-                incident.closed_at.isoformat() if incident.closed_at else None,
-                incident.description,
-                incident.id,
+            text(
+                """
+                UPDATE incident
+                SET status = :status, closed_at = :closed_at, description = :description,
+                    acknowledged_by = :acknowledged_by
+                WHERE id = :id
+                """
             ),
+            {
+                "status": incident.status.value,
+                "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
+                "description": incident.description,
+                "acknowledged_by": incident.acknowledged_by,
+                "id": incident.id,
+            },
         )
     return incident
 
@@ -351,13 +410,16 @@ def update_incident(incident: Incident) -> Incident:
 def get_open_incident(track_id: int, zone_id: int, incident_type: str) -> Incident | None:
     with db_session() as conn:
         row = conn.execute(
-            """
-            SELECT * FROM incident
-            WHERE track_id = ? AND zone_id = ? AND incident_type = ? AND status != 'resolved'
-            ORDER BY opened_at DESC LIMIT 1
-            """,
-            (track_id, zone_id, incident_type),
-        ).fetchone()
+            text(
+                """
+                SELECT * FROM incident
+                WHERE track_id = :track_id AND zone_id = :zone_id AND incident_type = :incident_type
+                    AND status != 'resolved'
+                ORDER BY opened_at DESC LIMIT 1
+                """
+            ),
+            {"track_id": track_id, "zone_id": zone_id, "incident_type": incident_type},
+        ).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
 
@@ -366,19 +428,19 @@ def list_incidents(
 ) -> list[Incident]:
     with db_session() as conn:
         if status is not None:
-            query = "SELECT * FROM incident WHERE status = ? ORDER BY opened_at DESC"
-            params: tuple = (status,)
+            query = "SELECT * FROM incident WHERE status = :status ORDER BY opened_at DESC"
+            params: dict = {"status": status}
         else:
             query = "SELECT * FROM incident ORDER BY opened_at DESC"
-            params = ()
+            params = {}
         if limit is not None:
-            query += " LIMIT ? OFFSET ?"
-            params += (limit, offset)
-        rows = conn.execute(query, params).fetchall()
+            query += " LIMIT :limit OFFSET :offset"
+            params.update(limit=limit, offset=offset)
+        rows = conn.execute(text(query), params).mappings().all()
     return [_row_to_incident(row) for row in rows]
 
 
-def _row_to_incident(row: sqlite3.Row) -> Incident:
+def _row_to_incident(row) -> Incident:
     return Incident(
         id=row["id"],
         incident_uid=row["incident_uid"],
@@ -390,6 +452,7 @@ def _row_to_incident(row: sqlite3.Row) -> Incident:
         opened_at=datetime.fromisoformat(row["opened_at"]),
         closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
         description=row["description"],
+        acknowledged_by=row["acknowledged_by"],
     )
 
 
@@ -397,46 +460,55 @@ def _row_to_incident(row: sqlite3.Row) -> Incident:
 
 def create_zone(zone: Zone) -> Zone:
     with db_session() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO zone (name, zone_type, polygon, min_altitude_m, max_altitude_m, active)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                zone.name,
-                zone.zone_type.value,
-                json.dumps(zone.polygon),
-                zone.min_altitude_m,
-                zone.max_altitude_m,
-                int(zone.active),
+        row = conn.execute(
+            text(
+                """
+                INSERT INTO zone (name, zone_type, polygon, min_altitude_m, max_altitude_m, active)
+                VALUES (:name, :zone_type, :polygon, :min_altitude_m, :max_altitude_m, :active)
+                RETURNING id
+                """
             ),
-        )
-        zone.id = cur.lastrowid
+            {
+                "name": zone.name,
+                "zone_type": zone.zone_type.value,
+                "polygon": json.dumps(zone.polygon),
+                "min_altitude_m": zone.min_altitude_m,
+                "max_altitude_m": zone.max_altitude_m,
+                "active": int(zone.active),
+            },
+        ).one()
+        zone.id = row.id
     return zone
 
 
 def get_zone(zone_id: int) -> Zone | None:
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM zone WHERE id = ?", (zone_id,)).fetchone()
+        row = conn.execute(
+            text("SELECT * FROM zone WHERE id = :id"), {"id": zone_id}
+        ).mappings().fetchone()
     return _row_to_zone(row) if row else None
 
 
 def get_zone_by_name(name: str) -> Zone | None:
     with db_session() as conn:
-        row = conn.execute("SELECT * FROM zone WHERE name = ?", (name,)).fetchone()
+        row = conn.execute(
+            text("SELECT * FROM zone WHERE name = :name"), {"name": name}
+        ).mappings().fetchone()
     return _row_to_zone(row) if row else None
 
 
 def list_zones(active_only: bool = False) -> list[Zone]:
     with db_session() as conn:
         if active_only:
-            rows = conn.execute("SELECT * FROM zone WHERE active = 1 ORDER BY name").fetchall()
+            rows = conn.execute(
+                text("SELECT * FROM zone WHERE active = 1 ORDER BY name")
+            ).mappings().all()
         else:
-            rows = conn.execute("SELECT * FROM zone ORDER BY name").fetchall()
+            rows = conn.execute(text("SELECT * FROM zone ORDER BY name")).mappings().all()
     return [_row_to_zone(row) for row in rows]
 
 
-def _row_to_zone(row: sqlite3.Row) -> Zone:
+def _row_to_zone(row) -> Zone:
     return Zone(
         id=row["id"],
         name=row["name"],
@@ -446,3 +518,94 @@ def _row_to_zone(row: sqlite3.Row) -> Zone:
         max_altitude_m=row["max_altitude_m"],
         active=bool(row["active"]),
     )
+
+
+# --- Sensor registry helpers -------------------------------------------
+
+def upsert_sensor_registration(
+    sensor_id: str,
+    sensor_type: str,
+    latitude: float,
+    longitude: float,
+    altitude_m: float | None,
+    azimuth_reference_deg: float,
+    active: bool = True,
+) -> None:
+    with db_session() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO sensor_registry
+                    (sensor_id, sensor_type, latitude, longitude, altitude_m,
+                     azimuth_reference_deg, active)
+                VALUES (:sensor_id, :sensor_type, :latitude, :longitude, :altitude_m,
+                        :azimuth_reference_deg, :active)
+                ON CONFLICT (sensor_id) DO UPDATE SET
+                    sensor_type = excluded.sensor_type, latitude = excluded.latitude,
+                    longitude = excluded.longitude, altitude_m = excluded.altitude_m,
+                    azimuth_reference_deg = excluded.azimuth_reference_deg,
+                    active = excluded.active
+                """
+            ),
+            {
+                "sensor_id": sensor_id,
+                "sensor_type": sensor_type,
+                "latitude": latitude,
+                "longitude": longitude,
+                "altitude_m": altitude_m,
+                "azimuth_reference_deg": azimuth_reference_deg,
+                "active": int(active),
+            },
+        )
+
+
+def get_sensor_registration(sensor_id: str) -> dict | None:
+    with db_session() as conn:
+        row = conn.execute(
+            text("SELECT * FROM sensor_registry WHERE sensor_id = :sensor_id AND active = 1"),
+            {"sensor_id": sensor_id},
+        ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def list_sensor_registrations() -> list[dict]:
+    with db_session() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM sensor_registry ORDER BY sensor_id")
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+# --- Authorized operator (friendly allowlist) helpers -----------------
+
+def upsert_authorized_operator(operator_id: str, name: str, active: bool = True) -> None:
+    with db_session() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO authorized_operator (operator_id, name, active)
+                VALUES (:operator_id, :name, :active)
+                ON CONFLICT (operator_id) DO UPDATE SET name = excluded.name, active = excluded.active
+                """
+            ),
+            {"operator_id": operator_id, "name": name, "active": int(active)},
+        )
+
+
+def is_authorized_operator(operator_id: str) -> bool:
+    with db_session() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM authorized_operator WHERE operator_id = :operator_id AND active = 1"
+            ),
+            {"operator_id": operator_id},
+        ).fetchone()
+    return row is not None
+
+
+def list_authorized_operators() -> list[dict]:
+    with db_session() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM authorized_operator ORDER BY operator_id")
+        ).mappings().all()
+    return [dict(row) for row in rows]

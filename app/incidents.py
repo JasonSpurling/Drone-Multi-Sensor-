@@ -11,6 +11,8 @@ import uuid
 from app.config import PREDICTIVE_HORIZON_SECONDS
 from app.db import create_incident, get_open_incident
 from app.geo import local_m_to_latlon
+from app.metrics import incidents_opened_total
+from app.notifications import notify_incident
 from app.models import (
     Classification,
     Incident,
@@ -62,6 +64,8 @@ def _open_incident(
         "Incident opened (%s): track %s, zone '%s' (severity=%s)",
         incident_type.value, track.track_uid, zone.name, severity.value,
     )
+    incidents_opened_total.labels(incident_type=incident_type.value, severity=severity.value).inc()
+    notify_incident(incident)
     return incident
 
 

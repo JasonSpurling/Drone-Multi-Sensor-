@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 
 import pytest
@@ -153,6 +154,40 @@ def test_fast_mover_still_gates_onto_predicted_position():
     )
     assert len(list_tracks()) == 1
     assert third.track_id == list_tracks()[0].id
+
+
+def test_fast_aircraft_at_one_hertz_stays_on_one_track():
+    # Regression test: a ~210 m/s aircraft (typical ADS-B ground speed)
+    # reporting once per second must stay associated to a single track.
+    # With too-tight an initial velocity prior, the filter's first predict
+    # step assumes near-zero velocity, so the object's real next position
+    # (~200m away after 1s) falls outside the gate before the filter has
+    # had a second update to learn its actual velocity -- exactly the
+    # warm-up failure this test guards against.
+    lat, lon = 51.5, -0.3
+    heading_deg, speed_mps = 200.0, 210.0
+    track_ids = []
+    for i in range(8):
+        detection = associate_detection(
+            make_detection(
+                sensor_id="adsb-1",
+                sensor_type=SensorType.ADSB,
+                timestamp=BASE_TIME + timedelta(seconds=i),
+                latitude=lat,
+                longitude=lon,
+                confidence=0.98,
+            )
+        )
+        track_ids.append(detection.track_id)
+        distance_m = speed_mps * 1.0
+        d_lat = (distance_m * math.cos(math.radians(heading_deg))) / 111_320.0
+        meters_per_degree_lon = 111_320.0 * math.cos(math.radians(lat))
+        d_lon = (distance_m * math.sin(math.radians(heading_deg))) / meters_per_degree_lon
+        lat += d_lat
+        lon += d_lon
+
+    assert len(set(track_ids)) == 1
+    assert len(list_tracks()) == 1
 
 
 def test_confident_classification_does_not_decay_back_to_bird():

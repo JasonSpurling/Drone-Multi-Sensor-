@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
+
 from app.config import SENSOR_ONLINE_SECONDS, SENSOR_STALE_SECONDS
 from app.db import db_session
 from app.models import SensorHealth, SensorStatus
@@ -13,18 +15,24 @@ from app.util import utcnow
 def get_sensor_health(now: datetime | None = None) -> list[SensorHealth]:
     now = now or utcnow()
 
-    # SQLite guarantees that when a query has exactly one MAX() aggregate,
-    # any other bare (non-aggregated) columns come from the same row as the
-    # max, so sensor_type is correctly paired with each sensor's newest row.
+    # A correlated-subquery "latest row per group" instead of a bare
+    # MAX()-with-ungrouped-columns SELECT: SQLite tolerates the latter (and
+    # happens to pair columns from the max row), but PostgreSQL rejects it
+    # outright since sensor_type is neither aggregated nor in GROUP BY. This
+    # form is standard SQL and portable to both.
     with db_session() as conn:
         rows = conn.execute(
-            """
-            SELECT sensor_id, sensor_type, MAX(timestamp) AS timestamp
-            FROM detection
-            GROUP BY sensor_id
-            ORDER BY sensor_id
-            """
-        ).fetchall()
+            text(
+                """
+                SELECT sensor_id, sensor_type, timestamp
+                FROM detection d
+                WHERE timestamp = (
+                    SELECT MAX(timestamp) FROM detection WHERE sensor_id = d.sensor_id
+                )
+                ORDER BY sensor_id
+                """
+            )
+        ).mappings().all()
 
     results: list[SensorHealth] = []
     for row in rows:

@@ -1,6 +1,6 @@
 import pytest
 
-from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
+from app.geo import destination_point, haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 
 
 def test_latlon_to_local_m_at_reference_is_origin():
@@ -25,3 +25,26 @@ def test_local_m_projection_matches_haversine_for_small_offsets():
     local_distance = (east**2 + north**2) ** 0.5
     great_circle_distance = haversine_distance_m(ref_lat, ref_lon, lat, lon)
     assert local_distance == pytest.approx(great_circle_distance, rel=0.01)
+
+
+def test_destination_point_due_north_moves_only_latitude():
+    lat, lon = destination_point(51.5, -0.1, bearing_deg=0.0, distance_m=1000.0)
+    assert lon == pytest.approx(-0.1, abs=1e-6)
+    assert lat > 51.5
+
+
+def test_destination_point_due_east_moves_only_longitude():
+    lat, lon = destination_point(51.5, -0.1, bearing_deg=90.0, distance_m=1000.0)
+    assert lat == pytest.approx(51.5, abs=1e-6)
+    assert lon > -0.1
+
+
+def test_destination_point_distance_matches_haversine():
+    lat, lon = destination_point(51.5, -0.1, bearing_deg=37.0, distance_m=5000.0)
+    assert haversine_distance_m(51.5, -0.1, lat, lon) == pytest.approx(5000.0, rel=1e-6)
+
+
+def test_destination_point_zero_distance_is_noop():
+    lat, lon = destination_point(51.5, -0.1, bearing_deg=123.0, distance_m=0.0)
+    assert lat == pytest.approx(51.5, abs=1e-9)
+    assert lon == pytest.approx(-0.1, abs=1e-9)

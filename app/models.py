@@ -119,6 +119,9 @@ class Incident(BaseModel):
     opened_at: datetime = Field(default_factory=utcnow)
     closed_at: datetime | None = None
     description: str | None = None
+    acknowledged_by: str | None = Field(
+        default=None, description="Identity (API key name/role) that acknowledged this incident"
+    )
 
 
 class Zone(BaseModel):
@@ -142,3 +145,37 @@ class SensorHealth(BaseModel):
     sensor_type: SensorType
     last_seen: datetime
     status: SensorStatus
+
+
+class SensorRegistrationInput(BaseModel):
+    """A sensor's fixed mounting position/orientation, used to georeference
+    detections that report azimuth/range instead of lat/lon directly (see
+    app/georeference.py).
+    """
+
+    sensor_type: SensorType
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    altitude_m: float | None = None
+    azimuth_reference_deg: float = Field(
+        default=0.0,
+        description="Compass bearing (degrees) the sensor's azimuth_deg=0 points to",
+    )
+    active: bool = True
+
+
+class SensorRegistration(SensorRegistrationInput):
+    sensor_id: str
+
+
+class AuthorizedOperatorInput(BaseModel):
+    """A known/authorized drone operator (e.g. an FAA Remote ID operator
+    ID) whose aircraft should be classified FRIENDLY. See app/allowlist.py.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    active: bool = True
+
+
+class AuthorizedOperator(AuthorizedOperatorInput):
+    operator_id: str

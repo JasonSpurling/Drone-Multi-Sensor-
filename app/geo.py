@@ -40,3 +40,27 @@ def local_m_to_latlon(
     lat = ref_lat + math.degrees(north_m / EARTH_RADIUS_M)
     lon = ref_lon + math.degrees(east_m / (EARTH_RADIUS_M * math.cos(math.radians(ref_lat))))
     return lat, lon
+
+
+def destination_point(
+    lat: float, lon: float, bearing_deg: float, distance_m: float
+) -> tuple[float, float]:
+    """Forward geodesic (spherical-earth): the point reached traveling
+    distance_m meters from (lat, lon) along compass bearing_deg. Used to
+    georeference a sensor-relative azimuth/range detection into an
+    absolute lat/lon given the sensor's known position (see
+    app/georeference.py).
+    """
+    angular_distance = distance_m / EARTH_RADIUS_M
+    bearing_rad = math.radians(bearing_deg)
+    lat1_rad = math.radians(lat)
+
+    lat2_rad = math.asin(
+        math.sin(lat1_rad) * math.cos(angular_distance)
+        + math.cos(lat1_rad) * math.sin(angular_distance) * math.cos(bearing_rad)
+    )
+    lon2_rad = math.radians(lon) + math.atan2(
+        math.sin(bearing_rad) * math.sin(angular_distance) * math.cos(lat1_rad),
+        math.cos(angular_distance) - math.sin(lat1_rad) * math.sin(lat2_rad),
+    )
+    return math.degrees(lat2_rad), math.degrees(lon2_rad)
