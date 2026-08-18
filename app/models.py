@@ -39,6 +39,7 @@ class Classification(str, Enum):
 
 class IncidentType(str, Enum):
     ZONE_INCURSION = "zone_incursion"
+    PREDICTED_INCURSION = "predicted_incursion"
     UNAUTHORIZED_FLIGHT = "unauthorized_flight"
     LOSS_OF_TRACK = "loss_of_track"
     SENSOR_FAULT = "sensor_fault"
@@ -94,6 +95,13 @@ class Track(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     altitude_m: float | None = None
+    heading_deg: float | None = Field(
+        default=None, description="Kalman-filtered heading, degrees clockwise from true north"
+    )
+    speed_mps: float | None = Field(default=None, description="Kalman-filtered ground speed")
+    position_uncertainty_m: float | None = Field(
+        default=None, description="1-sigma radial position uncertainty from the Kalman filter"
+    )
 
 
 class Incident(BaseModel):

@@ -89,12 +89,27 @@ CI runs the same suite on every push/PR (`.github/workflows/tests.yml`).
 | Endpoint | Description |
 |---|---|
 | `GET /api/health` | Liveness check |
-| `POST /api/detections` | Ingest a detection; runs track association, classification, and zone-incident checks |
+| `POST /api/detections` | Ingest a detection; runs Kalman track association, classification, and zone-incident checks |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`) |
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
 | `GET /api/zones` | List active zones |
 | `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
+
+## Tracking core
+
+Each track runs its own constant-velocity Kalman filter (`app/kalman.py`)
+in a local flat-earth frame anchored at the track's first fix
+(`app/geo.py`). Every incoming detection is gated against each active
+track's *Kalman-predicted* position (not just its last raw fix) using
+squared Mahalanobis distance, so a fast mover doesn't fall outside a gate
+sized for a hovering one, and a stable track gates tighter than a
+maneuvering one. Tracks in the API/dashboard now carry `heading_deg`,
+`speed_mps`, and `position_uncertainty_m` derived from the filter.
+`POST /api/detections` also projects each updated track's velocity
+`DRONE_PREDICTIVE_HORIZON_SECONDS` ahead and opens a `predicted_incursion`
+incident if the projection enters a restricted zone the track isn't
+already inside — an early warning ahead of the actual `zone_incursion`.
 
 ## Configuration
 
@@ -117,6 +132,11 @@ needs to be set to run locally.
 | `DRONE_BIRD_CONFIDENCE_THRESHOLD` | `0.4` | Below this, a camera/acoustic detection is classified `bird` |
 | `DRONE_SENSOR_ONLINE_SECONDS` | `60` | Sensor shows `online` if seen within this window |
 | `DRONE_SENSOR_STALE_SECONDS` | `300` | Sensor shows `stale` up to this window, `offline` beyond it |
+| `DRONE_KALMAN_PROCESS_NOISE` | `4.0` | Assumed unmodeled-acceleration variance (m²/s³); higher follows maneuvers faster but smooths less |
+| `DRONE_KALMAN_MEASUREMENT_SIGMA_M` | `30.0` | Assumed 1-sigma position error (m) of a detection at confidence 1.0; scaled up for lower confidence |
+| `DRONE_KALMAN_INITIAL_VELOCITY_SIGMA_MPS` | `40.0` | Initial velocity uncertainty (1-sigma, m/s) for a brand-new track |
+| `DRONE_TRACK_GATE_CHI2` | `9.21` | Squared-Mahalanobis-distance gate for a detection to join a track (99% chi-square, 2 DOF) |
+| `DRONE_PREDICTIVE_HORIZON_SECONDS` | `30` | How far ahead a track's velocity is projected to raise an early zone-incursion warning |
 
 ## Security
 
@@ -151,8 +171,10 @@ app/
   logging_config.py   Logging setup
   auth.py              API key check (active only if DRONE_API_KEY is set)
   classification.py   Sensor + confidence -> label rules
-  tracking.py          Track association, update, expiry
-  incidents.py         Zone-incursion incident creation
+  tracking.py          Track association (Kalman-gated), update, expiry
+  kalman.py            Constant-velocity Kalman filter (no numpy dependency)
+  geo.py               Great-circle distance + local tangent-plane projection
+  incidents.py         Zone-incursion + predicted-incursion incident creation
   zones.py            Zone loading + point-in-polygon test
   sensors.py           Sensor health
   zones.seed.json     Sample restricted zone

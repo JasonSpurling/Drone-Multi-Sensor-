@@ -303,6 +303,9 @@ function renderDetails() {
       <div class="k">Last seen</div><div>${fmtTime(track.last_seen)}</div>
       <div class="k">Position</div><div>${track.latitude != null ? `${track.latitude}, ${track.longitude}` : "—"}</div>
       <div class="k">Altitude</div><div>${track.altitude_m != null ? track.altitude_m + " m" : "—"}</div>
+      <div class="k">Heading</div><div>${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "—"}</div>
+      <div class="k">Speed</div><div>${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
+      <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
       <div class="k">Incidents</div><div>${related.length}</div>
     </div>
   `;

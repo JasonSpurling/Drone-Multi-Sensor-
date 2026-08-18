@@ -105,6 +105,56 @@ def test_track_upgrades_from_bird_to_drone():
     assert track.classification == Classification.DRONE
 
 
+def test_track_gains_velocity_and_heading_from_repeated_detections():
+    # Move ~10 m/s due east (heading 90) between fixes, spaced 5s apart.
+    lon_step = 0.00006  # ~5m east near this latitude, x2 per 5s tick below
+    for i in range(6):
+        associate_detection(
+            make_detection(
+                timestamp=BASE_TIME + timedelta(seconds=5 * i),
+                latitude=51.5,
+                longitude=-0.1 + lon_step * i,
+            )
+        )
+    track = list_tracks()[0]
+    assert track.speed_mps is not None and track.speed_mps > 0.5
+    assert track.heading_deg is not None
+    assert 45 < track.heading_deg < 135  # roughly eastward
+
+
+def test_track_position_uncertainty_shrinks_with_more_detections():
+    first = associate_detection(make_detection())
+    first_track = list_tracks()[0]
+    first_uncertainty = first_track.position_uncertainty_m
+
+    for i in range(1, 5):
+        associate_detection(
+            make_detection(
+                timestamp=BASE_TIME + timedelta(seconds=5 * i),
+                latitude=51.5 + 0.00001 * i,
+                longitude=-0.1,
+            )
+        )
+    later_track = list_tracks()[0]
+    assert later_track.position_uncertainty_m < first_uncertainty
+
+
+def test_fast_mover_still_gates_onto_predicted_position():
+    # A steadily-moving object several TRACK_DISTANCE_GATE_M past its last
+    # raw fix should still join the same track, because gating is against
+    # the Kalman-predicted position (which moves with it), not the stale
+    # last-known position.
+    associate_detection(make_detection(latitude=51.5, longitude=-0.10000))
+    associate_detection(
+        make_detection(timestamp=BASE_TIME + timedelta(seconds=5), latitude=51.5, longitude=-0.09850)
+    )
+    third = associate_detection(
+        make_detection(timestamp=BASE_TIME + timedelta(seconds=10), latitude=51.5, longitude=-0.09700)
+    )
+    assert len(list_tracks()) == 1
+    assert third.track_id == list_tracks()[0].id
+
+
 def test_confident_classification_does_not_decay_back_to_bird():
     associate_detection(make_detection(sensor_type=SensorType.CAMERA, confidence=0.95))  # -> DRONE
     associate_detection(

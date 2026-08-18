@@ -41,3 +41,24 @@ BIRD_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_BIRD_CONFIDENCE_THRESHOLD", "
 # Sensor health thresholds.
 SENSOR_ONLINE_SECONDS = float(os.getenv("DRONE_SENSOR_ONLINE_SECONDS", "60"))
 SENSOR_STALE_SECONDS = float(os.getenv("DRONE_SENSOR_STALE_SECONDS", "300"))
+
+# Kalman filter tuning. Process noise is the assumed variance (m^2/s^3) of
+# an unmodeled acceleration between updates -- higher values let the filter
+# trust new detections more and follow maneuvers faster, at the cost of
+# smoothing less noise out. Measurement sigma is the assumed 1-sigma
+# position error (m) of a detection at confidence 1.0; it's scaled up for
+# lower-confidence detections so the filter trusts them less.
+KALMAN_PROCESS_NOISE = float(os.getenv("DRONE_KALMAN_PROCESS_NOISE", "4.0"))
+KALMAN_MEASUREMENT_SIGMA_M = float(os.getenv("DRONE_KALMAN_MEASUREMENT_SIGMA_M", "30.0"))
+KALMAN_INITIAL_VELOCITY_SIGMA_MPS = float(
+    os.getenv("DRONE_KALMAN_INITIAL_VELOCITY_SIGMA_MPS", "40.0")
+)
+
+# Gate for accepting a detection onto a track: squared Mahalanobis distance
+# between the detection and the track's Kalman-predicted position must be
+# below this. 9.21 is the chi-square 99% threshold for 2 degrees of freedom.
+TRACK_GATE_CHI2 = float(os.getenv("DRONE_TRACK_GATE_CHI2", "9.21"))
+
+# How far ahead (seconds) a track's velocity is projected to check for an
+# upcoming restricted-zone entry that hasn't happened yet.
+PREDICTIVE_HORIZON_SECONDS = float(os.getenv("DRONE_PREDICTIVE_HORIZON_SECONDS", "30"))

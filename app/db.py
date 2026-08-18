@@ -33,9 +33,27 @@ def db_session() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Columns added to `track` after its initial release. CREATE TABLE IF NOT
+# EXISTS in schema.sql only creates the table on a fresh database, so an
+# existing database needs these added explicitly to pick them up.
+_TRACK_MIGRATION_COLUMNS = {
+    "heading_deg": "REAL",
+    "speed_mps": "REAL",
+    "position_uncertainty_m": "REAL",
+}
+
+
+def _migrate_track_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(track)")}
+    for column, sql_type in _TRACK_MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE track ADD COLUMN {column} {sql_type}")
+
+
 def init_db() -> None:
     with db_session() as conn:
         conn.executescript(SCHEMA_PATH.read_text())
+        _migrate_track_columns(conn)
 
 
 # --- Detection helpers -----------------------------------------------------
@@ -109,8 +127,9 @@ def create_track(track: Track) -> Track:
             """
             INSERT INTO track
                 (track_uid, first_seen, last_seen, status, classification,
-                 latitude, longitude, altitude_m)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 latitude, longitude, altitude_m, heading_deg, speed_mps,
+                 position_uncertainty_m)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 track.track_uid,
@@ -121,6 +140,9 @@ def create_track(track: Track) -> Track:
                 track.latitude,
                 track.longitude,
                 track.altitude_m,
+                track.heading_deg,
+                track.speed_mps,
+                track.position_uncertainty_m,
             ),
         )
         track.id = cur.lastrowid
@@ -133,7 +155,8 @@ def update_track(track: Track) -> Track:
             """
             UPDATE track
             SET last_seen = ?, status = ?, classification = ?,
-                latitude = ?, longitude = ?, altitude_m = ?
+                latitude = ?, longitude = ?, altitude_m = ?,
+                heading_deg = ?, speed_mps = ?, position_uncertainty_m = ?
             WHERE id = ?
             """,
             (
@@ -143,6 +166,9 @@ def update_track(track: Track) -> Track:
                 track.latitude,
                 track.longitude,
                 track.altitude_m,
+                track.heading_deg,
+                track.speed_mps,
+                track.position_uncertainty_m,
                 track.id,
             ),
         )
@@ -177,6 +203,85 @@ def _row_to_track(row: sqlite3.Row) -> Track:
         latitude=row["latitude"],
         longitude=row["longitude"],
         altitude_m=row["altitude_m"],
+        heading_deg=row["heading_deg"],
+        speed_mps=row["speed_mps"],
+        position_uncertainty_m=row["position_uncertainty_m"],
+    )
+
+
+# --- Kalman filter state helpers -------------------------------------------
+
+class KalmanStateRecord:
+    """Persisted Kalman filter state for one track: the local tangent-plane
+    reference point, the state vector, and the covariance matrix.
+    """
+
+    def __init__(
+        self,
+        track_id: int,
+        ref_lat: float,
+        ref_lon: float,
+        x_m: float,
+        y_m: float,
+        vx_mps: float,
+        vy_mps: float,
+        covariance: list[list[float]],
+        updated_at: datetime,
+    ) -> None:
+        self.track_id = track_id
+        self.ref_lat = ref_lat
+        self.ref_lon = ref_lon
+        self.x_m = x_m
+        self.y_m = y_m
+        self.vx_mps = vx_mps
+        self.vy_mps = vy_mps
+        self.covariance = covariance
+        self.updated_at = updated_at
+
+
+def upsert_kalman_state(record: KalmanStateRecord) -> None:
+    with db_session() as conn:
+        conn.execute(
+            """
+            INSERT INTO track_kalman_state
+                (track_id, ref_lat, ref_lon, x_m, y_m, vx_mps, vy_mps, covariance, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (track_id) DO UPDATE SET
+                x_m = excluded.x_m, y_m = excluded.y_m,
+                vx_mps = excluded.vx_mps, vy_mps = excluded.vy_mps,
+                covariance = excluded.covariance, updated_at = excluded.updated_at
+            """,
+            (
+                record.track_id,
+                record.ref_lat,
+                record.ref_lon,
+                record.x_m,
+                record.y_m,
+                record.vx_mps,
+                record.vy_mps,
+                json.dumps(record.covariance),
+                record.updated_at.isoformat(),
+            ),
+        )
+
+
+def get_kalman_state(track_id: int) -> KalmanStateRecord | None:
+    with db_session() as conn:
+        row = conn.execute(
+            "SELECT * FROM track_kalman_state WHERE track_id = ?", (track_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return KalmanStateRecord(
+        track_id=row["track_id"],
+        ref_lat=row["ref_lat"],
+        ref_lon=row["ref_lon"],
+        x_m=row["x_m"],
+        y_m=row["y_m"],
+        vx_mps=row["vx_mps"],
+        vy_mps=row["vy_mps"],
+        covariance=json.loads(row["covariance"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
     )
 
 
