@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import uuid
 from datetime import datetime, timedelta
 
@@ -21,6 +22,22 @@ from app.models import Classification, Detection, Track, TrackStatus
 logger = logging.getLogger(__name__)
 
 _EARTH_RADIUS_M = 6_371_000.0
+
+# Classifications treated as "confident" -- once a track reaches one of
+# these it can only move to another confident label (not decay back to
+# BIRD/UNKNOWN/FRIENDLY from noise), but a track that is not yet confident
+# can always be upgraded into one. Without this, a track first mislabeled
+# BIRD or FRIENDLY from an early low-confidence return would stay stuck at
+# that label forever even after later detections clearly show a drone.
+_CONFIDENT_CLASSIFICATIONS = {Classification.DRONE, Classification.AIRCRAFT}
+
+# Guards the read-then-write track association critical section below
+# (find matching track, then create/update it) against races between
+# concurrent detection-ingestion requests, which FastAPI runs on separate
+# threads. Without it, two near-simultaneous detections for the same
+# object can each miss the other's new/updated track and produce
+# duplicate tracks or lost updates.
+_association_lock = threading.Lock()
 
 
 def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -72,38 +89,41 @@ def associate_detection(detection: Detection) -> Detection:
     """Gate an incoming detection against existing tracks, update or spawn a
     track, persist the detection against it, and return the stored detection.
     """
-    expire_stale_tracks(detection.timestamp)
-    label = classify(detection.sensor_type, detection.confidence)
+    with _association_lock:
+        expire_stale_tracks(detection.timestamp)
+        label = classify(detection.sensor_type, detection.confidence)
 
-    track = _find_matching_track(detection)
-    if track is None:
-        track = create_track(
-            Track(
-                track_uid=str(uuid.uuid4()),
-                first_seen=detection.timestamp,
-                last_seen=detection.timestamp,
-                status=TrackStatus.ACTIVE,
-                classification=label,
-                latitude=detection.latitude,
-                longitude=detection.longitude,
-                altitude_m=detection.altitude_m,
+        track = _find_matching_track(detection)
+        if track is None:
+            track = create_track(
+                Track(
+                    track_uid=str(uuid.uuid4()),
+                    first_seen=detection.timestamp,
+                    last_seen=detection.timestamp,
+                    status=TrackStatus.ACTIVE,
+                    classification=label,
+                    latitude=detection.latitude,
+                    longitude=detection.longitude,
+                    altitude_m=detection.altitude_m,
+                )
             )
-        )
-        logger.info(
-            "New track %s (%s) from sensor=%s confidence=%.2f",
-            track.track_uid, label.value, detection.sensor_id, detection.confidence,
-        )
-    else:
-        track.last_seen = detection.timestamp
-        track.latitude = detection.latitude
-        track.longitude = detection.longitude
-        track.altitude_m = detection.altitude_m
-        if track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
-            track.classification = label
-        update_track(track)
-        logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
+            logger.info(
+                "New track %s (%s) from sensor=%s confidence=%.2f",
+                track.track_uid, label.value, detection.sensor_id, detection.confidence,
+            )
+        else:
+            track.last_seen = detection.timestamp
+            track.latitude = detection.latitude
+            track.longitude = detection.longitude
+            track.altitude_m = detection.altitude_m
+            if track.classification not in _CONFIDENT_CLASSIFICATIONS and (
+                label in _CONFIDENT_CLASSIFICATIONS or track.classification == Classification.UNKNOWN
+            ):
+                track.classification = label
+            update_track(track)
+            logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
 
-    check_zone_incidents(track)
+        check_zone_incidents(track)
 
-    detection.track_id = track.id
-    return create_detection(detection)
+        detection.track_id = track.id
+        return create_detection(detection)

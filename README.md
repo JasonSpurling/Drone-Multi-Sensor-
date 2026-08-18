@@ -73,6 +73,17 @@ a bird.
 Watch the dashboard while it runs to see tracks appear, get classified, and
 trigger a zone-incursion alert.
 
+## Tests
+
+```
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest tests/
+```
+
+Each test runs against an isolated, temporary SQLite database (see
+`tests/conftest.py`), so the suite never touches `data/drone_sensor.db`.
+CI runs the same suite on every push/PR (`.github/workflows/tests.yml`).
+
 ## API
 
 | Endpoint | Description |
@@ -147,6 +158,7 @@ app/
   zones.seed.json     Sample restricted zone
   api/                 Route handlers, one module per resource
   static/dashboard.html  Dashboard (no build step; loads Leaflet + map tiles from a CDN, so it needs internet access)
+tests/                   Pytest suite for classification/zones/tracking/incidents
 simulator.py            Posts realistic detections against a running server
 main.py                  Entrypoint (python main.py)
 ```
