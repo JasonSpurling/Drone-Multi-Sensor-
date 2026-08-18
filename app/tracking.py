@@ -23,20 +23,10 @@ logger = logging.getLogger(__name__)
 
 _EARTH_RADIUS_M = 6_371_000.0
 
-# Classifications treated as "confident" -- once a track reaches one of
-# these it can only move to another confident label (not decay back to
-# BIRD/UNKNOWN/FRIENDLY from noise), but a track that is not yet confident
-# can always be upgraded into one. Without this, a track first mislabeled
-# BIRD or FRIENDLY from an early low-confidence return would stay stuck at
-# that label forever even after later detections clearly show a drone.
-_CONFIDENT_CLASSIFICATIONS = {Classification.DRONE, Classification.AIRCRAFT}
-
-# Guards the read-then-write track association critical section below
-# (find matching track, then create/update it) against races between
-# concurrent detection-ingestion requests, which FastAPI runs on separate
-# threads. Without it, two near-simultaneous detections for the same
-# object can each miss the other's new/updated track and produce
-# duplicate tracks or lost updates.
+# Guards the read-then-write track association/incident-creation sequence
+# below. FastAPI runs sync routes (like POST /api/detections) in a thread
+# pool, so concurrent requests can otherwise both miss each other's
+# in-flight track/incident and create duplicates.
 _association_lock = threading.Lock()
 
 
@@ -89,9 +79,10 @@ def associate_detection(detection: Detection) -> Detection:
     """Gate an incoming detection against existing tracks, update or spawn a
     track, persist the detection against it, and return the stored detection.
     """
+    label = classify(detection.sensor_type, detection.confidence)
+
     with _association_lock:
         expire_stale_tracks(detection.timestamp)
-        label = classify(detection.sensor_type, detection.confidence)
 
         track = _find_matching_track(detection)
         if track is None:
@@ -116,9 +107,15 @@ def associate_detection(detection: Detection) -> Detection:
             track.latitude = detection.latitude
             track.longitude = detection.longitude
             track.altitude_m = detection.altitude_m
-            if track.classification not in _CONFIDENT_CLASSIFICATIONS and (
-                label in _CONFIDENT_CLASSIFICATIONS or track.classification == Classification.UNKNOWN
-            ):
+            # A detection can always upgrade a track to DRONE (except away
+            # from the trusted ADS-B AIRCRAFT label) even if it was already
+            # classified as something else, since misidentifying a real
+            # drone as a bird/unknown and never re-flagging it is the unsafe
+            # failure mode. Any other non-UNKNOWN label only fills in a
+            # still-unknown classification, never overwrites one.
+            if label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
+                track.classification = label
+            elif track.classification == Classification.UNKNOWN and label != Classification.UNKNOWN:
                 track.classification = label
             update_track(track)
             logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)

@@ -47,9 +47,8 @@ def point_in_polygon(lat: float, lon: float, polygon: list[tuple[float, float]])
 
 
 def _within_altitude_band(altitude_m: float | None, zone: Zone) -> bool:
-    """True if altitude_m falls within the zone's altitude band, or the band
-    is unbounded on that side. An unknown altitude_m is treated as matching
-    (conservative: don't let missing altitude data suppress a real incursion).
+    """True if altitude_m is within the zone's altitude band, or if either
+    is unknown (an unknown altitude can't be used to rule a zone out).
     """
     if altitude_m is None:
         return True
@@ -60,9 +59,7 @@ def _within_altitude_band(altitude_m: float | None, zone: Zone) -> bool:
     return True
 
 
-def zones_containing_point(
-    lat: float, lon: float, altitude_m: float | None = None
-) -> list[Zone]:
+def zones_containing_point(lat: float, lon: float, altitude_m: float | None = None) -> list[Zone]:
     return [
         zone
         for zone in list_zones(active_only=True)
