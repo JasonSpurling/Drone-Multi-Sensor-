@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
 
 from app.db import create_incident, get_open_incident
 from app.models import (
@@ -16,6 +15,7 @@ from app.models import (
     Track,
     ZoneType,
 )
+from app.util import utcnow
 from app.zones import zones_containing_point
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def check_zone_incidents(track: Track) -> list[Incident]:
                 status=IncidentStatus.OPEN,
                 track_id=track.id,
                 zone_id=zone.id,
-                opened_at=datetime.utcnow(),
+                opened_at=utcnow(),
                 description=f"Track {track.track_uid} entered restricted zone '{zone.name}'",
             )
         )

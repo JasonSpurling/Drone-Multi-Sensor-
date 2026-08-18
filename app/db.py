@@ -73,14 +73,20 @@ def get_detection(detection_id: int) -> Detection | None:
     return _row_to_detection(row) if row else None
 
 
-def list_detections(track_id: int | None = None) -> list[Detection]:
+def list_detections(
+    track_id: int | None = None, limit: int | None = None, offset: int = 0
+) -> list[Detection]:
     with db_session() as conn:
         if track_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM detection WHERE track_id = ? ORDER BY timestamp", (track_id,)
-            ).fetchall()
+            query = "SELECT * FROM detection WHERE track_id = ? ORDER BY timestamp"
+            params: tuple = (track_id,)
         else:
-            rows = conn.execute("SELECT * FROM detection ORDER BY timestamp").fetchall()
+            query = "SELECT * FROM detection ORDER BY timestamp"
+            params = ()
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params += (limit, offset)
+        rows = conn.execute(query, params).fetchall()
     return [_row_to_detection(row) for row in rows]
 
 
@@ -155,14 +161,20 @@ def get_track(track_id: int) -> Track | None:
     return _row_to_track(row) if row else None
 
 
-def list_tracks(status: str | None = None) -> list[Track]:
+def list_tracks(
+    status: str | None = None, limit: int | None = None, offset: int = 0
+) -> list[Track]:
     with db_session() as conn:
         if status is not None:
-            rows = conn.execute(
-                "SELECT * FROM track WHERE status = ? ORDER BY last_seen DESC", (status,)
-            ).fetchall()
+            query = "SELECT * FROM track WHERE status = ? ORDER BY last_seen DESC"
+            params: tuple = (status,)
         else:
-            rows = conn.execute("SELECT * FROM track ORDER BY last_seen DESC").fetchall()
+            query = "SELECT * FROM track ORDER BY last_seen DESC"
+            params = ()
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params += (limit, offset)
+        rows = conn.execute(query, params).fetchall()
     return [_row_to_track(row) for row in rows]
 
 
@@ -244,14 +256,20 @@ def get_open_incident(track_id: int, zone_id: int, incident_type: str) -> Incide
     return _row_to_incident(row) if row else None
 
 
-def list_incidents(status: str | None = None) -> list[Incident]:
+def list_incidents(
+    status: str | None = None, limit: int | None = None, offset: int = 0
+) -> list[Incident]:
     with db_session() as conn:
         if status is not None:
-            rows = conn.execute(
-                "SELECT * FROM incident WHERE status = ? ORDER BY opened_at DESC", (status,)
-            ).fetchall()
+            query = "SELECT * FROM incident WHERE status = ? ORDER BY opened_at DESC"
+            params: tuple = (status,)
         else:
-            rows = conn.execute("SELECT * FROM incident ORDER BY opened_at DESC").fetchall()
+            query = "SELECT * FROM incident ORDER BY opened_at DESC"
+            params = ()
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params += (limit, offset)
+        rows = conn.execute(query, params).fetchall()
     return [_row_to_incident(row) for row in rows]
 
 

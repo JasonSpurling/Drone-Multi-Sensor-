@@ -18,6 +18,7 @@ from app.config import (
 from app.db import create_detection, create_track, list_tracks, update_track
 from app.incidents import check_zone_incidents
 from app.models import Classification, Detection, Track, TrackStatus
+from app.util import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> 
 
 def expire_stale_tracks(now: datetime | None = None) -> None:
     """Sweep tracks: active -> lost -> closed once each has gone quiet too long."""
-    now = now or datetime.utcnow()
+    now = now or utcnow()
 
     for track in list_tracks(status=TrackStatus.ACTIVE.value):
         if now - track.last_seen > timedelta(seconds=TRACK_STALE_SECONDS):

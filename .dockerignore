@@ -1,0 +1,9 @@
+.git/
+.idea/
+.claude/
+.venv/
+venv/
+__pycache__/
+*.pyc
+data/
+*.db

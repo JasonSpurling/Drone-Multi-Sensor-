@@ -7,10 +7,11 @@ from datetime import datetime, timedelta
 from app.config import SENSOR_ONLINE_SECONDS, SENSOR_STALE_SECONDS
 from app.db import db_session
 from app.models import SensorHealth, SensorStatus
+from app.util import utcnow
 
 
 def get_sensor_health(now: datetime | None = None) -> list[SensorHealth]:
-    now = now or datetime.utcnow()
+    now = now or utcnow()
 
     # SQLite guarantees that when a query has exactly one MAX() aggregate,
     # any other bare (non-aggregated) columns come from the same row as the
