@@ -221,6 +221,27 @@ format. A small bridge script parses that feed and posts it to the API:
 .venv/bin/python -m app.adapters.dump1090_bridge --sbs-host 127.0.0.1 --sbs-port 30003
 ```
 
+**Camera motion cueing** (`app/adapters/camera_motion.py`): watches a
+webcam or RTSP camera stream with OpenCV background subtraction and posts
+a `camera` detection whenever it sees motion above a threshold.
+
+```bash
+pip install -r requirements-camera.txt
+.venv/bin/python -m app.adapters.camera_motion --source rtsp://192.168.1.50/stream1 \
+  --target-lat 51.50 --target-lon -0.10 --confidence 0.5
+```
+
+**This is a motion detector, not an object classifier** -- it can't tell a
+drone from a bird, a cat, or a swaying branch, and (being a single
+monocular camera) can't measure range, so every detection is reported at
+a fixed `--target-lat`/`--target-lon` representing the center of the
+camera's field of view rather than a triangulated position. The
+`--confidence` value is a manual estimate you tune to your own scene (a
+camera that only ever sees open sky can reasonably use a higher value
+than one that also sees traffic or trees), not something derived from
+what's actually in frame. A real deployment would replace this with a
+trained object detector (YOLO or similar) scoring actual object class.
+
 ## Classification fusion & friendly allowlist
 
 Track classification (`app/fusion.py`) is a confidence-and-sensor-trust
@@ -366,7 +387,7 @@ app/
   sensors.py              Sensor health
   util.py                 Shared helpers (naive-UTC now())
   zones.seed.json        Sample restricted zone
-  adapters/               Real-sensor protocol adapters (SBS-1/dump1090 ADS-B bridge)
+  adapters/               Real-sensor bridges (SBS-1/dump1090 ADS-B, OpenCV camera motion cueing)
   api/                    Route handlers, one module per resource
   static/dashboard.html   Dashboard (no build step; loads Leaflet + map tiles from a CDN, so it needs internet access)
 tests/                     Pytest suite (runs against SQLite by default, PostgreSQL optionally)
