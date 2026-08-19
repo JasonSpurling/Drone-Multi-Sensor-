@@ -46,7 +46,7 @@
   #status-line { color: var(--muted); font-size: 12px; }
   main {
     display: grid;
-    grid-template-columns: 1.3fr 1fr;
+    grid-template-columns: 1.6fr 1fr;
     grid-template-rows: auto auto auto;
     gap: 14px;
     padding: 14px 20px;
@@ -86,12 +86,19 @@
     margin-right: 6px;
     vertical-align: middle;
   }
-  #map-wrap { grid-column: 1; grid-row: 2; }
-  #tracks-wrap { grid-column: 1; grid-row: 1; }
-  #alerts-wrap { grid-column: 2; grid-row: 1; }
+  /* Map leads: it's the primary situational-awareness surface, so it
+     spans both rows on the wide left column instead of competing for
+     space with the data panels. Alerts sit underneath it (alerts are
+     spatial events, visually associated with the map above them); Live
+     Tracks, Selected Track, and Sensor Health form the operator's data
+     column on the right, in the order you'd actually use them: pick a
+     track, read its details, check sensor health. */
+  #map-wrap { grid-column: 1; grid-row: 1 / span 2; }
+  #alerts-wrap { grid-column: 1; grid-row: 3; }
+  #tracks-wrap { grid-column: 2; grid-row: 1; }
   #details-wrap { grid-column: 2; grid-row: 2; }
-  #sensors-wrap { grid-column: 1 / span 2; grid-row: 3; }
-  #map { width: 100%; height: 260px; border-radius: 6px; overflow: hidden; background: #0b0f19; }
+  #sensors-wrap { grid-column: 2; grid-row: 3; }
+  #map { width: 100%; height: 560px; border-radius: 6px; overflow: hidden; background: #0b0f19; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
   .leaflet-container { font-family: inherit; }
   .leaflet-control-layers {
@@ -119,8 +126,16 @@
   }
   button:hover { background: #1d4ed8; }
   button:disabled { background: var(--border); color: var(--muted); cursor: default; }
-  .kv { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; }
   .kv .k { color: var(--muted); }
+  .kv-section + .kv-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .kv-section-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 8px 0;
+  }
 </style>
 </head>
 <body>
@@ -307,21 +322,34 @@ function renderDetails() {
   }
   const related = state.incidents.filter((i) => i.track_id === track.id);
   el.innerHTML = `
-    <div class="kv">
-      <div class="k">ID</div><div>${track.id}</div>
-      <div class="k">UID</div><div>${escapeHtml(track.track_uid)}</div>
-      <div class="k">Status</div><div>${badge(track.status, STATUS_COLOR[track.status])}</div>
-      <div class="k">Classification</div><div>${badge(track.classification, CLASS_COLOR[track.classification])}</div>
-      <div class="k">First seen</div><div>${fmtTime(track.first_seen)}</div>
-      <div class="k">Last seen</div><div>${fmtTime(track.last_seen)}</div>
-      <div class="k">Position</div><div>${track.latitude != null ? `${track.latitude}, ${track.longitude}` : "—"}</div>
-      <div class="k">Altitude</div><div>${track.altitude_m != null ? track.altitude_m + " m" : "—"}</div>
-      <div class="k">Heading</div><div>${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "—"}</div>
-      <div class="k">Speed</div><div>${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
-      <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
-      <div class="k">Maneuvering</div><div>${track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) + "%" : "—"}</div>
-      <div class="k">Incidents</div><div>${related.length}</div>
-      <div class="k">Trail</div><div>${state.trail.length ? `${state.trail.length} points (dashed on map)` : "loading…"}</div>
+    <div class="kv-section">
+      <div class="kv-section-title">Identity</div>
+      <div class="kv">
+        <div class="k">ID</div><div>${track.id}</div>
+        <div class="k">UID</div><div>${escapeHtml(track.track_uid)}</div>
+        <div class="k">Status</div><div>${badge(track.status, STATUS_COLOR[track.status])}</div>
+        <div class="k">Classification</div><div>${badge(track.classification, CLASS_COLOR[track.classification])}</div>
+        <div class="k">First seen</div><div>${fmtTime(track.first_seen)}</div>
+        <div class="k">Last seen</div><div>${fmtTime(track.last_seen)}</div>
+      </div>
+    </div>
+    <div class="kv-section">
+      <div class="kv-section-title">Position &amp; motion</div>
+      <div class="kv">
+        <div class="k">Position</div><div>${track.latitude != null ? `${track.latitude}, ${track.longitude}` : "—"}</div>
+        <div class="k">Altitude</div><div>${track.altitude_m != null ? track.altitude_m + " m" : "—"}</div>
+        <div class="k">Heading</div><div>${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "—"}</div>
+        <div class="k">Speed</div><div>${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
+      </div>
+    </div>
+    <div class="kv-section">
+      <div class="kv-section-title">Track quality</div>
+      <div class="kv">
+        <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
+        <div class="k">Maneuvering</div><div>${track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) + "%" : "—"}</div>
+        <div class="k">Incidents</div><div>${related.length}</div>
+        <div class="k">Trail</div><div>${state.trail.length ? `${state.trail.length} points (dashed on map)` : "loading…"}</div>
+      </div>
     </div>
   `;
 }
