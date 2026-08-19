@@ -36,23 +36,33 @@ def db_session() -> Iterator[Connection]:
         yield conn
 
 
-# Columns added to `track` after its initial release. metadata.create_all
-# only creates a table on a fresh database, so an existing database needs
-# these added explicitly to pick them up.
-_TRACK_MIGRATION_COLUMNS = {
-    "heading_deg": "REAL",
-    "speed_mps": "REAL",
-    "position_uncertainty_m": "REAL",
-    "maneuver_probability": "REAL",
+# Columns added to existing tables after their initial release.
+# metadata.create_all only creates a table on a fresh database, so an
+# existing database needs these added explicitly to pick them up.
+_TABLE_MIGRATION_COLUMNS = {
+    "track": {
+        "heading_deg": "REAL",
+        "speed_mps": "REAL",
+        "position_uncertainty_m": "REAL",
+        "maneuver_probability": "REAL",
+    },
+    "authorized_operator": {
+        "public_key": "VARCHAR(64)",
+    },
 }
 
 
-def _migrate_track_columns() -> None:
-    existing = {col["name"] for col in inspect(engine).get_columns("track")}
+def _migrate_table_columns() -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
     with engine.begin() as conn:
-        for column, sql_type in _TRACK_MIGRATION_COLUMNS.items():
-            if column not in existing:
-                conn.execute(text(f"ALTER TABLE track ADD COLUMN {column} {sql_type}"))
+        for table, columns in _TABLE_MIGRATION_COLUMNS.items():
+            if table not in existing_tables:
+                continue
+            existing_columns = {col["name"] for col in inspector.get_columns(table)}
+            for column, sql_type in columns.items():
+                if column not in existing_columns:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
 
 
 def _migrate_kalman_state_table() -> None:
@@ -76,7 +86,7 @@ def _migrate_kalman_state_table() -> None:
 def init_db() -> None:
     _migrate_kalman_state_table()
     metadata.create_all(engine, checkfirst=True)
-    _migrate_track_columns()
+    _migrate_table_columns()
 
 
 # --- Detection helpers -----------------------------------------------------
@@ -589,29 +599,30 @@ def list_sensor_registrations() -> list[dict]:
 
 # --- Authorized operator (friendly allowlist) helpers -----------------
 
-def upsert_authorized_operator(operator_id: str, name: str, active: bool = True) -> None:
+def upsert_authorized_operator(
+    operator_id: str, name: str, public_key: str | None = None, active: bool = True
+) -> None:
     with db_session() as conn:
         conn.execute(
             text(
                 """
-                INSERT INTO authorized_operator (operator_id, name, active)
-                VALUES (:operator_id, :name, :active)
-                ON CONFLICT (operator_id) DO UPDATE SET name = excluded.name, active = excluded.active
+                INSERT INTO authorized_operator (operator_id, name, public_key, active)
+                VALUES (:operator_id, :name, :public_key, :active)
+                ON CONFLICT (operator_id) DO UPDATE SET
+                    name = excluded.name, public_key = excluded.public_key, active = excluded.active
                 """
             ),
-            {"operator_id": operator_id, "name": name, "active": int(active)},
+            {"operator_id": operator_id, "name": name, "public_key": public_key, "active": int(active)},
         )
 
 
-def is_authorized_operator(operator_id: str) -> bool:
+def get_authorized_operator(operator_id: str) -> dict | None:
     with db_session() as conn:
         row = conn.execute(
-            text(
-                "SELECT 1 FROM authorized_operator WHERE operator_id = :operator_id AND active = 1"
-            ),
+            text("SELECT * FROM authorized_operator WHERE operator_id = :operator_id AND active = 1"),
             {"operator_id": operator_id},
-        ).fetchone()
-    return row is not None
+        ).mappings().fetchone()
+    return dict(row) if row else None
 
 
 def list_authorized_operators() -> list[dict]:

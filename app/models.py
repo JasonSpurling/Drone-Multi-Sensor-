@@ -176,9 +176,16 @@ class SensorRegistration(SensorRegistrationInput):
 class AuthorizedOperatorInput(BaseModel):
     """A known/authorized drone operator (e.g. an FAA Remote ID operator
     ID) whose aircraft should be classified FRIENDLY. See app/allowlist.py.
+    public_key is a base64-encoded Ed25519 public key (see
+    app/remote_id.py) -- a detection claiming this operator_id must carry
+    a signature verifiable against it to be trusted; the ID string alone
+    proves nothing.
     """
 
     name: str = Field(min_length=1, max_length=200)
+    public_key: str | None = Field(
+        default=None, description="Base64-encoded Ed25519 public key (see app/remote_id.py)"
+    )
     active: bool = True
 
 

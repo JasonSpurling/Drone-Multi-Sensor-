@@ -271,8 +271,58 @@ camera's field of view rather than a triangulated position. The
 `--confidence` value is a manual estimate you tune to your own scene (a
 camera that only ever sees open sky can reasonably use a higher value
 than one that also sees traffic or trees), not something derived from
-what's actually in frame. A real deployment would replace this with a
-trained object detector (YOLO or similar) scoring actual object class.
+what's actually in frame.
+
+**Camera object detection with YOLO** (`app/adapters/camera_yolo.py`): a
+real alternative to motion cueing -- runs a YOLO object detector
+(`ultralytics`) on each captured frame instead of a background-subtraction
+motion blob, so it can actually distinguish object classes (car, person,
+dog, bird, ...) and rule out ones that are confidently not aerial contacts,
+instead of posting a detection for anything that moves.
+
+```bash
+pip install -r requirements-camera.txt
+.venv/bin/python -m app.adapters.camera_yolo --source rtsp://192.168.1.50/stream1 \
+  --target-lat 51.50 --target-lon -0.10 --model yolov8n.pt
+```
+
+**There is no "drone" class in stock COCO-pretrained YOLO weights** -- the
+80 COCO classes cover common objects (person, car, airplane, bird, kite,
+...) but not drones, because no such public, generically-licensed
+dataset/label exists in the standard release. This adapter rules OUT
+confidently-non-aerial classes (person, car, dog, ...) and reports a
+confident 'bird' match at low confidence (correctly resolving to `bird`,
+not `drone`, through the existing thresholds), but anything else in frame
+(a kite, an airplane, or any other unrecognized class) is reported as an
+unidentified object at moderate confidence, not a confirmed drone. A
+deployment wanting real drone/not-drone classification from vision needs a
+model fine-tuned on a labeled drone dataset (several exist publicly, e.g.
+on Roboflow Universe) -- point `--model` at those weights once you have
+them; the adapter works with any YOLO-format model, not just the stock
+COCO one. Like `dump1090_bridge.py`, this only runs if you `pip install`
+the camera extras -- `ultralytics` (and its `torch` dependency) is not a
+core dependency of the API server.
+
+## RF signature fingerprinting
+
+An RF detection whose `raw_data` carries `center_frequency_mhz`,
+`bandwidth_mhz`, and (optionally) `frequency_hopping` is matched against a
+small library of publicly documented drone control/video link signatures
+(`app/rf_signatures.py`) -- DJI OcuSync, DJI Lightbridge, analog FPV video,
+and Wi-Fi-based FPV/control links -- instead of trusting a single flat RF
+confidence number. This mirrors how real counter-drone RF sensors actually
+work: classifying frequency band, channel bandwidth, and hopping behavior
+against known signature libraries for common link types, not decoding
+encrypted proprietary protocol content. A signature match's confidence is
+used (via `app/fusion.py`) whenever it's higher than the sensor's own
+reported confidence, so a low-confidence RF detection with a
+signal-shape that matches a known drone link still classifies as `drone`.
+It cannot decode a link's payload, extract telemetry, or identify a
+specific aircraft -- only that its RF envelope is consistent with a known
+type of control/video link. The band/bandwidth windows in `SIGNATURES` are
+drawn from published consumer/hobbyist RF specifications and are
+approximate, not exact per-model specs -- tune them to your own RF
+sensor's measured characteristics if you have one.
 
 ## Classification fusion & friendly allowlist
 
@@ -287,23 +337,40 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
 
-A detection whose `raw_data.operator_id` matches a registered authorized
-operator (`app/allowlist.py` -- meant for FAA Remote ID broadcasts) votes
-`friendly` instead. This is **not cryptographically verified** -- Remote ID
-broadcasts aren't signed, so a resourced adversary could spoof an
-authorized `operator_id`. Two things limit the damage a spoofed claim can
-do: `GET /api/authorized-operators` is **admin-only** (not `viewer`), since
-it's exactly the list of values needed to spoof the check, and a
-`friendly` classification tempers an incident's severity to `medium`
-rather than suppressing it to `low` the way independently-verified
-evidence (ADS-B, `aircraft`) does -- an unverified self-report shouldn't be
-able to fully silence a real intrusion. Register an operator:
+A detection votes `friendly` only if its `raw_data` carries an
+`operator_id` matching a registered authorized operator **and** a valid
+Ed25519 signature over that operator/detection pair (`app/remote_id.py`,
+`app/allowlist.py`) -- a bare, self-reported `operator_id` with no
+signature (or a signature from the wrong key) is not enough to grant
+`friendly`. Register an operator with a public key, then have their
+ground-control software sign each detection with the matching private key:
 
 ```bash
+python3 -c "from app.remote_id import generate_keypair; print(generate_keypair())"
+# -> (private_key_b64, public_key_b64) -- keep the private key with the operator,
+# register only the public key here.
+
 curl -X PUT http://127.0.0.1:8000/api/authorized-operators/OP-12345 \
   -H "Content-Type: application/json" -H "X-API-Key: <admin key>" \
-  -d '{"name":"Acme Surveying Co."}'
+  -d '{"name":"Acme Surveying Co.","public_key":"<public_key_b64>"}'
 ```
+
+```python
+from app.remote_id import sign_detection
+detection.raw_data["signature"] = sign_detection("OP-12345", detection, private_key_b64)
+```
+
+The signed message binds `operator_id`, `sensor_id`, `timestamp`, and
+(rounded) `latitude`/`longitude` together, so a captured signature can't be
+replayed onto a different detection. This closes the spoofing gap flagged
+by the security review: `GET /api/authorized-operators` remains
+**admin-only** (not `viewer`) as defense in depth, and `friendly` still
+only tempers an incident's severity to `medium` rather than suppressing it
+to `low`, since even a correctly-signed claim is a self-report, not
+independently-verified evidence like ADS-B. This implements the
+cryptographic trust layer, not the ASTM F3411 Remote ID broadcast wire
+format itself -- integrating a real Remote ID receiver would decode
+broadcasts off-air and feed `operator_id`/`signature` into this same path.
 
 ## Operations
 

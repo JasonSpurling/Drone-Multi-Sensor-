@@ -29,5 +29,9 @@ def get_authorized_operators() -> list[AuthorizedOperator]:
 def register_authorized_operator(
     operator_id: str, body: AuthorizedOperatorInput
 ) -> AuthorizedOperator:
-    upsert_authorized_operator(operator_id=operator_id, name=body.name, active=body.active)
-    return AuthorizedOperator(operator_id=operator_id, name=body.name, active=body.active)
+    upsert_authorized_operator(
+        operator_id=operator_id, name=body.name, public_key=body.public_key, active=body.active
+    )
+    return AuthorizedOperator(
+        operator_id=operator_id, name=body.name, public_key=body.public_key, active=body.active
+    )

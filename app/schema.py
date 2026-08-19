@@ -115,11 +115,15 @@ sensor_registry = Table(
 
 # Known/authorized drone operators (e.g. FAA Remote ID operator IDs) whose
 # aircraft should be classified FRIENDLY rather than flagged as a threat.
-# See app/allowlist.py.
+# public_key is a base64-encoded Ed25519 public key: a detection claiming
+# this operator_id must carry a signature verifiable against it (see
+# app/remote_id.py, app/allowlist.py) -- an operator_id string alone is
+# not enough to be trusted.
 authorized_operator = Table(
     "authorized_operator",
     metadata,
     Column("operator_id", String(100), primary_key=True),
     Column("name", String(200), nullable=False),
+    Column("public_key", String(64)),
     Column("active", Integer, nullable=False, server_default="1"),
 )
