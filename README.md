@@ -442,6 +442,43 @@ independent reverse-engineering effort, not an official DJI
 specification, so exact fields available may vary by drone model/firmware.
 Sanity-check your first real decoded packet before relying on this.
 
+## Real ASTM F3411 Remote ID reception
+
+`app/remote_id.py` (see the Classification fusion section below) is a
+signed-claim scheme this app defines -- verifying a cryptographic
+assertion, not anything a real drone actually broadcasts. Every drone
+over 250g sold in the US/EU is now separately required to broadcast real
+**ASTM F3411 Remote ID** over Bluetooth or Wi-Fi, and this app can receive
+that directly too, via `app/adapters/astm_remote_id_ble_bridge.py`:
+
+```bash
+pip install -r requirements-remoteid.txt
+sudo .venv/bin/python -m app.adapters.astm_remote_id_ble_bridge --sensor-id remote-id-1
+```
+
+Any standard Bluetooth adapter works -- no SDR needed (unlike the DJI
+DroneID bridge above); Remote ID's whole design point is that anyone can
+passively receive it. Decoding uses
+[`dtpyodid`](https://github.com/dronetag/python-odid), a real Python
+implementation of the ASTM F3411 message formats from Dronetag (a
+commercial Remote ID hardware vendor), verified here by round-tripping
+real messages through the library's own encoder/decoder and cross-checking
+the Bluetooth framing against `opendroneid/transmitter-linux`'s reference
+implementation -- not a byte-offset parser guessed from memory. Over
+Bluetooth 4 Legacy Advertising a transmitter sends one message per
+broadcast (position, operator ID, serial number, ...), cycling through
+them, so this bridge accumulates a device's state across several
+broadcasts before it has enough to post a detection.
+
+**This is not authenticated.** Unlike `app/remote_id.py`'s signature
+scheme, ASTM F3411 itself has no cryptographic authentication of its
+OperatorID field -- a real, published limitation of the standard, not
+something a receiver can fix. A broadcast claiming a given operator ID is
+exactly as spoofable as the unsigned scheme this project's security
+review already closed for its own signed-claim path, so receiving a real
+broadcast never resolves to `friendly` on its own; cross-reference its
+OperatorID against a separately verified identity if you want that.
+
 ## Airspace data
 
 By default, zones come from the single hand-seeded polygon in
