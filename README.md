@@ -145,7 +145,8 @@ container's port will be reachable beyond your own machine.
 |---|---|
 | `GET /api/health` | Liveness check (unauthenticated) |
 | `GET /api/metrics` | Prometheus metrics (unauthenticated) |
-| `POST /api/detections` | Ingest a detection; runs georeferencing, Kalman track association, classification fusion, and zone-incident checks |
+| `POST /api/detections` | Ingest one detection; runs georeferencing, IMM track association, classification fusion, and zone-incident checks |
+| `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
@@ -182,13 +183,26 @@ stable track gates tighter than a maneuvering one.
 incident if the projection enters a restricted zone the track isn't
 already inside — an early warning ahead of the actual `zone_incursion`.
 
-Association is still per-detection greedy nearest-match (lowest
-Mahalanobis distance within gate), not a batch global-nearest-neighbor or
-full multi-hypothesis tracker (JPDA/MHT) -- those need detections buffered
-into a batch and resolved together, which trades the API's immediate
-per-request response for latency. Two tracks crossing paths very close
-together can still swap identities as a result. This is a deliberate,
-documented scope boundary, not an oversight.
+`POST /api/detections` (single) is greedy nearest-match (lowest
+Mahalanobis distance within gate) -- fine when detections arrive one at a
+time, but sequential greedy resolution has no memory of "already used
+this scan", so two near-simultaneous detections near two close tracks can
+both legally attach to the same track, leaving the other with no update
+that scan (see `tests/test_batch_association.py`'s
+`test_sequential_single_calls_can_pile_both_detections_onto_one_track` for
+a concrete reproduction).
+
+**`POST /api/detections/batch`** (`app/assignment.py`, global nearest
+neighbor via the Hungarian algorithm) fixes this for detections that
+genuinely arrive together: post every plot from one sensor's scan/sweep
+in one call and they're resolved jointly, enforcing that each track gets
+at most one detection per batch, so the pileup above can't happen and two
+crossing tracks can't swap identities within that scan. This is still
+*not* a full multi-hypothesis tracker (JPDA/MHT) -- it's single-scan
+GNN, not probabilistic multi-scan hypothesis management, and it assumes
+each track contributes at most one detection per batch (don't mix
+multiple sensors' simultaneous reports of the same object into one batch
+call expecting both to land on it -- post each sensor's scan separately).
 
 ## Database
 
@@ -405,9 +419,10 @@ app/
   fusion.py              Multi-sensor classification fusion across a track's detections
   allowlist.py           Friendly-operator allowlist (authorized_operator table)
   georeference.py         Sensor-relative azimuth/range -> absolute lat/lon
-  tracking.py            Track association (Kalman-gated), update, expiry
+  tracking.py            Track association (single-detection greedy + batch GNN), update, expiry
   kalman.py               Constant-velocity Kalman filter (no numpy dependency)
   imm.py                  IMM (Interacting Multiple Model) filter: blends CRUISE + MANEUVER modes
+  assignment.py            Hungarian algorithm (global nearest neighbor for batch association)
   geo.py                  Great-circle distance, local tangent-plane projection, forward geodesic
   incidents.py            Zone-incursion + predicted-incursion incident creation
   zones.py               Zone loading + point-in-polygon test

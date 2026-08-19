@@ -58,6 +58,18 @@ def test_ingest_key_can_post_detections(isolated_db, keys):
         assert r.status_code == 201
 
 
+def test_batch_endpoint_follows_same_rbac_as_single_detection(isolated_db, keys):
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/detections/batch", json=[DETECTION_BODY], headers={"X-API-Key": "view-key"}
+        )
+        assert r.status_code == 403
+        r = client.post(
+            "/api/detections/batch", json=[DETECTION_BODY], headers={"X-API-Key": "ingest-key"}
+        )
+        assert r.status_code == 201
+
+
 def test_viewer_cannot_acknowledge_operator_can(isolated_db, keys):
     with TestClient(app) as client:
         client.post("/api/detections", json=DETECTION_BODY, headers={"X-API-Key": "ingest-key"})

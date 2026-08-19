@@ -20,6 +20,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
+from app.assignment import hungarian_min_cost
 from app.config import (
     FUSION_HISTORY_LIMIT,
     KALMAN_CRUISE_PROCESS_NOISE,
@@ -63,6 +64,12 @@ _association_lock = threading.Lock()
 # a low-confidence return is trusted less by the filter; clamped so a
 # near-zero confidence doesn't blow the sigma up to infinity.
 _MIN_CONFIDENCE_FOR_MEASUREMENT_SIGMA = 0.1
+
+# Sentinel cost for a gated-out (detection, track) pair in the batch
+# assignment matrix -- large enough that Hungarian will only ever choose
+# it over a real gated match (bounded by TRACK_GATE_CHI2) or the
+# decline-to-match dummy column (also TRACK_GATE_CHI2), never in between.
+_ASSIGNMENT_BLOCKED_COST = 1e12
 
 
 def _measurement_variance(confidence: float) -> float:
@@ -181,9 +188,93 @@ def _find_matching_track(detection: Detection, measurement_variance: float) -> _
     return best[0] if best else None
 
 
+def _spawn_track(detection: Detection, measurement_variance: float) -> Track:
+    track = create_track(
+        Track(
+            track_uid=str(uuid.uuid4()),
+            first_seen=detection.timestamp,
+            last_seen=detection.timestamp,
+            status=TrackStatus.ACTIVE,
+            classification=Classification.UNKNOWN,
+            latitude=detection.latitude,
+            longitude=detection.longitude,
+            altitude_m=detection.altitude_m,
+        )
+    )
+    if detection.latitude is not None and detection.longitude is not None:
+        imm = IMMFilter(
+            x=0.0,
+            y=0.0,
+            position_variance=measurement_variance,
+            velocity_variance=KALMAN_INITIAL_VELOCITY_SIGMA_MPS**2,
+            cruise_process_noise=KALMAN_CRUISE_PROCESS_NOISE,
+            maneuver_process_noise=KALMAN_MANEUVER_PROCESS_NOISE,
+        )
+        _save_filter(track.id, detection.latitude, detection.longitude, imm, detection.timestamp)
+        _apply_filter_to_track(track, imm, detection.latitude, detection.longitude)
+    logger.info(
+        "New track %s from sensor=%s confidence=%.2f",
+        track.track_uid, detection.sensor_id, detection.confidence,
+    )
+    return track
+
+
+def _update_track_with_match(detection: Detection, match: _Match, measurement_variance: float) -> Track:
+    track, imm, ref_lat, ref_lon = match.track, match.imm, match.ref_lat, match.ref_lon
+    zx, zy = latlon_to_local_m(detection.latitude, detection.longitude, ref_lat, ref_lon)
+    imm.update(zx, zy, measurement_variance)
+    _save_filter(track.id, ref_lat, ref_lon, imm, detection.timestamp)
+    _apply_filter_to_track(track, imm, ref_lat, ref_lon)
+
+    track.last_seen = detection.timestamp
+    track.altitude_m = detection.altitude_m
+    logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
+    return track
+
+
+def _commit_detection(detection: Detection, track: Track) -> Detection:
+    """Persist a detection against its (already updated-in-memory) track,
+    fuse classification from the track's history, persist the track, and
+    check for zone incidents. Shared by both the single-detection and
+    batch association paths.
+    """
+    # Persist the detection before fusing classification, so this
+    # detection's own vote is included in the track's history.
+    detection.track_id = track.id
+    persisted = create_detection(detection)
+
+    # Multi-sensor classification fusion (app/fusion.py): the fused label
+    # from every recent detection decides, not just this one. A detection
+    # can always upgrade a track to DRONE (except away from the trusted
+    # ADS-B AIRCRAFT label), since misidentifying a real drone as a
+    # bird/unknown/friendly and never re-flagging it is the unsafe failure
+    # mode. Any other non-UNKNOWN label only fills in a still-unknown
+    # classification, never overwrites one.
+    history = list_recent_detections(track.id, FUSION_HISTORY_LIMIT)
+    fused_label = fuse_classification(history)
+    if fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
+        track.classification = fused_label
+    elif track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN:
+        track.classification = fused_label
+    update_track(track)
+
+    check_zone_incidents(track)
+    check_predicted_incursions(track)
+
+    return persisted
+
+
 def associate_detection(detection: Detection) -> Detection:
     """Gate an incoming detection against existing tracks, update or spawn a
     track, persist the detection against it, and return the stored detection.
+
+    Association here is greedy nearest-match: this single detection is
+    resolved against tracks in isolation, without seeing any other
+    detection that might arrive in the same instant. For simultaneous
+    detections from one sensor's scan/sweep where two tracks are close
+    together, that can swap which detection goes to which track --
+    see associate_detections_batch for a joint (global nearest neighbor)
+    resolution across a whole batch at once.
     """
     detection = georeference(detection)
     measurement_variance = _measurement_variance(detection.confidence)
@@ -195,66 +286,106 @@ def associate_detection(detection: Detection) -> Detection:
         if detection.latitude is not None and detection.longitude is not None:
             match = _find_matching_track(detection, measurement_variance)
 
-        if match is None:
-            track = create_track(
-                Track(
-                    track_uid=str(uuid.uuid4()),
-                    first_seen=detection.timestamp,
-                    last_seen=detection.timestamp,
-                    status=TrackStatus.ACTIVE,
-                    classification=Classification.UNKNOWN,
-                    latitude=detection.latitude,
-                    longitude=detection.longitude,
-                    altitude_m=detection.altitude_m,
-                )
-            )
+        track = (
+            _spawn_track(detection, measurement_variance)
+            if match is None
+            else _update_track_with_match(detection, match, measurement_variance)
+        )
+        return _commit_detection(detection, track)
+
+
+def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
+    """Jointly resolve a batch of simultaneous detections against active
+    tracks via global nearest neighbor (Hungarian assignment on squared
+    Mahalanobis distance) instead of resolving each detection in
+    isolation. This is what a single sensor scan/sweep producing several
+    plots at once (the normal case for radar) should be posted through
+    when two tracks are near each other: per-detection greedy assignment
+    can't see a detection's better fit against a *different* track until
+    it has already committed the first one, and can swap identities on
+    crossing tracks as a result; joint assignment sees the whole batch at
+    once and can't make that mistake.
+
+    Gating is identical to associate_detection's (coarse prefilter, then
+    squared-Mahalanobis chi-square gate); a detection with no track within
+    gate spawns a new track, same as the single-detection path.
+
+    Scope note: this assumes each track contributes at most one detection
+    per batch (standard for a single sensor's scan). Don't mix multiple
+    sensors' simultaneous reports of the same object into one batch call
+    expecting both to land on that object's track -- only one can, by
+    construction of a one-to-one assignment; post each sensor's scan as
+    its own batch (or single detections) instead.
+    """
+    if not detections:
+        return []
+
+    georeferenced = [georeference(d) for d in detections]
+    measurement_variances = [_measurement_variance(d.confidence) for d in georeferenced]
+
+    with _association_lock:
+        expire_stale_tracks(max(d.timestamp for d in georeferenced))
+
+        active_tracks = [
+            t for t in list_tracks(status=TrackStatus.ACTIVE.value)
+            if t.id is not None and t.latitude is not None and t.longitude is not None
+        ]
+        track_states = {t.id: get_kalman_state(t.id) for t in active_tracks}
+        active_tracks = [t for t in active_tracks if track_states[t.id] is not None]
+
+        n, m = len(georeferenced), len(active_tracks)
+        cost_matrix: list[list[float]] = []
+        # predicted_imm[i][track_id] -> that track's IMM, already predicted
+        # forward to detection i's timestamp, ready for update() if chosen.
+        predicted_imm: list[dict[int, IMMFilter]] = []
+
+        for i, detection in enumerate(georeferenced):
+            row = [_ASSIGNMENT_BLOCKED_COST] * m
+            candidates: dict[int, IMMFilter] = {}
             if detection.latitude is not None and detection.longitude is not None:
-                imm = IMMFilter(
-                    x=0.0,
-                    y=0.0,
-                    position_variance=measurement_variance,
-                    velocity_variance=KALMAN_INITIAL_VELOCITY_SIGMA_MPS**2,
-                    cruise_process_noise=KALMAN_CRUISE_PROCESS_NOISE,
-                    maneuver_process_noise=KALMAN_MANEUVER_PROCESS_NOISE,
-                )
-                _save_filter(track.id, detection.latitude, detection.longitude, imm, detection.timestamp)
-                _apply_filter_to_track(track, imm, detection.latitude, detection.longitude)
-            logger.info(
-                "New track %s from sensor=%s confidence=%.2f",
-                track.track_uid, detection.sensor_id, detection.confidence,
-            )
-        else:
-            track, imm, ref_lat, ref_lon = match.track, match.imm, match.ref_lat, match.ref_lon
-            zx, zy = latlon_to_local_m(detection.latitude, detection.longitude, ref_lat, ref_lon)
-            imm.update(zx, zy, measurement_variance)
-            _save_filter(track.id, ref_lat, ref_lon, imm, detection.timestamp)
-            _apply_filter_to_track(track, imm, ref_lat, ref_lon)
+                for j, track in enumerate(active_tracks):
+                    if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
+                        continue
+                    coarse_distance = haversine_distance_m(
+                        detection.latitude, detection.longitude, track.latitude, track.longitude
+                    )
+                    if coarse_distance > TRACK_DISTANCE_GATE_M:
+                        continue
 
-            track.last_seen = detection.timestamp
-            track.altitude_m = detection.altitude_m
-            logger.debug("Detection from sensor=%s associated with track %s", detection.sensor_id, track.track_uid)
+                    state = track_states[track.id]
+                    imm = _load_filter(state)
+                    dt_s = (detection.timestamp - state.updated_at).total_seconds()
+                    imm.predict(dt_s)
+                    zx, zy = latlon_to_local_m(
+                        detection.latitude, detection.longitude, state.ref_lat, state.ref_lon
+                    )
+                    mahalanobis_sq = imm.mahalanobis_sq(zx, zy, measurement_variances[i])
+                    if mahalanobis_sq <= TRACK_GATE_CHI2:
+                        row[j] = mahalanobis_sq
+                        candidates[track.id] = imm
+            # One dummy "decline to match" column per detection, at the
+            # gate-threshold cost -- lets Hungarian leave a detection
+            # unmatched (spawning a new track) exactly when no real track
+            # is a better (lower-cost) fit, without needing a hard
+            # infeasibility concept in the solver.
+            dummy_row = [_ASSIGNMENT_BLOCKED_COST] * n
+            dummy_row[i] = TRACK_GATE_CHI2
+            cost_matrix.append(row + dummy_row)
+            predicted_imm.append(candidates)
 
-        # Persist the detection before fusing classification, so this
-        # detection's own vote is included in the track's history.
-        detection.track_id = track.id
-        persisted = create_detection(detection)
+        assignment = hungarian_min_cost(cost_matrix)
 
-        # Multi-sensor classification fusion (app/fusion.py): the fused
-        # label from every recent detection decides, not just this one.
-        # A detection can always upgrade a track to DRONE (except away
-        # from the trusted ADS-B AIRCRAFT label), since misidentifying a
-        # real drone as a bird/unknown/friendly and never re-flagging it
-        # is the unsafe failure mode. Any other non-UNKNOWN label only
-        # fills in a still-unknown classification, never overwrites one.
-        history = list_recent_detections(track.id, FUSION_HISTORY_LIMIT)
-        fused_label = fuse_classification(history)
-        if fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
-            track.classification = fused_label
-        elif track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN:
-            track.classification = fused_label
-        update_track(track)
+        results: list[Detection] = []
+        for i, detection in enumerate(georeferenced):
+            col = assignment[i]
+            if col < m and cost_matrix[i][col] < _ASSIGNMENT_BLOCKED_COST:
+                chosen_track = active_tracks[col]
+                state = track_states[chosen_track.id]
+                imm = predicted_imm[i][chosen_track.id]
+                match = _Match(chosen_track, imm, state.ref_lat, state.ref_lon)
+                track = _update_track_with_match(detection, match, measurement_variances[i])
+            else:
+                track = _spawn_track(detection, measurement_variances[i])
+            results.append(_commit_detection(detection, track))
 
-        check_zone_incidents(track)
-        check_predicted_incursions(track)
-
-        return persisted
+        return results
