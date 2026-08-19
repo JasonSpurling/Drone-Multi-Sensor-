@@ -42,6 +42,19 @@ def local_m_to_latlon(
     return lat, lon
 
 
+def initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Standard great-circle initial bearing (compass degrees, 0-360,
+    clockwise from north) from (lat1, lon1) toward (lat2, lon2) -- the
+    inverse problem to destination_point (position + bearing + distance ->
+    new position); this is two positions -> bearing.
+    """
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_lambda = math.radians(lon2 - lon1)
+    x = math.sin(d_lambda) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(d_lambda)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
 def destination_point(
     lat: float, lon: float, bearing_deg: float, distance_m: float
 ) -> tuple[float, float]:

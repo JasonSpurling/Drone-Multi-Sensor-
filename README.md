@@ -528,6 +528,56 @@ review already closed for its own signed-claim path, so receiving a real
 broadcast never resolves to `friendly` on its own; cross-reference its
 OperatorID against a separately verified identity if you want that.
 
+## Slew-to-cue
+
+Every adapter in this app ingests a static/fixed-position feed -- nothing
+has ever pointed a physical sensor anywhere. `GET
+/api/tracks/{track_id}/cue/{camera_sensor_id}` closes that gap: it
+computes the pan/tilt angles a PTZ (pan-tilt-zoom) camera registered as
+`camera_sensor_id` needs to point at a track detected by a *different*
+sensor -- an RF direction-finder, an acoustic array (see Acoustic
+direction finding above), radar, anything -- so a bearing from one sensor
+can swing a camera mounted somewhere else entirely onto the target,
+instead of a human operator manually panning to follow a cue.
+
+```bash
+curl "http://127.0.0.1:8000/api/tracks/12/cue/ptz-cam-1"
+# {"pan_deg": 51.2, "pan_relative_deg": 51.2, "tilt_deg": 6.1, "distance_m": 1775.6, ...}
+```
+
+The geometry (`app/slew_to_cue.py`) is plain trigonometry -- great-circle
+bearing and elevation angle from the camera's registered position to the
+track's current one -- computed fresh on every request, not cached or
+pushed; poll it as often as your camera's slew rate can usefully act on.
+`pan_relative_deg` already accounts for the camera's own mounting
+orientation (`azimuth_reference_deg`, the same field every other
+azimuth-reporting sensor registers) -- it's the number a PTZ camera whose
+pan axis is zeroed to its own boresight actually needs, not `pan_deg`
+(the absolute compass bearing).
+
+**Driving a real camera**: `app/adapters/onvif_ptz_bridge.py` polls the
+cue endpoint and issues real ONVIF (the open IP-camera control standard
+most commercial PTZ cameras support) `AbsoluteMove` commands, via
+`onvif-zeep-async` -- the actively maintained ONVIF client library Home
+Assistant's own ONVIF integration uses, not a hand-rolled SOAP client.
+
+```bash
+pip install -r requirements-ptz.txt
+.venv/bin/python -m app.adapters.onvif_ptz_bridge \
+  --track-id 12 --cueing-camera-sensor-id ptz-cam-1 \
+  --camera-host 192.168.1.50 --camera-user admin --camera-password secret
+```
+
+**This could not be tested against real PTZ hardware** in the environment
+this was built in (no camera here) -- the geometry and the API endpoint
+are fully verified (see `tests/test_slew_to_cue.py` and
+`tests/test_slew_to_cue_api.py`), but the ONVIF bridge's coordinate
+normalization (ONVIF `AbsoluteMove` ranges are camera-specific, queried
+from the camera itself via `GetConfigurationOptions`, not a fixed unit --
+correctly handled here, per the ONVIF spec, rather than assumed) hasn't
+been confirmed against a real camera's actual reported ranges. Verify
+against your own hardware before relying on it.
+
 ## Airspace data
 
 By default, zones come from the single hand-seeded polygon in

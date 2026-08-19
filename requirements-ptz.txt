@@ -1,0 +1,2 @@
+-r requirements.txt
+onvif-zeep-async==4.2.1

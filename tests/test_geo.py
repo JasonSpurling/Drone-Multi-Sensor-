@@ -1,6 +1,12 @@
 import pytest
 
-from app.geo import destination_point, haversine_distance_m, latlon_to_local_m, local_m_to_latlon
+from app.geo import (
+    destination_point,
+    haversine_distance_m,
+    initial_bearing_deg,
+    latlon_to_local_m,
+    local_m_to_latlon,
+)
 
 
 def test_latlon_to_local_m_at_reference_is_origin():
@@ -48,3 +54,18 @@ def test_destination_point_zero_distance_is_noop():
     lat, lon = destination_point(51.5, -0.1, bearing_deg=123.0, distance_m=0.0)
     assert lat == pytest.approx(51.5, abs=1e-9)
     assert lon == pytest.approx(-0.1, abs=1e-9)
+
+
+def test_initial_bearing_due_north_is_zero():
+    assert initial_bearing_deg(51.5, -0.1, 51.6, -0.1) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_initial_bearing_due_south_is_180():
+    assert initial_bearing_deg(51.5, -0.1, 51.4, -0.1) == pytest.approx(180.0, abs=1e-6)
+
+
+def test_initial_bearing_is_the_inverse_of_destination_point():
+    for bearing in [0, 45, 90, 135, 180, 225, 270, 315]:
+        lat2, lon2 = destination_point(51.5, -0.1, bearing, 5000.0)
+        recovered = initial_bearing_deg(51.5, -0.1, lat2, lon2)
+        assert recovered == pytest.approx(bearing, abs=1e-6)

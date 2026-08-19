@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
-from app.db import get_track, list_detections, list_tracks
+from app.db import get_sensor_registration, get_track, list_detections, list_tracks
 from app.export import to_csv, to_gpx, to_kml
 from app.models import Detection, Track, TrackStatus
+from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 
 router = APIRouter()
@@ -79,3 +80,43 @@ def export_track_history(
         media_type=_EXPORT_CONTENT_TYPES[format],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/tracks/{track_id}/cue/{camera_sensor_id}")
+def get_camera_cue(track_id: int, camera_sensor_id: str) -> dict:
+    """Slew-to-cue: the pan/tilt angles a PTZ camera registered as
+    `camera_sensor_id` needs to point at this track's current position --
+    lets a camera mounted somewhere else entirely be pointed at whatever a
+    different sensor (an RF direction-finder, an acoustic array, radar,
+    ...) is tracking, instead of a human operator manually panning to
+    follow a cue. See app/slew_to_cue.py for the geometry and
+    app/adapters/onvif_ptz_bridge.py for actually sending this to a real
+    PTZ camera.
+
+    Computed on demand from the track's live position, not cached or
+    pushed -- poll this (an external PTZ bridge script, or an operator's
+    own tooling) as often as your camera's slew rate can usefully act on.
+    """
+    track = get_track(track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if track.latitude is None or track.longitude is None:
+        raise HTTPException(status_code=409, detail="Track has no resolved position to cue toward")
+
+    camera = get_sensor_registration(camera_sensor_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera sensor not registered")
+
+    cue = compute_camera_cue(
+        camera["latitude"], camera["longitude"], camera["altitude_m"] or 0.0,
+        camera["azimuth_reference_deg"],
+        track.latitude, track.longitude, track.altitude_m,
+    )
+    return {
+        "track_id": track_id,
+        "camera_sensor_id": camera_sensor_id,
+        "pan_deg": cue.pan_deg,
+        "pan_relative_deg": cue.pan_relative_deg,
+        "tilt_deg": cue.tilt_deg,
+        "distance_m": cue.distance_m,
+    }
