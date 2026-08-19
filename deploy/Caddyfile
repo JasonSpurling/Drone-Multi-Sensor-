@@ -1,0 +1,6 @@
+# Referenced by the commented-out `caddy` service in docker-compose.yml.
+# Caddy requests and renews a Let's Encrypt certificate for DRONE_DOMAIN
+# automatically -- nothing else to configure for basic TLS termination.
+{$DRONE_DOMAIN} {
+	reverse_proxy app:8000
+}

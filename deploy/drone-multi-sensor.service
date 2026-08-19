@@ -1,0 +1,42 @@
+# Systemd unit for a bare-metal/VM deployment (no Docker). Install with:
+#
+#   sudo useradd --system --create-home --home-dir /opt/drone-multi-sensor drone
+#   sudo cp -r . /opt/drone-multi-sensor && cd /opt/drone-multi-sensor
+#   sudo -u drone python3 -m venv .venv
+#   sudo -u drone .venv/bin/pip install -r requirements-postgres.txt
+#   sudo cp deploy/drone-multi-sensor.service /etc/systemd/system/
+#   sudo cp deploy/drone-multi-sensor.env.example /etc/drone-multi-sensor.env
+#   # edit /etc/drone-multi-sensor.env -- at minimum set DRONE_API_KEYS
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now drone-multi-sensor
+#
+# journalctl -u drone-multi-sensor handles log rotation/retention -- the
+# app logs to stdout (DRONE_LOG_FORMAT=json in the env file below feeds it
+# structured lines), so there's nothing extra to configure for that here.
+
+[Unit]
+Description=Drone Multi-Sensor tracking API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=drone
+Group=drone
+WorkingDirectory=/opt/drone-multi-sensor
+EnvironmentFile=/etc/drone-multi-sensor.env
+ExecStart=/opt/drone-multi-sensor/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Defense in depth beyond running as an unprivileged user: this process
+# doesn't need to write anywhere but its own data directory, escalate
+# privileges, or see the rest of the filesystem.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/drone-multi-sensor/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

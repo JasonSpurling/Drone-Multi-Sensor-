@@ -1,0 +1,78 @@
+# Production-shaped stack: the app backed by PostgreSQL instead of SQLite
+# (SQLite's single-writer model doesn't hold up under concurrent sensor
+# ingest at real deployment throughput -- see the README's "Database"
+# section). Caddy is commented out below as an optional reverse
+# proxy for automatic HTTPS -- add it once you have a real domain pointed
+# at this host; without it you're serving plain HTTP, fine for a private
+# network but not for anything reachable from the public internet.
+#
+# Quickstart:
+#   cp .env.example .env   # then edit DRONE_API_KEYS at minimum
+#   docker compose up -d
+#   curl http://localhost:8000/api/health
+#
+# The app container won't start serving traffic until Postgres reports
+# healthy (depends_on: condition: service_healthy below), so there's no
+# "connection refused, DB not ready yet" race on a fresh `docker compose up`.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: drone
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-drone}
+      POSTGRES_DB: drone_sensor
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drone -d drone_sensor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DRONE_DATABASE_URL: postgresql+psycopg2://drone:${POSTGRES_PASSWORD:-drone}@db:5432/drone_sensor
+      DRONE_API_KEYS: ${DRONE_API_KEYS:-}
+      DRONE_LOG_FORMAT: ${DRONE_LOG_FORMAT:-json}
+      DRONE_DETECTION_RETENTION_DAYS: ${DRONE_DETECTION_RETENTION_DAYS:-0}
+      DRONE_WEBHOOK_URLS: ${DRONE_WEBHOOK_URLS:-}
+    ports:
+      - "${DRONE_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # Uncomment for automatic HTTPS once you have a real domain pointed at
+  # this host. Caddy gets a free Let's Encrypt certificate and renews it
+  # automatically -- no separate certbot setup, no manual renewal cron.
+  # Requires ports 80/443 reachable from the internet for the ACME
+  # challenge, and DRONE_HOST left at the app's own default (Caddy is what
+  # binds 0.0.0.0:443, not the app).
+  #
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - app
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   environment:
+  #     DRONE_DOMAIN: ${DRONE_DOMAIN:?set DRONE_DOMAIN to your real hostname}
+  #   volumes:
+  #     - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+
+volumes:
+  postgres-data:
+  # caddy-data:

@@ -13,3 +13,8 @@ venv/
 # Local SQLite data
 /data/
 *.db
+
+# Deployment secrets (see .env.example / deploy/*.env.example instead)
+.env
+*.env
+!*.env.example

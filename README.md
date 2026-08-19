@@ -127,9 +127,11 @@ DRONE_TEST_DATABASE_URL="postgresql+psycopg2://user:pass@127.0.0.1:5432/drone_te
 Each test drops and recreates the `public` schema on that database, so
 point it at a disposable database, never one with real data.
 
-## Docker
+## Deployment
 
-```
+**Quick single-container run** (SQLite, fine for trying it out):
+
+```bash
 docker build -t drone-multi-sensor .
 docker run -p 8000:8000 -v drone-data:/app/data drone-multi-sensor
 ```
@@ -137,7 +139,53 @@ docker run -p 8000:8000 -v drone-data:/app/data drone-multi-sensor
 The image binds to `0.0.0.0:8000` inside the container (so `docker run -p`
 can reach it) and stores the SQLite database in `/app/data` — the `-v` above
 keeps it across container restarts. Set `-e DRONE_API_KEY=<key>` if the
-container's port will be reachable beyond your own machine.
+container's port will be reachable beyond your own machine. The image
+installs `requirements-postgres.txt` (not just `requirements.txt`), runs as
+an unprivileged user, and declares a `HEALTHCHECK` against `/api/health`
+(below) -- Docker/Kubernetes can use it to detect and restart/route around
+a container whose database has gone unreachable, not just one whose
+process has crashed outright.
+
+**Full stack with PostgreSQL** (production-shaped -- see the Database
+section above for why SQLite alone doesn't hold up under concurrent
+sensor ingest at real deployment throughput):
+
+```bash
+cp .env.example .env   # edit DRONE_API_KEYS at minimum
+docker compose up -d
+curl http://localhost:8000/api/health
+```
+
+`docker-compose.yml` runs the app against a real PostgreSQL container, with
+the app waiting on Postgres's own healthcheck before it starts (no
+"connection refused, DB not ready yet" race on first `up`). It also has a
+commented-out Caddy service for automatic HTTPS (a free, auto-renewing
+Let's Encrypt certificate) -- uncomment it and set `DRONE_DOMAIN` once you
+have a real domain pointed at the host; this is the difference between a
+private-network deployment and one safe to expose on the public internet.
+
+**Bare-metal/VM, no Docker**: `deploy/drone-multi-sensor.service` is a
+systemd unit (with `deploy/drone-multi-sensor.env.example` for its
+environment file) that runs the app under an unprivileged system user with
+`systemd`'s own sandboxing (`ProtectSystem=strict`, `NoNewPrivileges`,
+...) and restarts it on failure. Logs go to stdout either way (`journalctl
+-u drone-multi-sensor` under systemd, whatever log driver you configure
+under Docker) -- `DRONE_LOG_FORMAT=json` gives structured lines for either
+to hand to a log aggregator, and there's nothing this app needs to do
+itself for rotation/retention of its own log file, since it doesn't write
+one.
+
+**Readiness check**: `GET /api/health` verifies the database is actually
+reachable (a real `SELECT 1`, not just "the process is up"), returning 503
+if it isn't -- point a load balancer's or orchestrator's health check at
+this, not just a raw TCP/process check, or a container can look healthy
+while every real request would fail.
+
+None of this replaces the "what's missing to run this on real hardware"
+gaps (sensor/RF front-end integration, TLS being opt-in rather than
+default, time sync across physical sensors, ...) -- it's specifically
+about running the software itself reliably once you do have real sensors
+feeding it.
 
 ## API
 
