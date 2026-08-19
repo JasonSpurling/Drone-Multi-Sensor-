@@ -26,6 +26,10 @@ def ingest_detection(detection: Detection) -> Detection:
     detections_ingested_total.labels(sensor_type=detection.sensor_type.value).inc()
     detection.id = None
     detection.track_id = None
+    # Server-computed only (see app/georeference.py) -- a client claiming
+    # this would let a signed detection's signature verify against a
+    # position it didn't actually sign (app/remote_id.py).
+    detection.georeferenced = False
     return associate_detection(detection)
 
 
@@ -52,4 +56,5 @@ def ingest_detections_batch(detections: list[Detection]) -> list[Detection]:
         detections_ingested_total.labels(sensor_type=detection.sensor_type.value).inc()
         detection.id = None
         detection.track_id = None
+        detection.georeferenced = False
     return associate_detections_batch(detections)

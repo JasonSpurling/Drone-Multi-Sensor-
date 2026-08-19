@@ -49,6 +49,9 @@ _TABLE_MIGRATION_COLUMNS = {
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
     },
+    "detection": {
+        "georeferenced": "INTEGER DEFAULT 0",
+    },
 }
 
 
@@ -112,9 +115,9 @@ def create_detection(detection: Detection) -> Detection:
                 """
                 INSERT INTO detection
                     (sensor_id, sensor_type, timestamp, track_id, latitude, longitude,
-                     altitude_m, azimuth_deg, range_m, confidence, raw_data)
+                     altitude_m, azimuth_deg, range_m, confidence, raw_data, georeferenced)
                 VALUES (:sensor_id, :sensor_type, :timestamp, :track_id, :latitude, :longitude,
-                        :altitude_m, :azimuth_deg, :range_m, :confidence, :raw_data)
+                        :altitude_m, :azimuth_deg, :range_m, :confidence, :raw_data, :georeferenced)
                 RETURNING id
                 """
             ),
@@ -130,6 +133,7 @@ def create_detection(detection: Detection) -> Detection:
                 "range_m": detection.range_m,
                 "confidence": detection.confidence,
                 "raw_data": json.dumps(detection.raw_data) if detection.raw_data is not None else None,
+                "georeferenced": int(detection.georeferenced),
             },
         ).one()
         detection.id = row.id
@@ -200,6 +204,7 @@ def _row_to_detection(row) -> Detection:
         range_m=row["range_m"],
         confidence=row["confidence"],
         raw_data=json.loads(row["raw_data"]) if row["raw_data"] else None,
+        georeferenced=bool(row["georeferenced"]),
     )
 
 

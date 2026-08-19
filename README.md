@@ -749,6 +749,17 @@ cryptographic trust layer, not the ASTM F3411 Remote ID broadcast wire
 format itself -- integrating a real Remote ID receiver would decode
 broadcasts off-air and feed `operator_id`/`signature` into this same path.
 
+An azimuth/range-only sensor (a GPS-less radar or RF direction-finder) has
+no lat/lon of its own to sign, so it signs with position `None`/`None`;
+`app/georeference.py` fills in an estimated position server-side
+afterwards so the detection can still be tracked and mapped, and marks the
+detection `georeferenced=True` when it does. `canonical_message()` binds
+to `None`/`None` for a `georeferenced` detection rather than that
+estimate, so the signature verifies against what the sensor actually
+signed. `georeferenced` is reset server-side on every ingest
+(`app/api/detections.py`) regardless of what a client sends, so a client
+can't set it to fake a position out of the signature's scope.
+
 ## Operations
 
 - **Rate limiting**: `POST /api/detections` is limited per `sensor_id` by

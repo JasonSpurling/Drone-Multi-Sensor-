@@ -83,3 +83,33 @@ def test_position_rounding_ignores_insignificant_float_noise():
     # Sub-11cm difference in the raw float shouldn't change the signed message.
     almost_identical = make_detection(latitude=51.5000002, longitude=-0.1000002)
     assert verify_detection_signature("OP-1", almost_identical, signature, public_key) is True
+
+
+def test_signature_verifies_against_position_georeferencing_later_computed():
+    # An azimuth/range-only sensor (no GPS of its own) has nothing to sign
+    # but None/None for position. app/georeference.py fills in an estimated
+    # lat/lon server-side afterwards (and marks georeferenced=True) so the
+    # detection can be tracked -- but that estimate was never part of what
+    # the sensor signed. Verification must bind to what was actually
+    # signed (None/None), or a legitimate signed claim from this whole
+    # class of sensor could never verify.
+    private_key, public_key = generate_keypair()
+    detection = make_detection(latitude=None, longitude=None)
+    signature = sign_detection("OP-1", detection, private_key)
+
+    georeferenced = make_detection(latitude=51.5, longitude=-0.1, georeferenced=True)
+    assert verify_detection_signature("OP-1", georeferenced, signature, public_key) is True
+
+
+def test_signature_does_not_verify_after_timestamp_tampering_on_georeferenced_detection():
+    # Binding to None/None for a georeferenced detection must not become a
+    # blanket exemption from verification -- only position is ignored;
+    # every other field is still checked.
+    private_key, public_key = generate_keypair()
+    detection = make_detection(latitude=None, longitude=None)
+    signature = sign_detection("OP-1", detection, private_key)
+
+    tampered = make_detection(
+        latitude=51.5, longitude=-0.1, georeferenced=True, timestamp=datetime(2026, 1, 1, 13, 0, 0)
+    )
+    assert verify_detection_signature("OP-1", tampered, signature, public_key) is False

@@ -31,6 +31,7 @@ def georeference(detection: Detection) -> Detection:
     )
     detection.latitude = latitude
     detection.longitude = longitude
+    detection.georeferenced = True
     if detection.altitude_m is None and registration["altitude_m"] is not None:
         detection.altitude_m = registration["altitude_m"]
     return detection

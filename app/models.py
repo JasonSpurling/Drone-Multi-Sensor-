@@ -86,6 +86,13 @@ class Detection(BaseModel):
     range_m: float | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
     raw_data: dict | None = None
+    georeferenced: bool = Field(
+        default=False,
+        description="Set server-side by app/georeference.py when latitude/longitude were computed "
+        "from this sensor's azimuth/range report rather than reported directly. Any client-supplied "
+        "value is discarded on ingest (see app/api/detections.py) -- a signed detection's signature "
+        "must verify against what the sensor actually signed, not a claim the client controls.",
+    )
 
 
 class Track(BaseModel):

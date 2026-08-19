@@ -83,6 +83,13 @@ detection = Table(
     Column("range_m", Float),
     Column("confidence", Float, nullable=False, server_default="1.0"),
     Column("raw_data", Text),  # JSON blob
+    # True if latitude/longitude were computed by app/georeference.py from
+    # this sensor's azimuth/range report, rather than reported directly by
+    # the sensor. Needed so a signed detection's signature (app/remote_id.py)
+    # verifies against the position the sensor actually signed (None/None
+    # for an azimuth/range-only sensor) rather than the position
+    # georeferencing later filled in -- see canonical_message().
+    Column("georeferenced", Integer, nullable=False, server_default="0"),
     Index("idx_detection_track_id", "track_id"),
     Index("idx_detection_timestamp", "timestamp"),
 )

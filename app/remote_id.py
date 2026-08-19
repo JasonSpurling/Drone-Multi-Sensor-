@@ -44,9 +44,22 @@ def canonical_message(operator_id: str, detection: Detection) -> bytes:
     Position is rounded to 6 decimal degrees (~11cm) so signer and
     verifier always agree on the exact bytes regardless of incidental
     floating-point formatting differences.
+
+    An azimuth/range-only sensor (a GPS-less radar or RF direction-finder)
+    has no lat/lon of its own to sign -- it signs with position None/None.
+    app/georeference.py later fills in an estimated lat/lon server-side
+    (setting detection.georeferenced=True) so the detection can be tracked
+    and mapped, but that estimate was never part of what the sensor signed.
+    Using it here would mean the signature can never verify for that
+    sensor class, indistinguishable from actual position tampering -- so
+    for a georeferenced detection this binds to None/None, the position
+    the sensor actually signed, not the position georeferencing computed.
     """
-    lat = round(detection.latitude, 6) if detection.latitude is not None else None
-    lon = round(detection.longitude, 6) if detection.longitude is not None else None
+    if detection.georeferenced:
+        lat, lon = None, None
+    else:
+        lat = round(detection.latitude, 6) if detection.latitude is not None else None
+        lon = round(detection.longitude, 6) if detection.longitude is not None else None
     parts = [operator_id, detection.sensor_id, detection.timestamp.isoformat(), str(lat), str(lon)]
     return "|".join(parts).encode()
 

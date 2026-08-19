@@ -51,6 +51,18 @@ def test_history_for_unknown_track_is_404():
         assert client.get("/api/tracks/999999/history").status_code == 404
 
 
+def test_client_supplied_georeferenced_flag_is_discarded_on_ingest():
+    # georeferenced must only ever be set server-side by app/georeference.py
+    # -- if a client's claim of it were honored, they could get a signed
+    # detection's signature (app/remote_id.py) to bind to None/None instead
+    # of the position they actually reported, defeating position tampering
+    # detection for GPS-reporting sensors too.
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json={**DETECTION_BODY, "georeferenced": True})
+        assert r.status_code == 201
+        assert r.json()["georeferenced"] is False
+
+
 def test_history_respects_limit():
     with TestClient(app) as client:
         r1 = client.post("/api/detections", json=DETECTION_BODY)

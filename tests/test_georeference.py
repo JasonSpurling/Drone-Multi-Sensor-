@@ -44,6 +44,17 @@ def test_computes_latlon_from_registered_sensor_position():
     assert abs(result.latitude - 51.5) < 0.001
     assert result.longitude > -0.1
     assert result.altitude_m == 50.0  # filled in from the sensor's registered altitude
+    # Marks the position as computed, not sensor-reported -- see
+    # app/remote_id.py's canonical_message, which relies on this to bind a
+    # signature to what the sensor actually signed rather than this
+    # estimate.
+    assert result.georeferenced is True
+
+
+def test_passthrough_detections_are_not_marked_georeferenced():
+    detection = make_detection(latitude=51.5, longitude=-0.1)
+    result = georeference(detection)
+    assert result.georeferenced is False
 
 
 def test_azimuth_reference_offset_is_applied():
