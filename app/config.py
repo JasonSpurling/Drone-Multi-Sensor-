@@ -60,6 +60,38 @@ RETENTION_SWEEP_INTERVAL_SECONDS = float(
 WEBHOOK_URLS = [u.strip() for u in os.getenv("DRONE_WEBHOOK_URLS", "").split(",") if u.strip()]
 WEBHOOK_TIMEOUT_SECONDS = float(os.getenv("DRONE_WEBHOOK_TIMEOUT_SECONDS", "5"))
 
+# Severity-routed alert integrations (app/alerting.py) -- on top of the
+# generic webhook fan-out above. Each channel is disabled until its
+# URL/credentials are set, and each has its own minimum-severity
+# threshold ("low"/"medium"/"high"/"critical") below which it's skipped --
+# an escalation policy, so e.g. Slack can get every incident while
+# PagerDuty only pages for high+ and SMS is reserved for critical.
+ALERT_TIMEOUT_SECONDS = float(os.getenv("DRONE_ALERT_TIMEOUT_SECONDS", "5"))
+
+SLACK_WEBHOOK_URL = os.getenv("DRONE_SLACK_WEBHOOK_URL", "")
+SLACK_MIN_SEVERITY = os.getenv("DRONE_SLACK_MIN_SEVERITY", "low")
+
+PAGERDUTY_ROUTING_KEY = os.getenv("DRONE_PAGERDUTY_ROUTING_KEY", "")
+PAGERDUTY_MIN_SEVERITY = os.getenv("DRONE_PAGERDUTY_MIN_SEVERITY", "high")
+
+# SMS via Twilio's REST API.
+TWILIO_ACCOUNT_SID = os.getenv("DRONE_TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("DRONE_TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("DRONE_TWILIO_FROM_NUMBER", "")
+SMS_TO_NUMBERS = [n.strip() for n in os.getenv("DRONE_SMS_TO_NUMBERS", "").split(",") if n.strip()]
+SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
+
+# Optional message-queue fan-out (app/queue_publisher.py): best-effort NATS
+# core PUB of every ingested detection and opened incident, alongside (not
+# instead of) the normal synchronous single-process path. Empty (default)
+# disables it entirely -- this is scaffolding for a future multi-site/
+# high-throughput deployment to build a consumer on top of, not a redesign
+# of ingest/fusion itself, which stays synchronous and in-process either way.
+NATS_URL = os.getenv("DRONE_NATS_URL", "")
+NATS_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DRONE_NATS_CONNECT_TIMEOUT_SECONDS", "2"))
+NATS_DETECTION_SUBJECT = os.getenv("DRONE_NATS_DETECTION_SUBJECT", "drone.detections")
+NATS_INCIDENT_SUBJECT = os.getenv("DRONE_NATS_INCIDENT_SUBJECT", "drone.incidents")
+
 # Track association gates: a detection may only join a track if it arrives
 # within TRACK_TIME_GATE_SECONDS of the track's last update and within
 # TRACK_DISTANCE_GATE_M of its last known position.

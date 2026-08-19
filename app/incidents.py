@@ -8,11 +8,13 @@ import logging
 import math
 import uuid
 
+from app.alerting import notify_escalations
 from app.config import PREDICTIVE_HORIZON_SECONDS
 from app.db import create_incident, get_open_incident
 from app.geo import local_m_to_latlon
 from app.metrics import incidents_opened_total
 from app.notifications import notify_incident
+from app.queue_publisher import publish_incident
 from app.models import (
     Classification,
     Incident,
@@ -75,6 +77,8 @@ def _open_incident(
     )
     incidents_opened_total.labels(incident_type=incident_type.value, severity=severity.value).inc()
     notify_incident(incident)
+    notify_escalations(incident)
+    publish_incident(incident.model_dump(mode="json"))
     return incident
 
 

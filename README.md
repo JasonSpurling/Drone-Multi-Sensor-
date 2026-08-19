@@ -382,13 +382,53 @@ broadcasts off-air and feed `operator_id`/`signature` into this same path.
   detections older than that many days (a background task sweeps every
   `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS`, disabled by default -- keeps
   everything forever, the previous behavior).
+- **Track history/replay**: `GET /api/tracks/{track_id}/history` returns
+  every detection that fed a track, oldest first -- a full replay of where
+  it actually was over time, for post-incident review. Works the same for
+  a closed/lost track as an active one: detection rows aren't deleted when
+  a track closes, only purged by age via `DRONE_DETECTION_RETENTION_DAYS`
+  above, so there's no separate "archive" to look in -- if retention hasn't
+  purged it, the history is still there.
 - **Structured logging**: `DRONE_LOG_FORMAT=json` emits one JSON object per
   log line instead of human-readable text, for log aggregators.
 - **Metrics**: `GET /api/metrics` in Prometheus exposition format --
   detections ingested (by sensor type), incidents opened (by type/severity),
   rate-limit rejections, and live gauges for active tracks / open incidents.
 - **Outbound alerting**: set `DRONE_WEBHOOK_URLS` (comma-separated) to POST
-  each incident's JSON to one or more webhooks when it opens.
+  each incident's JSON to one or more generic webhooks when it opens.
+  On top of that, `app/alerting.py` adds severity-routed integrations for
+  Slack, PagerDuty, and SMS (via Twilio), each independently configured
+  (empty/unset = disabled) with its own minimum-severity threshold -- an
+  escalation policy, so e.g. every incident can reach Slack for situational
+  awareness while only `high`+ pages PagerDuty and only `critical` sends an
+  SMS, instead of one severity treatment for every channel:
+
+  | Channel | Enable with | Threshold var (default) |
+  |---|---|---|
+  | Slack | `DRONE_SLACK_WEBHOOK_URL` | `DRONE_SLACK_MIN_SEVERITY` (`low`) |
+  | PagerDuty | `DRONE_PAGERDUTY_ROUTING_KEY` | `DRONE_PAGERDUTY_MIN_SEVERITY` (`high`) |
+  | SMS (Twilio) | `DRONE_TWILIO_ACCOUNT_SID`/`_AUTH_TOKEN`/`_FROM_NUMBER` + `DRONE_SMS_TO_NUMBERS` | `DRONE_SMS_MIN_SEVERITY` (`critical`) |
+
+  Every channel is best-effort with a short timeout (`DRONE_ALERT_TIMEOUT_SECONDS`)
+  -- a dead or misconfigured integration logs a warning and is skipped, it
+  can't block incident handling or take the other channels down with it.
+- **Message-queue fan-out** (`app/queue_publisher.py`, optional): set
+  `DRONE_NATS_URL` (e.g. `nats://broker-host:4222`) to additionally publish
+  a JSON copy of every ingested detection and opened incident onto a NATS
+  core subject (`DRONE_NATS_DETECTION_SUBJECT`/`_INCIDENT_SUBJECT`,
+  defaulting to `drone.detections`/`drone.incidents`) alongside the normal
+  in-process handling -- unset (the default) disables it entirely, with no
+  behavior change. This is scaffolding for a future multi-site or
+  high-throughput deployment to build on: a consumer process (or several,
+  elsewhere) can subscribe to these subjects for fan-in aggregation,
+  cross-site correlation, or a separate analytics pipeline, without
+  touching the ingest API or the tracker. It does **not** make
+  ingest/association/fusion itself queue-based -- that stays exactly the
+  synchronous single-process design described above, which is the right
+  call for a single site's real-time load; only publishing this
+  supplementary copy is new. Implemented as a minimal NATS core PUB client
+  over a raw socket rather than a full client library, so it adds no new
+  dependency.
 
 ## Configuration
 
@@ -412,6 +452,18 @@ needs to be set to run locally.
 | `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | How often the retention purge runs |
 | `DRONE_WEBHOOK_URLS` | *(unset)* | Comma-separated URLs POSTed with each incident's JSON when it opens |
 | `DRONE_WEBHOOK_TIMEOUT_SECONDS` | `5` | Per-webhook request timeout |
+| `DRONE_SLACK_WEBHOOK_URL` | *(unset)* | Slack incoming-webhook URL for incident alerts |
+| `DRONE_SLACK_MIN_SEVERITY` | `low` | Minimum incident severity that reaches Slack |
+| `DRONE_PAGERDUTY_ROUTING_KEY` | *(unset)* | PagerDuty Events API v2 routing key |
+| `DRONE_PAGERDUTY_MIN_SEVERITY` | `high` | Minimum incident severity that pages PagerDuty |
+| `DRONE_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM_NUMBER` | *(unset)* | Twilio credentials for SMS alerts |
+| `DRONE_SMS_TO_NUMBERS` | *(unset)* | Comma-separated destination numbers for SMS alerts |
+| `DRONE_SMS_MIN_SEVERITY` | `critical` | Minimum incident severity that sends an SMS |
+| `DRONE_ALERT_TIMEOUT_SECONDS` | `5` | Per-request timeout for Slack/PagerDuty/SMS alerts |
+| `DRONE_NATS_URL` | *(unset)* | NATS broker URL to additionally publish detections/incidents to; unset disables it |
+| `DRONE_NATS_DETECTION_SUBJECT` | `drone.detections` | NATS subject each ingested detection is published to |
+| `DRONE_NATS_INCIDENT_SUBJECT` | `drone.incidents` | NATS subject each opened incident is published to |
+| `DRONE_NATS_CONNECT_TIMEOUT_SECONDS` | `2` | Connect/send timeout for the NATS publisher |
 | `DRONE_FUSION_HISTORY_LIMIT` | `50` | Max recent detections per track fed into classification fusion |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |

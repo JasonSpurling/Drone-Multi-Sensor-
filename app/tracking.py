@@ -48,6 +48,7 @@ from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
 from app.imm import IMMFilter
 from app.incidents import check_predicted_incursions, check_zone_incidents
+from app.queue_publisher import publish_detection
 from app.kalman import ConstantVelocityKalmanFilter
 from app.models import Classification, Detection, Track, TrackStatus
 from app.util import utcnow
@@ -242,6 +243,7 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     # detection's own vote is included in the track's history.
     detection.track_id = track.id
     persisted = create_detection(detection)
+    publish_detection(persisted.model_dump(mode="json"))
 
     # Multi-sensor classification fusion (app/fusion.py): the fused label
     # from every recent detection decides, not just this one. A detection
