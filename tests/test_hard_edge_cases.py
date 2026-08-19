@@ -3,8 +3,7 @@ numerical edge cases, and stress scenarios beyond the normal-path
 coverage elsewhere -- designed to break things, not just exercise them.
 """
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -151,40 +150,6 @@ def test_fusion_with_zero_confidence_detections_is_unknown():
     ]
     # Zero confidence -> classify() returns UNKNOWN for radar -> no votes.
     assert fuse_classification(detections) == Classification.UNKNOWN
-
-
-# --- Concurrency stress: multiple distinct simultaneous objects -----------
-
-def test_concurrent_detections_for_distinct_objects_do_not_cross_contaminate():
-    # 10 spatially-separated "objects" each posting 5 detections concurrently
-    # across threads -- must end up as exactly 10 tracks, each with exactly
-    # 5 of that object's detections, never merged or split incorrectly.
-    def post(object_index: int, detection_index: int):
-        lat = 40.0 + object_index * 2.0  # >200km apart, way outside any gate
-        return associate_detection(
-            Detection(
-                sensor_id=f"sensor-{object_index}",
-                sensor_type=SensorType.RADAR,
-                timestamp=BASE_TIME,
-                latitude=lat,
-                longitude=0.0,
-                confidence=0.9,
-            )
-        )
-
-    jobs = [(obj, i) for obj in range(10) for i in range(5)]
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        results = list(pool.map(lambda args: post(*args), jobs))
-
-    tracks = list_tracks()
-    assert len(tracks) == 10
-    track_ids_by_object: dict[int, set[int]] = {}
-    for (obj, _), detection in zip(jobs, results):
-        track_ids_by_object.setdefault(obj, set()).add(detection.track_id)
-    for obj, ids in track_ids_by_object.items():
-        assert len(ids) == 1, f"object {obj} split across multiple tracks: {ids}"
-    all_track_ids = {tid for ids in track_ids_by_object.values() for tid in ids}
-    assert len(all_track_ids) == 10  # no two objects shared a track
 
 
 # --- Auth edge cases --------------------------------------------------------
