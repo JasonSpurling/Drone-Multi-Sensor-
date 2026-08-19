@@ -1,10 +1,18 @@
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 
 from app.db import get_track, list_detections, list_tracks
+from app.export import to_csv, to_gpx, to_kml
 from app.models import Detection, Track, TrackStatus
 from app.tracking import expire_stale_tracks
 
 router = APIRouter()
+
+_EXPORT_CONTENT_TYPES = {
+    "gpx": "application/gpx+xml",
+    "kml": "application/vnd.google-earth.kml+xml",
+    "csv": "text/csv",
+}
 
 
 @router.get("/tracks", response_model=list[Track])
@@ -41,3 +49,33 @@ def get_track_history(
     if get_track(track_id) is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return list_detections(track_id=track_id, limit=limit, offset=offset)
+
+
+@router.get("/tracks/{track_id}/history/export")
+def export_track_history(
+    track_id: int,
+    format: str = Query(pattern="^(gpx|kml|csv)$"),
+) -> Response:
+    """The same history as GET .../history, rendered as a downloadable
+    file for post-incident review in an external tool: GPX or KML for a
+    GIS/mapping application (Google Earth, QGIS, ...), CSV for a
+    spreadsheet. See app/export.py for the format details.
+    """
+    track = get_track(track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    detections = list_detections(track_id=track_id, limit=10000)
+    if format == "gpx":
+        body = to_gpx(track, detections)
+    elif format == "kml":
+        body = to_kml(track, detections)
+    else:
+        body = to_csv(detections)
+
+    filename = f"track-{track.track_uid}.{format}"
+    return Response(
+        content=body,
+        media_type=_EXPORT_CONTENT_TYPES[format],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

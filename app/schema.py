@@ -41,6 +41,13 @@ track = Table(
     Column("heading_deg", Float),
     Column("speed_mps", Float),
     Column("position_uncertainty_m", Float),
+    # list_tracks(status=...) -- called on essentially every detection
+    # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
+    # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --
+    # filters on status and always orders by last_seen DESC; without this,
+    # both become a full table scan + sort once a deployment accumulates
+    # more than a handful of closed tracks.
+    Index("idx_track_status_last_seen", "status", "last_seen"),
 )
 
 # IMM (Interacting Multiple Model) filter state for a track's motion

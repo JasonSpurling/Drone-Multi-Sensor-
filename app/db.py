@@ -83,10 +83,24 @@ def _migrate_kalman_state_table() -> None:
             conn.execute(text("DROP TABLE track_kalman_state"))
 
 
+def _migrate_indexes() -> None:
+    """metadata.create_all only creates indexes as part of creating a new
+    table -- it doesn't add an index to a table that already exists (unlike
+    a fresh database, which gets it for free from the track table's
+    definition in schema.py). CREATE INDEX IF NOT EXISTS is supported by
+    both SQLite and PostgreSQL, so this is safe to run on every startup.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_track_status_last_seen ON track (status, last_seen)")
+        )
+
+
 def init_db() -> None:
     _migrate_kalman_state_table()
     metadata.create_all(engine, checkfirst=True)
     _migrate_table_columns()
+    _migrate_indexes()
 
 
 # --- Detection helpers -----------------------------------------------------

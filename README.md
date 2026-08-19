@@ -469,7 +469,13 @@ broadcasts off-air and feed `operator_id`/`signature` into this same path.
   a closed/lost track as an active one: detection rows aren't deleted when
   a track closes, only purged by age via `DRONE_DETECTION_RETENTION_DAYS`
   above, so there's no separate "archive" to look in -- if retention hasn't
-  purged it, the history is still there.
+  purged it, the history is still there. The dashboard draws it as a dashed
+  trail on the map when you select a track.
+- **Track history export**: `GET /api/tracks/{track_id}/history/export?format=gpx|kml|csv`
+  returns the same history as a downloadable file for an external tool --
+  GPX or KML for a GIS/mapping application (Google Earth, QGIS, ...), CSV
+  for a spreadsheet -- instead of only being usable from this app's own
+  API/dashboard.
 - **Structured logging**: `DRONE_LOG_FORMAT=json` emits one JSON object per
   log line instead of human-readable text, for log aggregators.
 - **Metrics**: `GET /api/metrics` in Prometheus exposition format --
