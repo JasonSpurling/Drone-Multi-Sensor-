@@ -381,6 +381,55 @@ COCO one. Like `dump1090_bridge.py`, this only runs if you `pip install`
 the camera extras -- `ultralytics` (and its `torch` dependency) is not a
 core dependency of the API server.
 
+## Acoustic direction finding
+
+An acoustic detection used to be a single flat confidence number with no
+direction at all. `app/acoustic_beamforming.py` adds real delay-and-sum
+steered-response-power beamforming -- the same fundamental idea as RF
+direction-finding (multiple receive points, arrival-time differences
+reveal direction) applied to sound instead of radio -- to estimate an
+actual bearing from a small microphone array:
+
+```bash
+pip install -r requirements-acoustic.txt
+.venv/bin/python -m app.adapters.acoustic_array_bridge \
+  --sensor-id acoustic-1 \
+  --mic-positions '[[0.032,0.032],[0.032,-0.032],[-0.032,-0.032],[-0.032,0.032]]' \
+  --assumed-range-m 150 --confidence 0.6
+```
+
+Pure numpy math (a core dependency, unlike the hardware-specific adapters
+elsewhere in this README), verified against synthetic signals with a
+known true bearing computed independently of the module itself --
+placing an actual point source and deriving each mic's exact Euclidean
+propagation delay from scratch, not by calling the module's own delay
+function to generate its own "ground truth" (which would be circular).
+That independent check caught a real sign bug during development that a
+circular test would have missed entirely: the first version had mics
+*closer* to the source hearing the wavefront *later*, silently flipping
+every bearing estimate 180 degrees.
+
+**Accuracy depends on array size and signal bandwidth.** Empirically
+(see `tests/test_acoustic_beamforming.py`): a compact ~6cm array
+(ReSpeaker-scale) resolved bearing within 20 degrees against a
+band-limited source resembling real rotor/propeller noise; a larger
+~30cm array got under 6 degrees. Feeding it raw broadband audio instead
+of band-passing to the low-frequency range rotor noise actually lives in
+degrades accuracy well beyond that on a larger array (classic spatial
+aliasing once mic spacing exceeds roughly half the shortest wavelength
+present) -- this isn't a corner case to ignore, it's the difference
+between a working estimate and a badly aliased one.
+
+**A single array can't measure range**, only bearing -- the same
+limitation a lone RF direction-finder has without a second station to
+triangulate against. The bridge reports an operator-supplied
+`--assumed-range-m` rather than a measured one (flagged as such in
+`raw_data`), the same honest compromise the camera-motion adapter makes
+for its own inability to measure range. `bearing_confidence` (how sharp
+the *direction* estimate is) and `--confidence` (a separate, manual "is
+this actually a drone sound" estimate) are deliberately not conflated --
+they answer different questions.
+
 ## RF signature fingerprinting
 
 An RF detection whose `raw_data` carries `center_frequency_mhz`,
