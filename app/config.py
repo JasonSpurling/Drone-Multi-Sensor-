@@ -92,6 +92,13 @@ NATS_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DRONE_NATS_CONNECT_TIMEOUT_SECON
 NATS_DETECTION_SUBJECT = os.getenv("DRONE_NATS_DETECTION_SUBJECT", "drone.detections")
 NATS_INCIDENT_SUBJECT = os.getenv("DRONE_NATS_INCIDENT_SUBJECT", "drone.incidents")
 
+# FAA NOTAM API credentials (app/airspace/faa_notam.py), free but requires
+# registration at api.faa.gov -- unset (default) means the NOTAM CLI needs
+# them passed explicitly instead. See that module's docstring for the
+# caveat that this client wasn't validated against a live account.
+FAA_NOTAM_CLIENT_ID = os.getenv("DRONE_FAA_NOTAM_CLIENT_ID", "")
+FAA_NOTAM_CLIENT_SECRET = os.getenv("DRONE_FAA_NOTAM_CLIENT_SECRET", "")
+
 # Track association gates: a detection may only join a track if it arrives
 # within TRACK_TIME_GATE_SECONDS of the track's last update and within
 # TRACK_DISTANCE_GATE_M of its last known position.

@@ -253,6 +253,36 @@ format. A small bridge script parses that feed and posts it to the API:
 .venv/bin/python -m app.adapters.dump1090_bridge --sbs-host 127.0.0.1 --sbs-port 30003
 ```
 
+**Radar via ASTERIX CAT048** (`app/adapters/asterix_bridge.py`): the
+protocol most commercial primary/secondary surveillance radars actually
+speak on their network interface, not a proprietary vendor format --
+decodes EUROCONTROL's ASTERIX CAT048 (Monoradar Target Reports) from UDP
+datagrams via [`asterix4py`](https://pypi.org/project/asterix4py/), which
+decodes against EUROCONTROL's own published XML category definitions
+rather than a hand-rolled byte parser. Reports azimuth/range like any
+other radar, so register the radar's mounting position first (see
+Georeferencing above) or every detection is dropped.
+
+```bash
+pip install -r requirements-radar.txt
+.venv/bin/python -m app.adapters.asterix_bridge --listen-port 8600 --sensor-id radar-1
+```
+
+**MAVLink telemetry interception** (`app/adapters/mavlink_bridge.py`): a
+MAVLink-speaking drone (ArduPilot, PX4, most hobbyist/commercial flight
+controllers) broadcasts its own `GLOBAL_POSITION_INT` over its telemetry
+link -- interceptable the same way this tracker's other adapters intercept
+RF/ADS-B/camera signal, via [`pymavlink`](https://pypi.org/project/pymavlink/).
+**This is not authenticated** -- unlike the signed Remote ID path below, a
+MAVLink intercept carries no cryptographic proof of identity, so it's
+reported at high confidence (only drones speak MAVLink) but never resolves
+to `friendly` on its own.
+
+```bash
+pip install -r requirements-mavlink.txt
+.venv/bin/python -m app.adapters.mavlink_bridge --source udp:127.0.0.1:14550 --sensor-id mavlink-1
+```
+
 **Camera motion cueing** (`app/adapters/camera_motion.py`): watches a
 webcam or RTSP camera stream with OpenCV background subtraction and posts
 a `camera` detection whenever it sees motion above a threshold.
@@ -323,6 +353,57 @@ type of control/video link. The band/bandwidth windows in `SIGNATURES` are
 drawn from published consumer/hobbyist RF specifications and are
 approximate, not exact per-model specs -- tune them to your own RF
 sensor's measured characteristics if you have one.
+
+## Airspace data
+
+By default, zones come from the single hand-seeded polygon in
+`app/zones.seed.json` -- fine for a demo, not for representing real
+airspace. Two real, publicly published FAA data sources can supplement or
+replace it:
+
+**FAA UAS Facility Map** (`app/airspace/faa_uas_facility_map.py`): the
+actual published grid of maximum altitudes UAS operators may fly at near
+an airport without further LAANC authorization, queried live from FAA's
+public, unauthenticated ArcGIS FeatureServer
+(`FAA_UAS_FacilityMap_Data`). Each grid cell is imported as a `monitoring`
+zone with its ceiling (feet AGL) converted to `max_altitude_m` -- not
+`restricted`, since exceeding a facility map ceiling means "this specific
+flight needs LAANC authorization," not "an intrusion just happened":
+
+```bash
+.venv/bin/python -m app.adapters.faa_zones_import \
+  --min-lon -0.5 --min-lat 51.3 --max-lon 0.3 --max-lat 51.7
+```
+
+This uses the standard, well-documented ArcGIS REST query contract and a
+field name (`CEILING`) confirmed from the layer's public metadata, but
+outbound access to arcgis.com wasn't available from the environment this
+was built in to run a live import end-to-end -- sanity-check your first
+real import against a known airport's published facility map.
+
+**FAA NOTAMs** (`app/airspace/faa_notam.py`, `app/adapters/faa_notam_check.py`):
+Notices to Air Missions cover the kind of temporary/event-driven airspace
+restriction a static zone file or the facility map's fixed grid can't --
+TFRs, a stadium event, a UAS area closed for the day. Requires a free
+`client_id`/`client_secret` from the [api.faa.gov](https://api.faa.gov)
+developer portal:
+
+```bash
+.venv/bin/python -m app.adapters.faa_notam_check \
+  --client-id "$DRONE_FAA_NOTAM_CLIENT_ID" --client-secret "$DRONE_FAA_NOTAM_CLIENT_SECRET" \
+  --lat 51.5 --lon -0.1 --radius-nm 50
+```
+
+**This one genuinely hasn't been validated against a live account** --
+both `api.faa.gov` and its developer-registration flow were unreachable
+from this environment's network, so unlike every other real-protocol
+integration in this README, the request/response shape here is
+documented-but-unverified; treat it as a starting point to confirm against
+your own registered account, not a proven integration. It also
+deliberately returns NOTAMs as a plain list for a human to review rather
+than auto-converting them into zones -- NOTAM geometry, when present at
+all, isn't reliably a clean polygon the way the facility map's is, and a
+wrong guessed restricted-zone shape is worse than no zone.
 
 ## Classification fusion & friendly allowlist
 
@@ -464,6 +545,7 @@ needs to be set to run locally.
 | `DRONE_NATS_DETECTION_SUBJECT` | `drone.detections` | NATS subject each ingested detection is published to |
 | `DRONE_NATS_INCIDENT_SUBJECT` | `drone.incidents` | NATS subject each opened incident is published to |
 | `DRONE_NATS_CONNECT_TIMEOUT_SECONDS` | `2` | Connect/send timeout for the NATS publisher |
+| `DRONE_FAA_NOTAM_CLIENT_ID` / `_CLIENT_SECRET` | *(unset)* | api.faa.gov developer credentials for `app/adapters/faa_notam_check.py` |
 | `DRONE_FUSION_HISTORY_LIMIT` | `50` | Max recent detections per track fed into classification fusion |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |
