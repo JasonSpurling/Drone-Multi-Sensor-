@@ -43,22 +43,21 @@ track = Table(
     Column("position_uncertainty_m", Float),
 )
 
-# Kalman filter state for a track's motion estimate, kept separate from the
-# public `track` row: ref_lat/ref_lon anchor the local tangent-plane frame
-# the filter runs in (see app/geo.py), x_m/y_m/vx_mps/vy_mps are the
-# filter's state vector, and covariance is its 4x4 covariance matrix
-# (row-major JSON) -- internal to the tracker, not exposed via the API.
+# IMM (Interacting Multiple Model) filter state for a track's motion
+# estimate, kept separate from the public `track` row: ref_lat/ref_lon
+# anchor the local tangent-plane frame the filter runs in (see
+# app/geo.py), models is a JSON list of each mode's {x,y,vx,vy,covariance}
+# (see app/imm.py -- CRUISE and MANEUVER, in that order), and
+# mode_probabilities is a JSON [cruise_probability, maneuver_probability]
+# pair -- all internal to the tracker, not exposed via the API.
 track_kalman_state = Table(
     "track_kalman_state",
     metadata,
     Column("track_id", Integer, ForeignKey("track.id"), primary_key=True),
     Column("ref_lat", Float, nullable=False),
     Column("ref_lon", Float, nullable=False),
-    Column("x_m", Float, nullable=False),
-    Column("y_m", Float, nullable=False),
-    Column("vx_mps", Float, nullable=False),
-    Column("vy_mps", Float, nullable=False),
-    Column("covariance", Text, nullable=False),
+    Column("models", Text, nullable=False),
+    Column("mode_probabilities", Text, nullable=False),
     Column("updated_at", String(40), nullable=False),
 )
 

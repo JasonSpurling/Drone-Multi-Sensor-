@@ -79,13 +79,16 @@ BIRD_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_BIRD_CONFIDENCE_THRESHOLD", "
 SENSOR_ONLINE_SECONDS = float(os.getenv("DRONE_SENSOR_ONLINE_SECONDS", "60"))
 SENSOR_STALE_SECONDS = float(os.getenv("DRONE_SENSOR_STALE_SECONDS", "300"))
 
-# Kalman filter tuning. Process noise is the assumed variance (m^2/s^3) of
-# an unmodeled acceleration between updates -- higher values let the filter
-# trust new detections more and follow maneuvers faster, at the cost of
-# smoothing less noise out. Measurement sigma is the assumed 1-sigma
-# position error (m) of a detection at confidence 1.0; it's scaled up for
-# lower-confidence detections so the filter trusts them less.
-KALMAN_PROCESS_NOISE = float(os.getenv("DRONE_KALMAN_PROCESS_NOISE", "4.0"))
+# IMM (Interacting Multiple Model) filter tuning -- see app/imm.py. Each
+# process noise is the assumed variance (m^2/s^3) of an unmodeled
+# acceleration between updates for that mode: CRUISE stays low so the
+# filter smooths sensor jitter out on straight/level flight, MANEUVER
+# stays high so a real turn or sudden acceleration gets explained by that
+# mode rather than lagged behind. Measurement sigma is the assumed
+# 1-sigma position error (m) of a detection at confidence 1.0; it's
+# scaled up for lower-confidence detections so the filter trusts them less.
+KALMAN_CRUISE_PROCESS_NOISE = float(os.getenv("DRONE_KALMAN_CRUISE_PROCESS_NOISE", "4.0"))
+KALMAN_MANEUVER_PROCESS_NOISE = float(os.getenv("DRONE_KALMAN_MANEUVER_PROCESS_NOISE", "100.0"))
 KALMAN_MEASUREMENT_SIGMA_M = float(os.getenv("DRONE_KALMAN_MEASUREMENT_SIGMA_M", "30.0"))
 # A brand-new track has no velocity history, so its initial velocity
 # uncertainty has to be loose enough to gate in a fast-moving object (e.g.

@@ -104,6 +104,11 @@ class Track(BaseModel):
     position_uncertainty_m: float | None = Field(
         default=None, description="1-sigma radial position uncertainty from the Kalman filter"
     )
+    maneuver_probability: float | None = Field(
+        default=None,
+        description="IMM MANEUVER-mode probability (0-1): how confident the tracker is that "
+        "this object is currently maneuvering (turning/accelerating) rather than flying straight",
+    )
 
 
 class Incident(BaseModel):

@@ -43,6 +43,7 @@ _TRACK_MIGRATION_COLUMNS = {
     "heading_deg": "REAL",
     "speed_mps": "REAL",
     "position_uncertainty_m": "REAL",
+    "maneuver_probability": "REAL",
 }
 
 
@@ -54,7 +55,26 @@ def _migrate_track_columns() -> None:
                 conn.execute(text(f"ALTER TABLE track ADD COLUMN {column} {sql_type}"))
 
 
+def _migrate_kalman_state_table() -> None:
+    """track_kalman_state's shape changed when tracking.py moved from a
+    single constant-velocity filter to an IMM (app/imm.py): the old
+    x_m/y_m/vx_mps/vy_mps/covariance columns became a `models` JSON list
+    plus `mode_probabilities`. This table holds only ephemeral, derivable
+    filter state (not audit data), so on detecting the old shape we just
+    drop and let create_all recreate it -- any in-flight tracks simply
+    reinitialize their filter on their next detection.
+    """
+    inspector = inspect(engine)
+    if "track_kalman_state" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("track_kalman_state")}
+    if "x_m" in existing and "models" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE track_kalman_state"))
+
+
 def init_db() -> None:
+    _migrate_kalman_state_table()
     metadata.create_all(engine, checkfirst=True)
     _migrate_track_columns()
 
@@ -169,10 +189,10 @@ def create_track(track: Track) -> Track:
                 INSERT INTO track
                     (track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
-                     position_uncertainty_m)
+                     position_uncertainty_m, maneuver_probability)
                 VALUES (:track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
-                        :position_uncertainty_m)
+                        :position_uncertainty_m, :maneuver_probability)
                 RETURNING id
                 """
             ),
@@ -188,6 +208,7 @@ def create_track(track: Track) -> Track:
                 "heading_deg": track.heading_deg,
                 "speed_mps": track.speed_mps,
                 "position_uncertainty_m": track.position_uncertainty_m,
+                "maneuver_probability": track.maneuver_probability,
             },
         ).one()
         track.id = row.id
@@ -203,7 +224,8 @@ def update_track(track: Track) -> Track:
                 SET last_seen = :last_seen, status = :status, classification = :classification,
                     latitude = :latitude, longitude = :longitude, altitude_m = :altitude_m,
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
-                    position_uncertainty_m = :position_uncertainty_m
+                    position_uncertainty_m = :position_uncertainty_m,
+                    maneuver_probability = :maneuver_probability
                 WHERE id = :id
                 """
             ),
@@ -217,6 +239,7 @@ def update_track(track: Track) -> Track:
                 "heading_deg": track.heading_deg,
                 "speed_mps": track.speed_mps,
                 "position_uncertainty_m": track.position_uncertainty_m,
+                "maneuver_probability": track.maneuver_probability,
                 "id": track.id,
             },
         )
@@ -262,14 +285,16 @@ def _row_to_track(row) -> Track:
         heading_deg=row["heading_deg"],
         speed_mps=row["speed_mps"],
         position_uncertainty_m=row["position_uncertainty_m"],
+        maneuver_probability=row["maneuver_probability"],
     )
 
 
-# --- Kalman filter state helpers -------------------------------------------
+# --- IMM filter state helpers -----------------------------------------
 
 class KalmanStateRecord:
-    """Persisted Kalman filter state for one track: the local tangent-plane
-    reference point, the state vector, and the covariance matrix.
+    """Persisted IMM filter state for one track: the local tangent-plane
+    reference point, each mode's state vector + covariance, and the mode
+    probabilities. See app/imm.py.
     """
 
     def __init__(
@@ -277,21 +302,15 @@ class KalmanStateRecord:
         track_id: int,
         ref_lat: float,
         ref_lon: float,
-        x_m: float,
-        y_m: float,
-        vx_mps: float,
-        vy_mps: float,
-        covariance: list[list[float]],
+        models: list[dict],
+        mode_probabilities: list[float],
         updated_at: datetime,
     ) -> None:
         self.track_id = track_id
         self.ref_lat = ref_lat
         self.ref_lon = ref_lon
-        self.x_m = x_m
-        self.y_m = y_m
-        self.vx_mps = vx_mps
-        self.vy_mps = vy_mps
-        self.covariance = covariance
+        self.models = models
+        self.mode_probabilities = mode_probabilities
         self.updated_at = updated_at
 
 
@@ -301,24 +320,19 @@ def upsert_kalman_state(record: KalmanStateRecord) -> None:
             text(
                 """
                 INSERT INTO track_kalman_state
-                    (track_id, ref_lat, ref_lon, x_m, y_m, vx_mps, vy_mps, covariance, updated_at)
-                VALUES (:track_id, :ref_lat, :ref_lon, :x_m, :y_m, :vx_mps, :vy_mps,
-                        :covariance, :updated_at)
+                    (track_id, ref_lat, ref_lon, models, mode_probabilities, updated_at)
+                VALUES (:track_id, :ref_lat, :ref_lon, :models, :mode_probabilities, :updated_at)
                 ON CONFLICT (track_id) DO UPDATE SET
-                    x_m = excluded.x_m, y_m = excluded.y_m,
-                    vx_mps = excluded.vx_mps, vy_mps = excluded.vy_mps,
-                    covariance = excluded.covariance, updated_at = excluded.updated_at
+                    models = excluded.models, mode_probabilities = excluded.mode_probabilities,
+                    updated_at = excluded.updated_at
                 """
             ),
             {
                 "track_id": record.track_id,
                 "ref_lat": record.ref_lat,
                 "ref_lon": record.ref_lon,
-                "x_m": record.x_m,
-                "y_m": record.y_m,
-                "vx_mps": record.vx_mps,
-                "vy_mps": record.vy_mps,
-                "covariance": json.dumps(record.covariance),
+                "models": json.dumps(record.models),
+                "mode_probabilities": json.dumps(record.mode_probabilities),
                 "updated_at": record.updated_at.isoformat(),
             },
         )
@@ -336,11 +350,8 @@ def get_kalman_state(track_id: int) -> KalmanStateRecord | None:
         track_id=row["track_id"],
         ref_lat=row["ref_lat"],
         ref_lon=row["ref_lon"],
-        x_m=row["x_m"],
-        y_m=row["y_m"],
-        vx_mps=row["vx_mps"],
-        vy_mps=row["vy_mps"],
-        covariance=json.loads(row["covariance"]),
+        models=json.loads(row["models"]),
+        mode_probabilities=json.loads(row["mode_probabilities"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
 

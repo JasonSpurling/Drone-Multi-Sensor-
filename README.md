@@ -159,18 +159,36 @@ container's port will be reachable beyond your own machine.
 
 ## Tracking core
 
-Each track runs its own constant-velocity Kalman filter (`app/kalman.py`)
-in a local flat-earth frame anchored at the track's first fix
-(`app/geo.py`). Every incoming detection is gated against each active
-track's *Kalman-predicted* position (not just its last raw fix) using
-squared Mahalanobis distance, so a fast mover doesn't fall outside a gate
-sized for a hovering one, and a stable track gates tighter than a
-maneuvering one. Tracks in the API/dashboard now carry `heading_deg`,
-`speed_mps`, and `position_uncertainty_m` derived from the filter.
+Each track runs its own IMM (Interacting Multiple Model) filter
+(`app/imm.py`) in a local flat-earth frame anchored at the track's first
+fix (`app/geo.py`): a CRUISE mode (low process noise, smooths sensor
+jitter on straight/level flight) and a MANEUVER mode (high process noise,
+tracks sharp turns and sudden acceleration without lagging behind them),
+blended by mode probabilities that update every detection from how well
+each mode's prediction matched it. A plain single-model constant-velocity
+filter treats a sharp turn as measurement noise and lags behind it; this
+doesn't. Tracks in the API/dashboard carry `heading_deg`, `speed_mps`,
+`position_uncertainty_m`, and `maneuver_probability` (0-1: how likely the
+tracker thinks this object is currently maneuvering) derived from the
+filter.
+
+Every incoming detection is gated against each active track's IMM-predicted
+position (not just its last raw fix) using squared Mahalanobis distance, so
+a fast mover doesn't fall outside a gate sized for a hovering one, and a
+stable track gates tighter than a maneuvering one.
+
 `POST /api/detections` also projects each updated track's velocity
 `DRONE_PREDICTIVE_HORIZON_SECONDS` ahead and opens a `predicted_incursion`
 incident if the projection enters a restricted zone the track isn't
 already inside — an early warning ahead of the actual `zone_incursion`.
+
+Association is still per-detection greedy nearest-match (lowest
+Mahalanobis distance within gate), not a batch global-nearest-neighbor or
+full multi-hypothesis tracker (JPDA/MHT) -- those need detections buffered
+into a batch and resolved together, which trades the API's immediate
+per-request response for latency. Two tracks crossing paths very close
+together can still swap identities as a result. This is a deliberate,
+documented scope boundary, not an oversight.
 
 ## Database
 
@@ -322,7 +340,8 @@ needs to be set to run locally.
 | `DRONE_BIRD_CONFIDENCE_THRESHOLD` | `0.4` | Below this, a camera/acoustic detection is classified `bird` |
 | `DRONE_SENSOR_ONLINE_SECONDS` | `60` | Sensor shows `online` if seen within this window |
 | `DRONE_SENSOR_STALE_SECONDS` | `300` | Sensor shows `stale` up to this window, `offline` beyond it |
-| `DRONE_KALMAN_PROCESS_NOISE` | `4.0` | Assumed unmodeled-acceleration variance (m²/s³); higher follows maneuvers faster but smooths less |
+| `DRONE_KALMAN_CRUISE_PROCESS_NOISE` | `4.0` | IMM CRUISE mode's assumed unmodeled-acceleration variance (m²/s³) -- low, smooths sensor jitter on straight/level flight |
+| `DRONE_KALMAN_MANEUVER_PROCESS_NOISE` | `100.0` | IMM MANEUVER mode's assumed unmodeled-acceleration variance (m²/s³) -- high, tracks sharp turns without lagging |
 | `DRONE_KALMAN_MEASUREMENT_SIGMA_M` | `30.0` | Assumed 1-sigma position error (m) of a detection at confidence 1.0; scaled up for lower confidence |
 | `DRONE_KALMAN_INITIAL_VELOCITY_SIGMA_MPS` | `100.0` | Initial velocity uncertainty (1-sigma, m/s) for a brand-new track |
 | `DRONE_TRACK_GATE_CHI2` | `9.21` | Squared-Mahalanobis-distance gate for a detection to join a track (99% chi-square, 2 DOF) |
@@ -388,6 +407,7 @@ app/
   georeference.py         Sensor-relative azimuth/range -> absolute lat/lon
   tracking.py            Track association (Kalman-gated), update, expiry
   kalman.py               Constant-velocity Kalman filter (no numpy dependency)
+  imm.py                  IMM (Interacting Multiple Model) filter: blends CRUISE + MANEUVER modes
   geo.py                  Great-circle distance, local tangent-plane projection, forward geodesic
   incidents.py            Zone-incursion + predicted-incursion incident creation
   zones.py               Zone loading + point-in-polygon test

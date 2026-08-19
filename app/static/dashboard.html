@@ -306,6 +306,7 @@ function renderDetails() {
       <div class="k">Heading</div><div>${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "—"}</div>
       <div class="k">Speed</div><div>${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
       <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
+      <div class="k">Maneuvering</div><div>${track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) + "%" : "—"}</div>
       <div class="k">Incidents</div><div>${related.length}</div>
     </div>
   `;
