@@ -154,7 +154,7 @@ container's port will be reachable beyond your own machine.
 | `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
 | `GET /api/sensor-registrations` | List registered sensors (position/orientation used for georeferencing) |
 | `PUT /api/sensor-registrations/{sensor_id}` | Register/update a sensor's fixed position and orientation (admin) |
-| `GET /api/authorized-operators` | List authorized ("friendly") drone operators |
+| `GET /api/authorized-operators` | List authorized ("friendly") drone operators (admin) |
 | `PUT /api/authorized-operators/{operator_id}` | Register/update an authorized operator (admin) |
 
 ## Tracking core
@@ -259,11 +259,18 @@ A detection whose `raw_data.operator_id` matches a registered authorized
 operator (`app/allowlist.py` -- meant for FAA Remote ID broadcasts) votes
 `friendly` instead. This is **not cryptographically verified** -- Remote ID
 broadcasts aren't signed, so a resourced adversary could spoof an
-authorized `operator_id`. Register one:
+authorized `operator_id`. Two things limit the damage a spoofed claim can
+do: `GET /api/authorized-operators` is **admin-only** (not `viewer`), since
+it's exactly the list of values needed to spoof the check, and a
+`friendly` classification tempers an incident's severity to `medium`
+rather than suppressing it to `low` the way independently-verified
+evidence (ADS-B, `aircraft`) does -- an unverified self-report shouldn't be
+able to fully silence a real intrusion. Register an operator:
 
 ```bash
 curl -X PUT http://127.0.0.1:8000/api/authorized-operators/OP-12345 \
-  -H "Content-Type: application/json" -d '{"name":"Acme Surveying Co."}'
+  -H "Content-Type: application/json" -H "X-API-Key: <admin key>" \
+  -d '{"name":"Acme Surveying Co."}'
 ```
 
 ## Operations

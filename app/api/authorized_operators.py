@@ -7,8 +7,16 @@ from app.models import AuthorizedOperator, AuthorizedOperatorInput
 router = APIRouter()
 
 
-@router.get("/authorized-operators", response_model=list[AuthorizedOperator])
+@router.get(
+    "/authorized-operators",
+    response_model=list[AuthorizedOperator],
+    dependencies=[Depends(require_role(ROLE_ADMIN))],
+)
 def get_authorized_operators() -> list[AuthorizedOperator]:
+    # Admin-only, not just viewer: this list is exactly the set of
+    # operator_id values that get a detection classified FRIENDLY (see
+    # app/allowlist.py), so exposing it to lower roles would let them
+    # read out the values needed to spoof that check.
     return [AuthorizedOperator(**row) for row in list_authorized_operators()]
 
 

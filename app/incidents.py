@@ -33,7 +33,16 @@ _SEVERITY_BY_CLASSIFICATION = {
     Classification.UNKNOWN: IncidentSeverity.MEDIUM,
     Classification.AIRCRAFT: IncidentSeverity.LOW,
     Classification.BIRD: IncidentSeverity.LOW,
-    Classification.FRIENDLY: IncidentSeverity.LOW,
+    # Deliberately MEDIUM, not LOW: unlike AIRCRAFT (a cooperative ADS-B
+    # transponder signal) or BIRD (an independent sensor-confidence
+    # reading), FRIENDLY comes from an unauthenticated, unsigned
+    # raw_data.operator_id claim in the detection payload itself (see
+    # app/allowlist.py) -- an attacker with only ingest access can assert
+    # any operator_id they know or guess. Tempering the severity is
+    # reasonable; fully suppressing it to LOW on an unverified self-
+    # report is not, until a cryptographically verified identity channel
+    # exists.
+    Classification.FRIENDLY: IncidentSeverity.MEDIUM,
 }
 
 # A track's estimated speed below this is treated as noise around zero

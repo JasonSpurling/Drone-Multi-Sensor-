@@ -66,6 +66,16 @@ def test_severity_matches_classification():
     assert incidents[0].severity == IncidentSeverity.HIGH
 
 
+def test_friendly_classification_is_not_downgraded_to_low_severity():
+    # Regression test: FRIENDLY comes from an unauthenticated, unsigned
+    # raw_data.operator_id claim (see app/allowlist.py), not independent
+    # sensor evidence like AIRCRAFT/BIRD -- it must not fully suppress
+    # incident severity to LOW on an attacker's say-so.
+    create_zone(Zone(name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    incidents = check_zone_incidents(make_track(classification=Classification.FRIENDLY))
+    assert incidents[0].severity == IncidentSeverity.MEDIUM
+
+
 def test_incident_respects_zone_altitude_band():
     create_zone(
         Zone(

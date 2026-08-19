@@ -76,6 +76,19 @@ def test_only_admin_can_register_sensors(isolated_db, keys):
         assert r.status_code == 201
 
 
+def test_only_admin_can_read_authorized_operators(isolated_db, keys):
+    # Regression test: this list is exactly the set of operator_id values
+    # that get a detection classified FRIENDLY (app/allowlist.py), so a
+    # lower role reading it back would learn what to spoof.
+    with TestClient(app) as client:
+        r = client.get("/api/authorized-operators", headers={"X-API-Key": "view-key"})
+        assert r.status_code == 403
+        r = client.get("/api/authorized-operators", headers={"X-API-Key": "ops-key"})
+        assert r.status_code == 403
+        r = client.get("/api/authorized-operators", headers={"X-API-Key": "admin-key"})
+        assert r.status_code == 200
+
+
 def test_health_and_metrics_are_unauthenticated(isolated_db, keys):
     with TestClient(app) as client:
         assert client.get("/api/health").status_code == 200
