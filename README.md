@@ -402,6 +402,46 @@ drawn from published consumer/hobbyist RF specifications and are
 approximate, not exact per-model specs -- tune them to your own RF
 sensor's measured characteristics if you have one.
 
+## DJI DroneID payload decoding
+
+RF signature fingerprinting above stops at "this looks like a DJI
+control/video link" -- it can't decode the payload. DJI OcuSync actually
+broadcasts real telemetry unencrypted: the drone's own GPS position, the
+*operator's* GPS position, a serial number, and a home point. That's a
+disclosed security finding (peer-reviewed at NDSS 2023, "Drone Security
+and the Mysterious Case of DJI's DroneID"), and it's exactly what a
+commercial DJI AeroScope appliance decodes.
+
+Decoding that payload needs real SDR hardware and physical-layer
+demodulation -- entirely outside what this app (or any pip package) does.
+`app/adapters/dji_droneid_bridge.py` is a bridge, the same role
+`dump1090_bridge.py` plays for ADS-B: it consumes the JSON-lines output of
+[`RUB-SysSec/DroneSecurity`](https://github.com/RUB-SysSec/DroneSecurity),
+the open-source receiver published with that paper (tested against an
+Ettus USRP B205-mini), and posts each decoded packet as a detection:
+
+```bash
+# Set up and run DroneSecurity separately per its own README, then:
+./src/droneid_receiver_live.py | .venv/bin/python -m app.adapters.dji_droneid_bridge --sensor-id dji-rf-1
+```
+
+The drone's own position becomes the tracked detection; the operator's
+position, serial number, and home point are carried in `raw_data` rather
+than as a separate tracked entity -- a person's real-time location is
+genuinely sensitive, and this is metadata for a security response
+(the same use case AeroScope is sold for), not something to spin up its
+own track for. A packet whose reported CRC doesn't match what
+DroneSecurity itself calculated is dropped rather than trusted.
+
+**What's verified here and what isn't**: the JSON field names this bridge
+parses match DroneSecurity's own documented example output. What couldn't
+be verified in the environment this was built in: an actual live SDR, a
+real DroneID capture, or DJI's own spec -- there isn't one, OcuSync/
+DroneID is proprietary and undocumented, and RUB-SysSec's paper is an
+independent reverse-engineering effort, not an official DJI
+specification, so exact fields available may vary by drone model/firmware.
+Sanity-check your first real decoded packet before relying on this.
+
 ## Airspace data
 
 By default, zones come from the single hand-seeded polygon in
