@@ -24,7 +24,7 @@ from app.db import (
     create_incident,
     get_open_behavioral_incident,
     get_open_incident,
-    list_detections,
+    list_recent_detections,
 )
 from app.geo import local_m_to_latlon
 from app.metrics import incidents_opened_total
@@ -149,7 +149,7 @@ def check_loitering_incident(track: Track) -> Incident | None:
     """
     if track.id is None:
         return None
-    history = list_detections(track_id=track.id, limit=500)
+    history = list_recent_detections(track.id, 500)
     if not detect_loitering(history, radius_m=LOITERING_RADIUS_M, min_duration_s=LOITERING_MIN_DURATION_S):
         return None
     return _open_behavioral_incident(
@@ -199,16 +199,16 @@ def check_shadowing_incidents(tracks: list[Track]) -> list[Incident]:
     first rather than comparing every active pair's full history.
     """
     opened: list[Incident] = []
-    for i, track_a in enumerate(tracks):
-        if track_a.id is None:
-            continue
-        for track_b in tracks[i + 1 :]:
-            if track_b.id is None:
-                continue
-            history_a = list_detections(track_id=track_a.id, limit=500)
-            history_b = list_detections(track_id=track_b.id, limit=500)
+    valid_tracks = [t for t in tracks if t.id is not None]
+    # Each track's history is independent of which pair it's being compared
+    # against, so fetch it once per track rather than once per pair --
+    # avoids O(n^2) redundant DB reads of the same track's (up to 500-row)
+    # history as the active-track count grows.
+    histories = {t.id: list_recent_detections(t.id, 500) for t in valid_tracks}
+    for i, track_a in enumerate(valid_tracks):
+        for track_b in valid_tracks[i + 1 :]:
             if not detect_shadowing(
-                history_a, history_b,
+                histories[track_a.id], histories[track_b.id],
                 max_distance_m=SHADOWING_MAX_DISTANCE_M, min_duration_s=SHADOWING_MIN_DURATION_S,
             ):
                 continue

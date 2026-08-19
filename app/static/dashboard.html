@@ -178,7 +178,8 @@
     padding: 8px 10px;
     margin-bottom: 8px;
   }
-  .alert-item.sev-critical, .alert-item.sev-high { border-left-color: var(--high); }
+  .alert-item.sev-critical { border-left-color: var(--critical); }
+  .alert-item.sev-high { border-left-color: var(--high); }
   .alert-item.sev-medium { border-left-color: var(--medium); }
   .alert-item.sev-low { border-left-color: var(--low); }
   .alert-item .top-row { display: flex; justify-content: space-between; align-items: center; }
@@ -305,7 +306,7 @@ const CLASS_COLOR_HEX = {
 const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
 const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
-const CLASS_LABELS = ["all", "drone", "aircraft", "bird"];
+const CLASS_LABELS = ["all", "drone", "aircraft", "bird", "friendly", "unknown"];
 
 class AuthError extends Error {}
 
@@ -505,12 +506,14 @@ function trailSparkline(trail) {
   if (trail.length < 2) return "";
   const lats = trail.map((p) => p[0]);
   const lons = trail.map((p) => p[1]);
-  const latRange = Math.max(Math.max(...lats) - Math.min(...lats), 1e-6);
-  const lonRange = Math.max(Math.max(...lons) - Math.min(...lons), 1e-6);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  const latRange = Math.max(maxLat - minLat, 1e-6);
+  const lonRange = Math.max(maxLon - minLon, 1e-6);
   const w = 220, h = 60, pad = 6;
   const points = trail.map(([lat, lon]) => {
-    const x = pad + ((lon - Math.min(...lons)) / lonRange) * (w - 2 * pad);
-    const y = h - pad - ((lat - Math.min(...lats)) / latRange) * (h - 2 * pad);
+    const x = pad + ((lon - minLon) / lonRange) * (w - 2 * pad);
+    const y = h - pad - ((lat - minLat) / latRange) * (h - 2 * pad);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const last = points[points.length - 1].split(",");
@@ -549,7 +552,7 @@ function renderDetails() {
       <div class="kv-section-title">Identity</div>
       <div class="kv-cols">
         <div class="kv">
-          <div class="k">UID</div><div class="v">${escapeHtml(track.track_uid.slice(0, 13))}…</div>
+          <div class="k">UID</div><div class="v" title="${escapeHtml(track.track_uid)}">${escapeHtml(track.track_uid.slice(0, 13))}…</div>
           <div class="k">First seen</div><div class="v">${fmtRelative(track.first_seen)}</div>
         </div>
         <div class="kv">
@@ -815,6 +818,7 @@ document.getElementById("search-input").addEventListener("input", (e) => {
 // currently-visible (filtered) table, without needing to click first.
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   const n = Number(e.key);
   if (n >= 1 && n <= 9) {
     const tracks = visibleTracks().slice().sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
