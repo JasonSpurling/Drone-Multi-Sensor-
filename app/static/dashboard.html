@@ -167,7 +167,7 @@
 <script>
 const POLL_MS = 3000;
 
-const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null };
+const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null, trail: [] };
 let apiKey = localStorage.getItem("droneApiKey") || "";
 
 const CLASS_COLOR = {
@@ -210,11 +210,24 @@ function badge(text, color) {
   return `<span class="badge" style="background:${color}">${escapeHtml(text)}</span>`;
 }
 
-function selectTrack(id) {
+async function selectTrack(id) {
   state.selectedTrackId = id;
+  state.trail = [];
   renderTracks();
   renderMap();
   renderDetails();
+
+  try {
+    const history = await fetchJSON(`/api/tracks/${id}/history?limit=2000`);
+    if (state.selectedTrackId !== id) return; // a newer selection has since won
+    state.trail = history
+      .filter((d) => d.latitude != null && d.longitude != null)
+      .map((d) => [d.latitude, d.longitude]);
+    renderMap();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    console.error(e);
+  }
 }
 
 async function acknowledge(id) {
@@ -308,6 +321,7 @@ function renderDetails() {
       <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
       <div class="k">Maneuvering</div><div>${track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) + "%" : "—"}</div>
       <div class="k">Incidents</div><div>${related.length}</div>
+      <div class="k">Trail</div><div>${state.trail.length ? `${state.trail.length} points (dashed on map)` : "loading…"}</div>
     </div>
   `;
 }
@@ -379,6 +393,10 @@ function renderMap() {
       .bindPopup(escapeHtml(z.name))
       .addTo(zoneLayer);
   });
+
+  if (state.trail.length > 1) {
+    L.polyline(state.trail, { color: "#fff", weight: 2, opacity: 0.6, dashArray: "4 4" }).addTo(trackLayer);
+  }
 
   const pts = state.tracks.filter((t) => t.latitude != null && t.longitude != null);
   pts.forEach((t) => {
