@@ -458,6 +458,28 @@ def get_open_incident(track_id: int, zone_id: int, incident_type: str) -> Incide
     return _row_to_incident(row) if row else None
 
 
+def get_open_behavioral_incident(track_id: int, incident_type: str) -> Incident | None:
+    """Like get_open_incident, but for a behavioral incident (loitering,
+    formation, shadowing -- app/behavior.py) that isn't tied to any zone.
+    `zone_id = :zone_id` in the zone-based query would never match a NULL
+    zone_id (SQL NULL comparison), so this uses IS NULL instead of
+    reusing that query with zone_id=None.
+    """
+    with db_session() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT * FROM incident
+                WHERE track_id = :track_id AND zone_id IS NULL AND incident_type = :incident_type
+                    AND status != 'resolved'
+                ORDER BY opened_at DESC LIMIT 1
+                """
+            ),
+            {"track_id": track_id, "incident_type": incident_type},
+        ).mappings().fetchone()
+    return _row_to_incident(row) if row else None
+
+
 def list_incidents(
     status: str | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Incident]:

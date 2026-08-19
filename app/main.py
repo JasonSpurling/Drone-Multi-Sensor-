@@ -20,9 +20,15 @@ from app.api import (
     zones as zones_api,
 )
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, require_role
-from app.config import DETECTION_RETENTION_DAYS, RETENTION_SWEEP_INTERVAL_SECONDS
-from app.db import init_db, purge_old_detections
+from app.config import (
+    BEHAVIOR_SWEEP_INTERVAL_SECONDS,
+    DETECTION_RETENTION_DAYS,
+    RETENTION_SWEEP_INTERVAL_SECONDS,
+)
+from app.db import init_db, list_tracks, purge_old_detections
+from app.incidents import check_formation_incidents, check_shadowing_incidents
 from app.logging_config import configure_logging
+from app.models import TrackStatus
 from app.util import utcnow
 from app.zones import load_zones_from_file
 
@@ -45,18 +51,42 @@ async def _retention_sweep_loop() -> None:
             logger.info("Retention sweep purged %d detection(s) older than %s", removed, cutoff)
 
 
+def _run_behavior_sweep() -> None:
+    active_tracks = list_tracks(status=TrackStatus.ACTIVE.value)
+    check_formation_incidents(active_tracks)
+    check_shadowing_incidents(active_tracks)
+
+
+async def _behavior_sweep_loop() -> None:
+    """Formation and shadowing (app/behavior.py) compare multiple active
+    tracks against each other -- a different computational shape than the
+    per-detection checks (zone incursion, loitering) that run inline on
+    every update, so this runs as a periodic sweep instead, the same
+    pattern as the retention sweep above.
+    """
+    while True:
+        await asyncio.sleep(BEHAVIOR_SWEEP_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(_run_behavior_sweep)
+        except Exception:
+            logger.exception("Behavior sweep failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     load_zones_from_file()
     logger.info("Drone Multi-Sensor API started")
-    sweep_task = asyncio.create_task(_retention_sweep_loop())
+    retention_task = asyncio.create_task(_retention_sweep_loop())
+    behavior_task = asyncio.create_task(_behavior_sweep_loop())
     try:
         yield
     finally:
-        sweep_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sweep_task
+        for task in (retention_task, behavior_task):
+            task.cancel()
+        for task in (retention_task, behavior_task):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(title="Drone Multi-Sensor", lifespan=lifespan)

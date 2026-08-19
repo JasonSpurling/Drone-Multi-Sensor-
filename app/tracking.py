@@ -43,14 +43,15 @@ from app.db import (
     update_track,
     upsert_kalman_state,
 )
+from app.cot_publisher import publish_track_cot
 from app.fusion import fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
 from app.imm import IMMFilter
-from app.incidents import check_predicted_incursions, check_zone_incidents
-from app.queue_publisher import publish_detection
+from app.incidents import check_loitering_incident, check_predicted_incursions, check_zone_incidents
 from app.kalman import ConstantVelocityKalmanFilter
 from app.models import Classification, Detection, Track, TrackStatus
+from app.queue_publisher import publish_detection
 from app.util import utcnow
 
 logger = logging.getLogger(__name__)
@@ -259,9 +260,11 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     elif track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN:
         track.classification = fused_label
     update_track(track)
+    publish_track_cot(track)
 
     check_zone_incidents(track)
     check_predicted_incursions(track)
+    check_loitering_incident(track)
 
     return persisted
 

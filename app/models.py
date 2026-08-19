@@ -45,6 +45,9 @@ class IncidentType(str, Enum):
     UNAUTHORIZED_FLIGHT = "unauthorized_flight"
     LOSS_OF_TRACK = "loss_of_track"
     SENSOR_FAULT = "sensor_fault"
+    LOITERING = "loitering"
+    FORMATION = "formation"
+    SHADOWING = "shadowing"
     OTHER = "other"
 
 

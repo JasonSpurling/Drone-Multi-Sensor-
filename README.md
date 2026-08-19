@@ -252,6 +252,78 @@ each track contributes at most one detection per batch (don't mix
 multiple sensors' simultaneous reports of the same object into one batch
 call expecting both to land on it -- post each sensor's scan separately).
 
+## Behavioral analysis
+
+"Is it in a zone" was the only question incidents used to ask. `app/behavior.py`
+adds pattern-of-life analysis on the track history this app now records:
+
+- **Loitering** -- checked on every update for a track's own recent history:
+  has it stayed within `DRONE_LOITERING_RADIUS_M` (default 75m) for at
+  least `DRONE_LOITERING_MIN_DURATION_S` (default 120s) -- circling/
+  hovering over one spot rather than transiting through.
+- **Formation** -- checked on a periodic sweep (`DRONE_BEHAVIOR_SWEEP_INTERVAL_SECONDS`,
+  default every 30s) across all active tracks: groups moving together
+  within `DRONE_FORMATION_MAX_SPACING_M` on similar heading/speed
+  (`DRONE_FORMATION_HEADING_TOLERANCE_DEG`/`DRONE_FORMATION_SPEED_TOLERANCE_MPS`)
+  -- the pattern a swarm shows, not a coincidental cluster.
+- **Shadowing** -- also on the periodic sweep: pairs of tracks where one
+  has stayed within `DRONE_SHADOWING_MAX_DISTANCE_M` of the other for at
+  least `DRONE_SHADOWING_MIN_DURATION_S` -- sustained escort, not a brief
+  pass. This works for any two tracks, not literally "a drone following a
+  person" -- this app has no independent person-detection sensor, so it
+  can't verify a shadowed target's identity; it's a general shadowing
+  pattern between whatever two tracks are being compared.
+
+Each opens a `loitering`/`formation`/`shadowing` incident (not tied to any
+zone -- `zone_id` is null) through the same incident pipeline as zone
+incursions: deduplicated, alerted, published to any configured NATS/CoT
+output. Formation and shadowing run on a periodic sweep rather than
+per-detection because they compare *multiple* active tracks against each
+other -- a different computational shape than a per-track check.
+
+## Cursor on Target (CoT) output
+
+Nothing in this app talked to a broader command-and-control picture
+before. `app/cot.py` generates real Cursor on Target XML events -- the
+open format the TAK ecosystem (ATAK/WinTAK/iTAK, FreeTAKServer) uses,
+and not exclusively military: TAK is also used by wildland firefighting,
+search and rescue, and other civil public-safety agencies. Set
+`DRONE_COT_UDP_HOST` to broadcast a CoT event over UDP for every track
+update, feeding this tracker's output into a TAK Server or any
+CoT-consuming client (e.g. ATAK's own UDP CoT input):
+
+```bash
+DRONE_COT_UDP_HOST=192.168.1.100 DRONE_COT_UDP_PORT=6969 .venv/bin/python main.py
+```
+
+Built directly with the standard library rather than taking on `pytak`
+(the standard Python CoT/TAK client) as a runtime dependency for a
+handful of XML attributes -- but the schema (event version/type/uid/how/
+time/start/stale; a point child with lat/lon/hae/ce/le; a detail child
+with a contact callsign) was verified against pytak's actual source
+during development, and its output was cross-checked byte-for-byte
+against what pytak itself generates for the same inputs, not assumed
+from memory.
+
+A track's classification maps to a CoT affiliation -- `friendly`/`aircraft`
+to friendly, `bird` to neutral, `drone`/`unknown` to **unknown, never
+hostile**: declaring hostile is a positive-identification decision an
+operator makes, not something a sensor-fusion pipeline should
+auto-assert. This only sends a CoT event outbound over plain UDP, the
+simplest and most universally supported transport (what ATAK's own
+default UDP input listens for) -- not a full TLS-secured TAK Server
+client (mutual-auth enrollment, packaged data transfer), which a
+deployment with an actual TAK Server would need to add on top of this.
+
+**Link-16 is not implemented, and won't be.** Unlike CoT (an open,
+unclassified, widely-implemented public-safety standard), Link-16 is a
+certified military tactical data link requiring MIDS/JTIDS terminal
+hardware and controlled cryptographic keying -- not something buildable
+or appropriate to build in software without that hardware and the
+authorization to operate it. CoT closes the realistic version of this
+gap; Link-16 is a different kind of thing entirely, not a harder version
+of the same task.
+
 ## Database
 
 SQLite by default -- nothing to configure, works out of the box, and is
@@ -776,6 +848,17 @@ needs to be set to run locally.
 | `DRONE_NATS_INCIDENT_SUBJECT` | `drone.incidents` | NATS subject each opened incident is published to |
 | `DRONE_NATS_CONNECT_TIMEOUT_SECONDS` | `2` | Connect/send timeout for the NATS publisher |
 | `DRONE_FAA_NOTAM_CLIENT_ID` / `_CLIENT_SECRET` | *(unset)* | api.faa.gov developer credentials for `app/adapters/faa_notam_check.py` |
+| `DRONE_LOITERING_RADIUS_M` | `75` | Max spread for a track to count as loitering |
+| `DRONE_LOITERING_MIN_DURATION_S` | `120` | Min sustained duration to flag loitering |
+| `DRONE_SHADOWING_MAX_DISTANCE_M` | `30` | Max distance between two tracks to count as shadowing |
+| `DRONE_SHADOWING_MIN_DURATION_S` | `60` | Min sustained duration to flag shadowing |
+| `DRONE_FORMATION_MAX_SPACING_M` | `100` | Max spacing between tracks to count as one formation |
+| `DRONE_FORMATION_HEADING_TOLERANCE_DEG` | `15` | Max heading difference to count as moving together |
+| `DRONE_FORMATION_SPEED_TOLERANCE_MPS` | `2` | Max speed difference to count as moving together |
+| `DRONE_BEHAVIOR_SWEEP_INTERVAL_SECONDS` | `30` | How often the formation/shadowing cross-track sweep runs |
+| `DRONE_COT_UDP_HOST` | *(unset)* | TAK endpoint host to broadcast CoT events to; unset disables it |
+| `DRONE_COT_UDP_PORT` | `6969` | TAK endpoint UDP port |
+| `DRONE_COT_STALE_SECONDS` | `60` | How long a CoT event is valid before a TAK client greys it out |
 | `DRONE_FUSION_HISTORY_LIMIT` | `50` | Max recent detections per track fed into classification fusion |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |

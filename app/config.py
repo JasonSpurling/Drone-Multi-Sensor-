@@ -92,6 +92,17 @@ NATS_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DRONE_NATS_CONNECT_TIMEOUT_SECON
 NATS_DETECTION_SUBJECT = os.getenv("DRONE_NATS_DETECTION_SUBJECT", "drone.detections")
 NATS_INCIDENT_SUBJECT = os.getenv("DRONE_NATS_INCIDENT_SUBJECT", "drone.incidents")
 
+# Optional Cursor on Target (CoT) fan-out (app/cot_publisher.py): sends a
+# CoT event over UDP for every track update to a TAK Server or any
+# CoT-consuming client (e.g. ATAK's own UDP CoT input), feeding this
+# tracker's output into a broader TAK common-operating-picture. Unset
+# (default) disables it entirely. Port 6969 is a commonly used ATAK UDP
+# CoT default in public examples, not a single IANA-assigned standard --
+# verify against your own TAK endpoint's actual configured input.
+COT_UDP_HOST = os.getenv("DRONE_COT_UDP_HOST", "")
+COT_UDP_PORT = int(os.getenv("DRONE_COT_UDP_PORT", "6969"))
+COT_STALE_SECONDS = float(os.getenv("DRONE_COT_STALE_SECONDS", "60"))
+
 # FAA NOTAM API credentials (app/airspace/faa_notam.py), free but requires
 # registration at api.faa.gov -- unset (default) means the NOTAM CLI needs
 # them passed explicitly instead. See that module's docstring for the
@@ -149,6 +160,20 @@ TRACK_GATE_CHI2 = float(os.getenv("DRONE_TRACK_GATE_CHI2", "9.21"))
 # How far ahead (seconds) a track's velocity is projected to check for an
 # upcoming restricted-zone entry that hasn't happened yet.
 PREDICTIVE_HORIZON_SECONDS = float(os.getenv("DRONE_PREDICTIVE_HORIZON_SECONDS", "30"))
+
+# Behavioral pattern-of-life analysis (app/behavior.py) -- loitering is
+# checked per-track on every update; formation/shadowing compare multiple
+# active tracks against each other on a periodic background sweep (see
+# BEHAVIOR_SWEEP_INTERVAL_SECONDS) since that's a different computational
+# shape than a per-detection check.
+LOITERING_RADIUS_M = float(os.getenv("DRONE_LOITERING_RADIUS_M", "75"))
+LOITERING_MIN_DURATION_S = float(os.getenv("DRONE_LOITERING_MIN_DURATION_S", "120"))
+SHADOWING_MAX_DISTANCE_M = float(os.getenv("DRONE_SHADOWING_MAX_DISTANCE_M", "30"))
+SHADOWING_MIN_DURATION_S = float(os.getenv("DRONE_SHADOWING_MIN_DURATION_S", "60"))
+FORMATION_MAX_SPACING_M = float(os.getenv("DRONE_FORMATION_MAX_SPACING_M", "100"))
+FORMATION_HEADING_TOLERANCE_DEG = float(os.getenv("DRONE_FORMATION_HEADING_TOLERANCE_DEG", "15"))
+FORMATION_SPEED_TOLERANCE_MPS = float(os.getenv("DRONE_FORMATION_SPEED_TOLERANCE_MPS", "2"))
+BEHAVIOR_SWEEP_INTERVAL_SECONDS = float(os.getenv("DRONE_BEHAVIOR_SWEEP_INTERVAL_SECONDS", "30"))
 
 # How many of a track's most recent detections feed classification fusion
 # (app/fusion.py). Bounds the cost of fusing a long-lived track's history
