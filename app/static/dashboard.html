@@ -6,26 +6,29 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
-    --bg: #0f1420;
-    --panel: #161d2e;
-    --border: #263049;
+    --bg: #0b1120;
+    --panel: #1e293b;
+    --panel-2: #182234;
+    --border: #2b3648;
     --text: #e6e9f0;
     --muted: #8b93a7;
-    --active: #2e9e4f;
+    --active: #22c55e;
     --lost: #d99b1f;
     --closed: #6b7280;
-    --drone: #e5484d;
+    --drone: #ef4444;
     --aircraft: #3b82f6;
-    --bird: #34a853;
+    --bird: #22c55e;
     --friendly: #14b8b0;
     --unknown: #8b93a7;
     --critical: #b91c1c;
-    --high: #e5484d;
+    --high: #ef4444;
     --medium: #d99b1f;
     --low: #6b7280;
-    --online: #2e9e4f;
+    --online: #22c55e;
     --stale: #d99b1f;
     --offline: #6b7280;
+    --accent: #2563eb;
+    --zone: #f59e0b;
   }
   * { box-sizing: border-box; }
   body {
@@ -36,17 +39,42 @@
     font-size: 14px;
   }
   header {
-    padding: 14px 20px;
+    padding: 12px 20px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .header-left { display: flex; align-items: center; gap: 14px; }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--active); box-shadow: 0 0 0 rgba(34,197,94,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
+    70% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+  }
   #status-line { color: var(--muted); font-size: 12px; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .filter-chip {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; user-select: none;
+  }
+  .filter-chip:hover { color: var(--text); border-color: #3a4763; }
+  .filter-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #search-input {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 5px 12px; font-size: 12px; width: 150px;
+  }
+  #search-input:focus { outline: none; border-color: var(--accent); }
   main {
     display: grid;
-    grid-template-columns: 1.6fr 1fr;
+    grid-template-columns: 1.7fr 1fr;
     grid-template-rows: auto auto auto;
     gap: 14px;
     padding: 14px 20px;
@@ -54,38 +82,51 @@
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 12px 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.02) inset;
   }
   .panel h2 {
-    font-size: 13px;
+    font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     color: var(--muted);
     margin: 0 0 10px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
+  .panel h2 .count { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
   tbody tr { cursor: pointer; }
-  tbody tr:hover { background: #1d2740; }
-  tbody tr.selected { background: #22304f; }
+  tbody tr:hover { background: #24314a; }
+  tbody tr.selected { background: #1d3a5f; box-shadow: inset 3px 0 0 var(--accent); }
   .badge {
-    display: inline-block;
-    padding: 2px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
     border-radius: 10px;
     font-size: 11px;
-    font-weight: 600;
-    color: #0f1420;
+    font-weight: 700;
+    color: #0b1120;
+  }
+  .badge-outline {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 9px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    border: 1px solid currentColor;
   }
   .dot {
     display: inline-block;
-    width: 9px;
-    height: 9px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     margin-right: 6px;
     vertical-align: middle;
   }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
   /* Map leads: it's the primary situational-awareness surface, so it
      spans both rows on the wide left column instead of competing for
      space with the data panels. Alerts sit underneath it (alerts are
@@ -93,30 +134,57 @@
      Tracks, Selected Track, and Sensor Health form the operator's data
      column on the right, in the order you'd actually use them: pick a
      track, read its details, check sensor health. */
-  #map-wrap { grid-column: 1; grid-row: 1 / span 2; }
+  #map-wrap { grid-column: 1; grid-row: 1 / span 2; padding: 0; overflow: hidden; }
+  #map-wrap h2 { padding: 12px 14px 0 14px; margin-bottom: 8px; }
   #alerts-wrap { grid-column: 1; grid-row: 3; }
   #tracks-wrap { grid-column: 2; grid-row: 1; }
   #details-wrap { grid-column: 2; grid-row: 2; }
   #sensors-wrap { grid-column: 2; grid-row: 3; }
-  #map { width: 100%; height: 560px; border-radius: 6px; overflow: hidden; background: #0b0f19; }
+  #map { width: 100%; height: 620px; background: #0b0f19; }
+  #map-legend {
+    position: absolute; z-index: 500; bottom: 10px; left: 10px;
+    background: rgba(15,20,32,0.85); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; color: var(--muted); backdrop-filter: blur(4px);
+  }
+  #map-legend .item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  #map-layer-toggles {
+    position: absolute; z-index: 500; top: 10px; left: 10px;
+    background: rgba(15,20,32,0.85); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 11px; color: var(--muted); backdrop-filter: blur(4px);
+    display: flex; gap: 12px;
+  }
+  #map-layer-toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .map-container { position: relative; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
-  .leaflet-container { font-family: inherit; }
+  .leaflet-container { font-family: inherit; background: #0b0f19; }
   .leaflet-control-layers {
     background: var(--panel); color: var(--text); border: 1px solid var(--border);
   }
   .leaflet-control-layers-toggle { filter: invert(1) hue-rotate(180deg); }
   .leaflet-control-layers-separator { border-color: var(--border); }
+  .track-tooltip {
+    background: rgba(15,20,32,0.92) !important; border: 1px solid var(--border) !important;
+    color: var(--text) !important; font-size: 11px !important; padding: 4px 8px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+  }
+  .track-tooltip::before { display: none !important; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
+  .empty-ok { color: var(--muted); padding: 14px 0; display: flex; align-items: center; gap: 8px; }
+  .empty-ok .check { color: var(--active); font-size: 16px; }
   .alert-item {
     border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
     border-radius: 6px;
     padding: 8px 10px;
     margin-bottom: 8px;
   }
+  .alert-item.sev-critical, .alert-item.sev-high { border-left-color: var(--high); }
+  .alert-item.sev-medium { border-left-color: var(--medium); }
+  .alert-item.sev-low { border-left-color: var(--low); }
   .alert-item .top-row { display: flex; justify-content: space-between; align-items: center; }
   .alert-item .desc { color: var(--muted); margin: 6px 0; }
   button {
-    background: #2563eb;
+    background: var(--accent);
     color: white;
     border: none;
     border-radius: 5px;
@@ -126,8 +194,18 @@
   }
   button:hover { background: #1d4ed8; }
   button:disabled { background: var(--border); color: var(--muted); cursor: default; }
-  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; }
-  .kv .k { color: var(--muted); }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+  button.secondary:hover { background: #24314a; }
+  button.secondary.active { background: var(--accent); border-color: var(--accent); }
+  .detail-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+  }
+  .detail-header .title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+  .detail-actions { display: flex; gap: 6px; }
+  .kv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; align-content: start; }
+  .kv .k { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .kv .v { font-size: 13px; }
   .kv-section + .kv-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
   .kv-section-title {
     font-size: 11px;
@@ -136,13 +214,24 @@
     color: var(--muted);
     margin: 0 0 8px 0;
   }
+  .meter { background: var(--panel-2); border-radius: 999px; height: 6px; overflow: hidden; margin-top: 4px; }
+  .meter-fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
+  .sparkline-wrap { margin-top: 4px; }
+  .heading-arrow { display: inline-block; font-size: 14px; }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Drone Multi-Sensor Dashboard</h1>
-  <div id="status-line">loading…</div>
+  <div class="header-left">
+    <h1>Drone Multi-Sensor Dashboard</h1>
+    <span class="live-dot" title="Live"></span>
+    <div id="status-line">loading…</div>
+  </div>
+  <div class="header-right">
+    <input id="search-input" type="text" placeholder="Search ID or UID…">
+    <div id="class-filters"></div>
+  </div>
 </header>
 
 <div id="auth-bar" style="display:none; padding:10px 20px; background:#2a1620; border-bottom:1px solid var(--border); gap:8px; align-items:center;">
@@ -152,24 +241,38 @@
 </div>
 
 <main>
-  <section class="panel" id="tracks-wrap">
-    <h2>Live Tracks</h2>
-    <div id="tracks-table"></div>
-  </section>
-
-  <section class="panel" id="alerts-wrap">
-    <h2>Active Alerts</h2>
-    <div id="alerts-list"></div>
-  </section>
-
   <section class="panel" id="map-wrap">
     <h2>Map</h2>
-    <div id="map"></div>
+    <div class="map-container">
+      <div id="map"></div>
+      <div id="map-layer-toggles">
+        <label><input type="checkbox" id="toggle-trail" checked> Trail</label>
+        <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
+      </div>
+      <div id="map-legend">
+        <div class="item"><span class="dot" style="background:var(--drone)"></span>Drone</div>
+        <div class="item"><span class="dot" style="background:var(--aircraft)"></span>Aircraft</div>
+        <div class="item"><span class="dot" style="background:var(--bird)"></span>Bird</div>
+        <div class="item"><span class="dot" style="background:var(--friendly)"></span>Friendly</div>
+        <div class="item"><span class="dot" style="background:var(--unknown)"></span>Unknown</div>
+        <div class="item"><span class="dot" style="background:var(--zone); opacity:0.6;"></span>Restricted zone</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="tracks-wrap">
+    <h2>Live Tracks <span class="count" id="tracks-count"></span></h2>
+    <div id="tracks-table"></div>
   </section>
 
   <section class="panel" id="details-wrap">
     <h2>Selected Track</h2>
     <div id="track-details"></div>
+  </section>
+
+  <section class="panel" id="alerts-wrap">
+    <h2>Active Alerts <span class="count" id="alerts-count"></span></h2>
+    <div id="alerts-list"></div>
   </section>
 
   <section class="panel" id="sensors-wrap">
@@ -182,16 +285,27 @@
 <script>
 const POLL_MS = 3000;
 
-const state = { tracks: [], incidents: [], zones: [], sensors: [], selectedTrackId: null, trail: [] };
+const state = {
+  tracks: [], incidents: [], zones: [], sensors: [],
+  selectedTrackId: null, trail: [], classFilter: "all", search: "",
+  follow: false, showTrail: true, showUncertainty: true,
+};
 let apiKey = localStorage.getItem("droneApiKey") || "";
 
 const CLASS_COLOR = {
   drone: "var(--drone)", aircraft: "var(--aircraft)", bird: "var(--bird)",
   friendly: "var(--friendly)", unknown: "var(--unknown)",
 };
+// Leaflet needs real hex/rgb values in inline SVG -- CSS custom properties
+// don't resolve inside a divIcon's raw HTML string.
+const CLASS_COLOR_HEX = {
+  drone: "#ef4444", aircraft: "#3b82f6", bird: "#22c55e",
+  friendly: "#14b8b0", unknown: "#8b93a7",
+};
 const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
 const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
+const CLASS_LABELS = ["all", "drone", "aircraft", "bird"];
 
 class AuthError extends Error {}
 
@@ -212,6 +326,22 @@ function fmtTime(iso) {
   return new Date(iso + (iso.endsWith("Z") ? "" : "Z")).toLocaleTimeString();
 }
 
+// Relative "13s ago" / "5m ago" style formatting -- easier to scan at a
+// glance than an absolute clock time, especially for "is this feed still
+// alive" questions.
+function fmtRelative(iso) {
+  if (!iso) return "—";
+  const then = new Date(iso + (iso.endsWith("Z") ? "" : "Z")).getTime();
+  const diffS = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (diffS < 5) return "just now";
+  if (diffS < 60) return `${diffS}s ago`;
+  const diffM = Math.round(diffS / 60);
+  if (diffM < 60) return `${diffM}m ago`;
+  const diffH = Math.round(diffM / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.round(diffH / 24)}d ago`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -225,12 +355,31 @@ function badge(text, color) {
   return `<span class="badge" style="background:${color}">${escapeHtml(text)}</span>`;
 }
 
+function badgeOutline(text, color) {
+  return `<span class="badge-outline" style="color:${color}">${escapeHtml(text)}</span>`;
+}
+
+function headingArrow(headingDeg) {
+  if (headingDeg == null) return "";
+  return `<span class="heading-arrow" style="display:inline-block;transform:rotate(${headingDeg}deg)">&#8593;</span>`;
+}
+
+function visibleTracks() {
+  const search = state.search.trim().toLowerCase();
+  return state.tracks.filter((t) => {
+    if (state.classFilter !== "all" && t.classification !== state.classFilter) return false;
+    if (!search) return true;
+    return String(t.id).includes(search) || t.track_uid.toLowerCase().includes(search);
+  });
+}
+
 async function selectTrack(id) {
   state.selectedTrackId = id;
   state.trail = [];
   renderTracks();
   renderMap();
   renderDetails();
+  flyToTrack(id, { animate: true });
 
   try {
     const history = await fetchJSON(`/api/tracks/${id}/history?limit=2000`);
@@ -245,6 +394,17 @@ async function selectTrack(id) {
   }
 }
 
+function flyToTrack(id, opts) {
+  const track = state.tracks.find((t) => t.id === id);
+  if (!track || track.latitude == null || !leafletMap) return;
+  const zoom = Math.max(leafletMap.getZoom(), 13);
+  if (opts && opts.animate) {
+    leafletMap.flyTo([track.latitude, track.longitude], zoom, { duration: 0.6 });
+  } else {
+    leafletMap.panTo([track.latitude, track.longitude], { animate: true, duration: 0.4 });
+  }
+}
+
 async function acknowledge(id) {
   try {
     await fetchJSON(`/api/incidents/${id}/acknowledge`, { method: "POST" });
@@ -255,29 +415,52 @@ async function acknowledge(id) {
   }
 }
 
+function renderClassFilters() {
+  const el = document.getElementById("class-filters");
+  el.innerHTML = CLASS_LABELS.map((c) => {
+    const activeClass = state.classFilter === c ? "active" : "";
+    const label = c === "all" ? "All" : c.charAt(0).toUpperCase() + c.slice(1);
+    return `<span class="filter-chip ${activeClass}" data-class="${c}" style="margin-left:6px;">${label}</span>`;
+  }).join("");
+  el.querySelectorAll(".filter-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      state.classFilter = chip.dataset.class;
+      renderClassFilters();
+      renderTracks();
+      renderMap();
+    });
+  });
+}
+
 function renderTracks() {
   const el = document.getElementById("tracks-table");
-  if (state.tracks.length === 0) {
-    el.innerHTML = '<div class="empty">No tracks yet.</div>';
+  const tracks = visibleTracks();
+  document.getElementById("tracks-count").textContent = `${tracks.length}/${state.tracks.length}`;
+  if (tracks.length === 0) {
+    el.innerHTML = '<div class="empty">No tracks match.</div>';
     return;
   }
-  const rows = state.tracks
+  const rows = tracks
     .slice()
     .sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1))
     .map((t) => {
       const sel = t.id === state.selectedTrackId ? "selected" : "";
       const pos = t.latitude != null ? `${t.latitude.toFixed(4)}, ${t.longitude.toFixed(4)}` : "—";
-      return `<tr class="${sel}" data-id="${t.id}">
+      const title = [
+        t.altitude_m != null ? `alt ${Math.round(t.altitude_m)}m` : null,
+        t.speed_mps != null ? `${t.speed_mps.toFixed(1)} m/s` : null,
+      ].filter(Boolean).join(" · ");
+      return `<tr class="${sel}" data-id="${t.id}" title="${escapeHtml(title)}">
         <td>${t.id}</td>
         <td>${badge(t.classification, CLASS_COLOR[t.classification] || CLASS_COLOR.unknown)}</td>
-        <td>${badge(t.status, STATUS_COLOR[t.status] || STATUS_COLOR.closed)}</td>
+        <td><span class="status-dot" style="background:${STATUS_COLOR[t.status] || STATUS_COLOR.closed}"></span> ${escapeHtml(t.status)}</td>
         <td>${pos}</td>
-        <td>${fmtTime(t.last_seen)}</td>
+        <td>${fmtRelative(t.last_seen)}</td>
       </tr>`;
     })
     .join("");
   el.innerHTML = `<table>
-    <thead><tr><th>ID</th><th>Class</th><th>Status</th><th>Position</th><th>Last seen</th></tr></thead>
+    <thead><tr><th>ID</th><th>Class</th><th>Status</th><th>Position</th><th>Seen</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
   el.querySelectorAll("tbody tr").forEach((tr) => {
@@ -288,8 +471,9 @@ function renderTracks() {
 function renderAlerts() {
   const el = document.getElementById("alerts-list");
   const active = state.incidents.filter((i) => i.status !== "resolved");
+  document.getElementById("alerts-count").textContent = active.length ? String(active.length) : "";
   if (active.length === 0) {
-    el.innerHTML = '<div class="empty">No active alerts.</div>';
+    el.innerHTML = '<div class="empty-ok"><span class="check">&#10003;</span> No active alerts — all systems nominal.</div>';
     return;
   }
   const zoneName = (id) => state.zones.find((z) => z.id === id)?.name ?? `zone ${id}`;
@@ -297,13 +481,13 @@ function renderAlerts() {
     .slice()
     .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1))
     .map((i) => `
-      <div class="alert-item">
+      <div class="alert-item sev-${i.severity}">
         <div class="top-row">
           ${badge(i.severity, SEVERITY_COLOR[i.severity] || SEVERITY_COLOR.low)}
-          ${badge(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
+          ${badgeOutline(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
         </div>
         <div class="desc">${escapeHtml(i.description || i.incident_type)}${i.zone_id ? " · " + escapeHtml(zoneName(i.zone_id)) : ""}</div>
-        <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtTime(i.opened_at)}</div>
+        <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtRelative(i.opened_at)}</div>
         ${i.status === "open" ? `<div style="margin-top:6px;"><button data-id="${i.id}">Acknowledge</button></div>` : ""}
       </div>
     `)
@@ -313,45 +497,104 @@ function renderAlerts() {
   });
 }
 
+// A small inline SVG sparkline of the selected track's trail -- lat/lon
+// normalized into a fixed viewBox, not a geographically accurate map, just
+// a quick "what shape has this flight taken" preview inside the details
+// panel without needing a second full map widget.
+function trailSparkline(trail) {
+  if (trail.length < 2) return "";
+  const lats = trail.map((p) => p[0]);
+  const lons = trail.map((p) => p[1]);
+  const latRange = Math.max(Math.max(...lats) - Math.min(...lats), 1e-6);
+  const lonRange = Math.max(Math.max(...lons) - Math.min(...lons), 1e-6);
+  const w = 220, h = 60, pad = 6;
+  const points = trail.map(([lat, lon]) => {
+    const x = pad + ((lon - Math.min(...lons)) / lonRange) * (w - 2 * pad);
+    const y = h - pad - ((lat - Math.min(...lats)) / latRange) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = points[points.length - 1].split(",");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;">
+    <polyline points="${points.join(" ")}" fill="none" stroke="#8b93a7" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.8"/>
+    <circle cx="${last[0]}" cy="${last[1]}" r="3" fill="#fff"/>
+  </svg>`;
+}
+
 function renderDetails() {
   const el = document.getElementById("track-details");
   const track = state.tracks.find((t) => t.id === state.selectedTrackId);
   if (!track) {
-    el.innerHTML = '<div class="empty">Click a track to see details.</div>';
+    el.innerHTML = '<div class="empty">Click a track (or a map marker) to see details.</div>';
     return;
   }
   const related = state.incidents.filter((i) => i.track_id === track.id);
+  const maneuverPct = track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) : null;
+  const meterColor = maneuverPct == null ? "var(--border)" : maneuverPct < 33 ? "var(--active)" : maneuverPct < 66 ? "var(--medium)" : "var(--high)";
+
   el.innerHTML = `
+    <div class="detail-header">
+      <div class="title">
+        ${badge(track.classification, CLASS_COLOR[track.classification])}
+        <span>Track ${track.id}</span>
+        <span class="status-dot" style="background:${STATUS_COLOR[track.status]}"></span>
+        <span style="color:var(--muted); font-size:12px; font-weight:400;">${escapeHtml(track.status)}</span>
+      </div>
+      <div class="detail-actions">
+        <button class="secondary" id="focus-btn">Focus</button>
+        <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn">${state.follow ? "Following" : "Follow"}</button>
+      </div>
+    </div>
+
     <div class="kv-section">
       <div class="kv-section-title">Identity</div>
-      <div class="kv">
-        <div class="k">ID</div><div>${track.id}</div>
-        <div class="k">UID</div><div>${escapeHtml(track.track_uid)}</div>
-        <div class="k">Status</div><div>${badge(track.status, STATUS_COLOR[track.status])}</div>
-        <div class="k">Classification</div><div>${badge(track.classification, CLASS_COLOR[track.classification])}</div>
-        <div class="k">First seen</div><div>${fmtTime(track.first_seen)}</div>
-        <div class="k">Last seen</div><div>${fmtTime(track.last_seen)}</div>
+      <div class="kv-cols">
+        <div class="kv">
+          <div class="k">UID</div><div class="v">${escapeHtml(track.track_uid.slice(0, 13))}…</div>
+          <div class="k">First seen</div><div class="v">${fmtRelative(track.first_seen)}</div>
+        </div>
+        <div class="kv">
+          <div class="k">Last seen</div><div class="v">${fmtRelative(track.last_seen)}</div>
+          <div class="k">Incidents</div><div class="v">${related.length}</div>
+        </div>
       </div>
     </div>
+
     <div class="kv-section">
       <div class="kv-section-title">Position &amp; motion</div>
-      <div class="kv">
-        <div class="k">Position</div><div>${track.latitude != null ? `${track.latitude}, ${track.longitude}` : "—"}</div>
-        <div class="k">Altitude</div><div>${track.altitude_m != null ? track.altitude_m + " m" : "—"}</div>
-        <div class="k">Heading</div><div>${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "—"}</div>
-        <div class="k">Speed</div><div>${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
+      <div class="kv-cols">
+        <div class="kv">
+          <div class="k">Position</div><div class="v">${track.latitude != null ? `${track.latitude.toFixed(5)}, ${track.longitude.toFixed(5)}` : "—"}</div>
+          <div class="k">Altitude</div><div class="v">${track.altitude_m != null ? Math.round(track.altitude_m) + " m" : "—"}</div>
+        </div>
+        <div class="kv">
+          <div class="k">Heading</div><div class="v">${track.heading_deg != null ? headingArrow(track.heading_deg) + " " + Math.round(track.heading_deg) + "°" : "—"}</div>
+          <div class="k">Speed</div><div class="v">${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
+        </div>
       </div>
     </div>
+
     <div class="kv-section">
       <div class="kv-section-title">Track quality</div>
       <div class="kv">
-        <div class="k">Position uncertainty</div><div>${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
-        <div class="k">Maneuvering</div><div>${track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) + "%" : "—"}</div>
-        <div class="k">Incidents</div><div>${related.length}</div>
-        <div class="k">Trail</div><div>${state.trail.length ? `${state.trail.length} points (dashed on map)` : "loading…"}</div>
+        <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
+        <div class="k">Maneuvering</div>
+        <div class="v">
+          ${maneuverPct != null ? maneuverPct + "%" : "—"}
+          <div class="meter"><div class="meter-fill" style="width:${maneuverPct ?? 0}%; background:${meterColor}"></div></div>
+        </div>
+      </div>
+      <div class="sparkline-wrap">
+        ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
       </div>
     </div>
   `;
+
+  document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
+  document.getElementById("follow-btn").addEventListener("click", () => {
+    state.follow = !state.follow;
+    if (state.follow) flyToTrack(track.id, { animate: true });
+    renderDetails();
+  });
 }
 
 let leafletMap = null;
@@ -405,6 +648,39 @@ function initMap() {
 
   zoneLayer = L.layerGroup().addTo(leafletMap);
   trackLayer = L.layerGroup().addTo(leafletMap);
+
+  document.getElementById("toggle-trail").addEventListener("change", (e) => {
+    state.showTrail = e.target.checked;
+    renderMap();
+  });
+  document.getElementById("toggle-uncertainty").addEventListener("change", (e) => {
+    state.showUncertainty = e.target.checked;
+    renderMap();
+  });
+}
+
+// A distinct shape per classification (not just color) so markers are
+// tellable apart at a glance even for a viewer with red/green color
+// vision deficiency, plus a heading arrow overlay for the selected track.
+function markerIcon(track, selected) {
+  const color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
+  const size = selected ? 24 : 16;
+  const half = size / 2;
+  const stroke = selected ? '#fff' : 'rgba(255,255,255,0.35)';
+  const strokeWidth = selected ? 2 : 1;
+  let shape;
+  if (track.classification === "aircraft") {
+    shape = `<polygon points="${half},1 ${size - 1},${size - 1} ${half},${size - 5} 1,${size - 1}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  } else if (track.classification === "bird") {
+    shape = `<circle cx="${half}" cy="${half}" r="${half - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  } else {
+    shape = `<circle cx="${half}" cy="${half}" r="${half - 2}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  }
+  const rotation = track.heading_deg != null ? `transform:rotate(${track.heading_deg}deg);` : "";
+  const html = `<div style="width:${size}px;height:${size}px;${rotation}">
+    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${shape}</svg>
+  </div>`;
+  return L.divIcon({ html, className: "", iconSize: [size, size], iconAnchor: [half, half] });
 }
 
 function renderMap() {
@@ -412,36 +688,56 @@ function renderMap() {
   trackLayer.clearLayers();
 
   state.zones.forEach((z) => {
+    // Amber, deliberately distinct from any classification color -- a
+    // zone outline reusing the drone-classification red made a restricted
+    // zone visually indistinguishable from an actual drone marker/
+    // uncertainty ring at a glance, especially once the map got bigger.
     L.polygon(z.polygon, {
-      color: "var(--drone)",
-      weight: 1,
-      fillColor: "var(--drone)",
-      fillOpacity: 0.12,
+      color: "#f59e0b",
+      weight: 1.5,
+      fillColor: "#f59e0b",
+      fillOpacity: 0.08,
     })
       .bindPopup(escapeHtml(z.name))
       .addTo(zoneLayer);
   });
 
-  if (state.trail.length > 1) {
-    L.polyline(state.trail, { color: "#fff", weight: 2, opacity: 0.6, dashArray: "4 4" }).addTo(trackLayer);
+  if (state.showTrail && state.trail.length > 1) {
+    L.polyline(state.trail, { color: "#fff", weight: 2, opacity: 0.7, dashArray: "4 4" }).addTo(trackLayer);
   }
 
-  const pts = state.tracks.filter((t) => t.latitude != null && t.longitude != null);
+  const pts = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
   pts.forEach((t) => {
     const selected = t.id === state.selectedTrackId;
-    L.circleMarker([t.latitude, t.longitude], {
-      radius: selected ? 8 : 6,
-      color: selected ? "#fff" : "transparent",
-      weight: 2,
-      fillColor: CLASS_COLOR[t.classification] || CLASS_COLOR.unknown,
-      fillOpacity: 1,
-    })
-      .bindPopup(`Track ${t.id} &middot; ${escapeHtml(t.classification)}`)
+
+    if (selected && state.showUncertainty && t.position_uncertainty_m) {
+      L.circle([t.latitude, t.longitude], {
+        radius: t.position_uncertainty_m,
+        color: CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown,
+        weight: 1,
+        fillColor: CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown,
+        fillOpacity: 0.08,
+        dashArray: "3 4",
+      }).addTo(trackLayer);
+    }
+
+    const marker = L.marker([t.latitude, t.longitude], { icon: markerIcon(t, selected) })
       .on("click", () => selectTrack(t.id))
       .addTo(trackLayer);
+
+    const labelParts = [`#${t.id}`, t.classification];
+    if (t.speed_mps != null) labelParts.push(`${t.speed_mps.toFixed(1)} m/s`);
+    const label = labelParts.join(" · ");
+    if (selected) {
+      marker.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip" });
+    } else {
+      marker.bindTooltip(label, { direction: "top", offset: [0, -10], className: "track-tooltip" });
+    }
   });
 
-  if (!mapFitted) {
+  if (state.follow && state.selectedTrackId != null) {
+    flyToTrack(state.selectedTrackId, { animate: false });
+  } else if (!mapFitted) {
     const allPts = [...pts.map((t) => [t.latitude, t.longitude]), ...state.zones.flatMap((z) => z.polygon)];
     if (allPts.length > 0) {
       leafletMap.fitBounds(allPts, { padding: [20, 20], maxZoom: 15 });
@@ -460,12 +756,12 @@ function renderSensors() {
     .map((s) => `<tr>
         <td>${escapeHtml(s.sensor_id)}</td>
         <td>${escapeHtml(s.sensor_type)}</td>
-        <td>${badge(s.status, SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline)}</td>
-        <td>${fmtTime(s.last_seen)}</td>
+        <td><span class="status-dot" style="background:${SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline}"></span> ${escapeHtml(s.status)}</td>
+        <td>${fmtRelative(s.last_seen)}</td>
       </tr>`)
     .join("");
   el.innerHTML = `<table>
-    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Last seen</th></tr></thead>
+    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Seen</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -510,7 +806,23 @@ document.getElementById("auth-save").addEventListener("click", () => {
 document.getElementById("auth-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("auth-save").click();
 });
+document.getElementById("search-input").addEventListener("input", (e) => {
+  state.search = e.target.value;
+  renderTracks();
+  renderMap();
+});
+// Number-key shortcuts to jump straight to a track by its position in the
+// currently-visible (filtered) table, without needing to click first.
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const n = Number(e.key);
+  if (n >= 1 && n <= 9) {
+    const tracks = visibleTracks().slice().sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
+    if (tracks[n - 1]) selectTrack(tracks[n - 1].id);
+  }
+});
 
+renderClassFilters();
 initMap();
 refresh();
 setInterval(refresh, POLL_MS);
