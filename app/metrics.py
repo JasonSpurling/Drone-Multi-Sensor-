@@ -17,3 +17,8 @@ incidents_opened_total = Counter(
 rate_limited_total = Counter(
     "drone_rate_limited_total", "Total detections rejected by the rate limiter", ["sensor_id"]
 )
+clock_skew_rejected_total = Counter(
+    "drone_clock_skew_rejected_total",
+    "Total detections rejected for a timestamp too far from the server's own clock",
+    ["sensor_id"],
+)

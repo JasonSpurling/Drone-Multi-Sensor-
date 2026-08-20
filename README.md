@@ -837,6 +837,19 @@ can't set it to fake a position out of the signature's scope.
   an in-memory token bucket (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) --
   a backstop against a malfunctioning or malicious sensor, not a normal-load
   limit. Returns 429 when exceeded.
+- **Clock-skew sanity check**: a detection whose (client-supplied)
+  `timestamp` is more than `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS`
+  (default 300s) from the server's own clock, in either direction, is
+  rejected with 400 -- not every cheap radar/RF sensor in a multi-sensor
+  deployment is NTP-synced, and an undetected skew doesn't just misdraw a
+  timestamp: `app.tracking`'s Kalman predict step uses the gap between a
+  detection's timestamp and its track's last update as `dt`, so a sensor
+  whose clock has drifted far ahead would inflate that gap hugely,
+  ballooning the predicted position's uncertainty on every detection from
+  that sensor. This endpoint assumes near-real-time ingestion, not
+  historical backfill/replay of old recordings -- for that, load directly
+  into the database or use a separate archival path, not `POST
+  /api/detections`.
 - **Retention**: set `DRONE_DETECTION_RETENTION_DAYS` to periodically purge
   detections older than that many days (a background task sweeps every
   `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS`, disabled by default -- keeps
@@ -979,6 +992,7 @@ needs to be set to run locally.
 | `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role: `ingest`, `viewer`, `operator`, or `admin` |
 | `DRONE_RATE_LIMIT_PER_SECOND` | `50` | Per-sensor detection ingest rate limit |
 | `DRONE_RATE_LIMIT_BURST` | `100` | Per-sensor token-bucket burst capacity |
+| `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS` | `300` | Reject a detection whose timestamp is further than this from the server's clock |
 | `DRONE_DETECTION_RETENTION_DAYS` | `0` (disabled) | Purge detections older than this many days |
 | `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | How often the retention purge runs |
 | `DRONE_WEBHOOK_URLS` | *(unset)* | Comma-separated URLs POSTed with each incident's JSON when it opens |

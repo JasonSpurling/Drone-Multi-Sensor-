@@ -47,6 +47,20 @@ API_KEYS_JSON = os.getenv("DRONE_API_KEYS", "")
 RATE_LIMIT_PER_SECOND = float(os.getenv("DRONE_RATE_LIMIT_PER_SECOND", "50"))
 RATE_LIMIT_BURST = float(os.getenv("DRONE_RATE_LIMIT_BURST", "100"))
 
+# A detection whose (client-supplied) timestamp is further than this from
+# the server's own clock, in either direction, is rejected rather than fed
+# into tracking -- a real risk in a multi-sensor deployment where each
+# sensor keeps its own clock (not every cheap radar/RF rig is NTP-synced).
+# An undetected skew doesn't just misdraw a timestamp: app.tracking's
+# Kalman predict step uses the gap between a detection's timestamp and the
+# track's last update as its dt, so a sensor whose clock has drifted far
+# ahead would inflate that dt hugely, ballooning the predicted position's
+# uncertainty (and, at the extreme, whatever numerical issues an
+# arbitrarily large dt causes in the filter's process-noise math) on every
+# detection from that sensor. Generous default -- real-world sensors can
+# legitimately lag by several seconds under load without being "broken".
+MAX_DETECTION_CLOCK_SKEW_SECONDS = float(os.getenv("DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS", "300"))
+
 # Detections older than this are purged by a periodic background task.
 # 0 (or unset) disables purging -- keep everything forever, the previous
 # behavior.

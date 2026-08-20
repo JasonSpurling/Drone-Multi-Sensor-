@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import ROLE_ADMIN, ROLE_INGEST, require_role
-from app.metrics import detections_ingested_total, rate_limited_total
+from app.config import MAX_DETECTION_CLOCK_SKEW_SECONDS
+from app.metrics import clock_skew_rejected_total, detections_ingested_total, rate_limited_total
 from app.models import Detection
 from app.ratelimit import detection_rate_limiter
 from app.tracking import associate_detection, associate_detections_batch
+from app.util import utcnow
 
 router = APIRouter()
 
@@ -15,6 +17,27 @@ def _check_rate_limit(sensor_id: str) -> None:
         raise HTTPException(status_code=429, detail=f"Rate limit exceeded for sensor '{sensor_id}'")
 
 
+def _check_clock_skew(detection: Detection) -> None:
+    """Rejects a detection whose (client-supplied) timestamp is
+    implausibly far from the server's own clock -- catches an unsynced
+    sensor before its skewed timestamp reaches app.tracking's Kalman
+    predict step, where an inflated dt would balloon the predicted
+    position's uncertainty on every detection from that sensor. See
+    app/config.py's MAX_DETECTION_CLOCK_SKEW_SECONDS docstring.
+    """
+    skew_s = abs((utcnow() - detection.timestamp).total_seconds())
+    if skew_s > MAX_DETECTION_CLOCK_SKEW_SECONDS:
+        clock_skew_rejected_total.labels(sensor_id=detection.sensor_id).inc()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Detection timestamp for sensor '{detection.sensor_id}' is {skew_s:.0f}s from the "
+                f"server's clock (limit {MAX_DETECTION_CLOCK_SKEW_SECONDS:.0f}s) -- check that sensor's "
+                "clock is synchronized (e.g. NTP) and reporting UTC."
+            ),
+        )
+
+
 @router.post(
     "/detections",
     response_model=Detection,
@@ -23,6 +46,7 @@ def _check_rate_limit(sensor_id: str) -> None:
 )
 def ingest_detection(detection: Detection) -> Detection:
     _check_rate_limit(detection.sensor_id)
+    _check_clock_skew(detection)
     detections_ingested_total.labels(sensor_type=detection.sensor_type.value).inc()
     detection.id = None
     detection.track_id = None
@@ -52,6 +76,7 @@ def ingest_detections_batch(detections: list[Detection]) -> list[Detection]:
     """
     for detection in detections:
         _check_rate_limit(detection.sensor_id)
+        _check_clock_skew(detection)
     for detection in detections:
         detections_ingested_total.labels(sensor_type=detection.sensor_type.value).inc()
         detection.id = None
