@@ -123,6 +123,7 @@ def test_legacy_single_api_key_grants_admin(isolated_db, monkeypatch):
 def test_acknowledge_records_who_acknowledged(isolated_db, keys):
     with TestClient(app) as client:
         r = client.post("/api/detections", json=DETECTION_BODY, headers={"X-API-Key": "ingest-key"})
+        assert r.status_code == 201
         # Force the drone into the seeded restricted zone isn't guaranteed here;
         # instead just verify the acknowledged_by field flows through when an
         # incident does exist by creating one directly isn't in scope for an

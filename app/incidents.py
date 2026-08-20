@@ -32,6 +32,7 @@ from app.notifications import notify_incident
 from app.queue_publisher import publish_incident
 from app.models import (
     Classification,
+    Detection,
     Incident,
     IncidentSeverity,
     IncidentStatus,
@@ -71,6 +72,11 @@ _MIN_SPEED_FOR_PROJECTION_MPS = 1.0
 def _open_incident(
     track: Track, zone: Zone, incident_type: IncidentType, description: str
 ) -> Incident | None:
+    # Both callers (check_zone_incidents, check_predicted_incursions) only
+    # ever call this with a persisted track/zone -- checked before the call
+    # in each, since a None id can't be looked up or referenced by a
+    # foreign key anyway.
+    assert track.id is not None and zone.id is not None
     if get_open_incident(track.id, zone.id, incident_type.value) is not None:
         return None
     severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
@@ -204,9 +210,13 @@ def check_shadowing_incidents(tracks: list[Track]) -> list[Incident]:
     # against, so fetch it once per track rather than once per pair --
     # avoids O(n^2) redundant DB reads of the same track's (up to 500-row)
     # history as the active-track count grows.
-    histories = {t.id: list_recent_detections(t.id, 500) for t in valid_tracks}
+    histories: dict[int, list[Detection]] = {}
+    for t in valid_tracks:
+        assert t.id is not None  # guaranteed by the valid_tracks filter above
+        histories[t.id] = list_recent_detections(t.id, 500)
     for i, track_a in enumerate(valid_tracks):
         for track_b in valid_tracks[i + 1 :]:
+            assert track_a.id is not None and track_b.id is not None  # from valid_tracks
             if not detect_shadowing(
                 histories[track_a.id], histories[track_b.id],
                 max_distance_m=SHADOWING_MAX_DISTANCE_M, min_duration_s=SHADOWING_MIN_DURATION_S,

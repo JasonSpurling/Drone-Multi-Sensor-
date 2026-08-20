@@ -71,4 +71,4 @@ def fuse_classification(detections: list[Detection]) -> Classification:
 
     if not weights:
         return Classification.UNKNOWN
-    return max(weights, key=weights.get)
+    return max(weights, key=lambda label: weights[label])

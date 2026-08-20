@@ -70,7 +70,7 @@ def test_gpx_and_kml_skip_detections_without_coordinates_but_csv_keeps_them():
 
 def test_empty_detection_list_produces_valid_empty_documents():
     gpx_root = ET.fromstring(to_gpx(TRACK, []))
-    kml_root = ET.fromstring(to_kml(TRACK, []))
+    _kml_root = ET.fromstring(to_kml(TRACK, []))
     assert gpx_root.find(".//{http://www.topografix.com/GPX/1/1}trkpt") is None
     csv_rows = list(csv.reader(io.StringIO(to_csv([]))))
     assert len(csv_rows) == 1  # header only
@@ -84,6 +84,6 @@ def test_track_uid_and_classification_are_xml_escaped():
         status=TrackStatus.ACTIVE, classification=Classification.DRONE,
     )
     gpx_root = ET.fromstring(to_gpx(weird_track, DETECTIONS))  # must not raise ParseError
-    kml_root = ET.fromstring(to_kml(weird_track, DETECTIONS))
+    _kml_root = ET.fromstring(to_kml(weird_track, DETECTIONS))
     ns_gpx = {"g": "http://www.topografix.com/GPX/1/1"}
     assert gpx_root.find(".//g:name", ns_gpx).text == '<evil>&"stuff"</evil>'

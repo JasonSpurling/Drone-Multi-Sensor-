@@ -124,7 +124,7 @@ def test_track_gains_velocity_and_heading_from_repeated_detections():
 
 
 def test_track_position_uncertainty_shrinks_with_more_detections():
-    first = associate_detection(make_detection())
+    associate_detection(make_detection())
     first_track = list_tracks()[0]
     first_uncertainty = first_track.position_uncertainty_m
 

@@ -131,7 +131,8 @@ def watch(args: argparse.Namespace) -> None:
                 for box in result.boxes:
                     class_name = names[int(box.cls[0])]
                     model_confidence = float(box.conf[0])
-                    xyxy = tuple(float(v) for v in box.xyxy[0])
+                    x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
+                    xyxy = (x1, y1, x2, y2)
                     payload = build_detection_payload(
                         args.sensor_id, args.target_lat, args.target_lon, class_name, model_confidence, xyxy
                     )

@@ -204,6 +204,7 @@ def _spawn_track(detection: Detection, measurement_variance: float) -> Track:
         )
     )
     if detection.latitude is not None and detection.longitude is not None:
+        assert track.id is not None  # just persisted by create_track above
         imm = IMMFilter(
             x=0.0,
             y=0.0,
@@ -222,7 +223,14 @@ def _spawn_track(detection: Detection, measurement_variance: float) -> Track:
 
 
 def _update_track_with_match(detection: Detection, match: _Match, measurement_variance: float) -> Track:
+    # Both callers only build a _Match when the detection has a resolved
+    # position (associate_detection checks before calling
+    # _find_matching_track; associate_detections_batch's cost-matrix loop
+    # is itself gated the same way) and from an active_tracks list already
+    # filtered to a persisted id.
+    assert detection.latitude is not None and detection.longitude is not None
     track, imm, ref_lat, ref_lon = match.track, match.imm, match.ref_lat, match.ref_lon
+    assert track.id is not None
     zx, zy = latlon_to_local_m(detection.latitude, detection.longitude, ref_lat, ref_lon)
     imm.update(zx, zy, measurement_variance)
     _save_filter(track.id, ref_lat, ref_lon, imm, detection.timestamp)
@@ -240,6 +248,9 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     check for zone incidents. Shared by both the single-detection and
     batch association paths.
     """
+    # track is always either freshly spawned (_spawn_track, just persisted)
+    # or an existing match (_update_track_with_match, already asserted).
+    assert track.id is not None
     # Persist the detection before fusing classification, so this
     # detection's own vote is included in the track's history.
     detection.track_id = track.id
@@ -335,8 +346,15 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
             t for t in list_tracks(status=TrackStatus.ACTIVE.value)
             if t.id is not None and t.latitude is not None and t.longitude is not None
         ]
-        track_states = {t.id: get_kalman_state(t.id) for t in active_tracks}
-        active_tracks = [t for t in active_tracks if track_states[t.id] is not None]
+        # A dict comprehension/list filter's condition narrows t.id within
+        # that one expression, but the resulting list is still typed
+        # list[Track] (id: int | None) -- the filter above doesn't change
+        # that, so each loop below re-asserts it at first use.
+        track_states: dict[int, KalmanStateRecord | None] = {}
+        for t in active_tracks:
+            assert t.id is not None
+            track_states[t.id] = get_kalman_state(t.id)
+        active_tracks = [t for t in active_tracks if t.id is not None and track_states[t.id] is not None]
 
         n, m = len(georeferenced), len(active_tracks)
         cost_matrix: list[list[float]] = []
@@ -349,6 +367,7 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
             candidates: dict[int, IMMFilter] = {}
             if detection.latitude is not None and detection.longitude is not None:
                 for j, track in enumerate(active_tracks):
+                    assert track.id is not None and track.latitude is not None and track.longitude is not None
                     if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
                         continue
                     coarse_distance = haversine_distance_m(
@@ -358,6 +377,7 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
                         continue
 
                     state = track_states[track.id]
+                    assert state is not None  # active_tracks was filtered to have a live Kalman state
                     imm = _load_filter(state)
                     dt_s = (detection.timestamp - state.updated_at).total_seconds()
                     imm.predict(dt_s)
@@ -385,7 +405,9 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
             col = assignment[i]
             if col < m and cost_matrix[i][col] < _ASSIGNMENT_BLOCKED_COST:
                 chosen_track = active_tracks[col]
+                assert chosen_track.id is not None
                 state = track_states[chosen_track.id]
+                assert state is not None
                 imm = predicted_imm[i][chosen_track.id]
                 match = _Match(chosen_track, imm, state.ref_lat, state.ref_lon)
                 track = _update_track_with_match(detection, match, measurement_variances[i])

@@ -1,5 +1,3 @@
-import math
-
 import pytest
 
 from app.geo import destination_point

@@ -13,7 +13,6 @@ TRACK = Track(
 
 def test_disabled_by_default_sends_nothing(monkeypatch):
     monkeypatch.setattr("app.cot_publisher.COT_UDP_HOST", "")
-    calls = []
     monkeypatch.setattr("socket.socket", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not connect")))
     cot_publisher.publish_track_cot(TRACK)
 

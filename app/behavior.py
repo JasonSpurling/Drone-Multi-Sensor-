@@ -14,6 +14,9 @@ check).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+
 from app.geo import haversine_distance_m
 from app.models import Detection, Track
 
@@ -29,9 +32,13 @@ def detect_loitering(
     detections covering a much shorter real interval) -- too little
     history to judge yet returns False, not a guess.
     """
+    # (lat, lon, timestamp) instead of the Detection objects themselves --
+    # narrows lat/lon to plain floats once, up front, rather than re-
+    # asserting them non-None (to the type checker, and in principle) on
+    # every centroid/distance computation below.
     positioned = sorted(
-        (d for d in detections if d.latitude is not None and d.longitude is not None),
-        key=lambda d: d.timestamp,
+        ((d.latitude, d.longitude, d.timestamp) for d in detections if d.latitude is not None and d.longitude is not None),
+        key=lambda p: p[2],
     )
     if len(positioned) < 2:
         return False
@@ -41,22 +48,22 @@ def detect_loitering(
     # min_duration_s," which by definition can never span more than
     # min_duration_s and would make the span_s >= min_duration_s check
     # below nearly always fail on real (non-exactly-boundary-aligned) data.
-    latest = positioned[-1]
-    window: list[Detection] = []
+    latest_timestamp = positioned[-1][2]
+    window: list[tuple[float, float, datetime]] = []
     reached_min_duration = False
-    for detection in reversed(positioned):
-        window.append(detection)
-        if (latest.timestamp - detection.timestamp).total_seconds() >= min_duration_s:
+    for point in reversed(positioned):
+        window.append(point)
+        if (latest_timestamp - point[2]).total_seconds() >= min_duration_s:
             reached_min_duration = True
             break
     if not reached_min_duration or len(window) < 2:
         return False
 
-    centroid_lat = sum(d.latitude for d in window) / len(window)
-    centroid_lon = sum(d.longitude for d in window) / len(window)
+    centroid_lat = sum(p[0] for p in window) / len(window)
+    centroid_lon = sum(p[1] for p in window) / len(window)
     return all(
-        haversine_distance_m(d.latitude, d.longitude, centroid_lat, centroid_lon) <= radius_m
-        for d in window
+        haversine_distance_m(lat, lon, centroid_lat, centroid_lon) <= radius_m
+        for lat, lon, _ in window
     )
 
 
@@ -80,22 +87,26 @@ def detect_shadowing(
     can't verify the shadowed target's identity; it's a general escort/
     shadowing pattern between whatever two tracks are being compared.
     """
+    # (lat, lon, timestamp) tuples, narrowing lat/lon to plain floats once
+    # up front rather than at every nearest-neighbor/distance computation.
     detections_a = sorted(
-        (d for d in track_a_detections if d.latitude is not None), key=lambda d: d.timestamp
+        ((d.latitude, d.longitude, d.timestamp) for d in track_a_detections if d.latitude is not None and d.longitude is not None),
+        key=lambda p: p[2],
     )
     detections_b = sorted(
-        (d for d in track_b_detections if d.latitude is not None), key=lambda d: d.timestamp
+        ((d.latitude, d.longitude, d.timestamp) for d in track_b_detections if d.latitude is not None and d.longitude is not None),
+        key=lambda p: p[2],
     )
     if len(detections_a) < 2 or len(detections_b) < 2:
         return False
 
     close_times = []
     for da in detections_a:
-        nearest_b = min(detections_b, key=lambda db: abs((db.timestamp - da.timestamp).total_seconds()))
-        if abs((nearest_b.timestamp - da.timestamp).total_seconds()) > max_time_gap_s:
+        nearest_b = min(detections_b, key=lambda db: abs((db[2] - da[2]).total_seconds()))
+        if abs((nearest_b[2] - da[2]).total_seconds()) > max_time_gap_s:
             continue
-        if haversine_distance_m(da.latitude, da.longitude, nearest_b.latitude, nearest_b.longitude) <= max_distance_m:
-            close_times.append(da.timestamp)
+        if haversine_distance_m(da[0], da[1], nearest_b[0], nearest_b[1]) <= max_distance_m:
+            close_times.append(da[2])
 
     if len(close_times) < 2:
         return False
@@ -117,6 +128,21 @@ def detect_shadowing(
 def _heading_difference_deg(heading_a: float, heading_b: float) -> float:
     diff = abs(heading_a - heading_b) % 360.0
     return min(diff, 360.0 - diff)
+
+
+@dataclass
+class _FormationCandidate:
+    """A Track narrowed to the fields detect_formations actually needs, all
+    guaranteed non-None by construction -- lets the rest of the function
+    work with plain floats instead of re-checking Optional fields (and
+    re-asserting that to the type checker) on every pairwise comparison.
+    """
+
+    id: int
+    lat: float
+    lon: float
+    heading_deg: float
+    speed_mps: float
 
 
 def detect_formations(
@@ -142,9 +168,14 @@ def detect_formations(
     tracks answers, not just isolated pairs.
     """
     candidates = [
-        track
+        _FormationCandidate(track.id, track.latitude, track.longitude, track.heading_deg, track.speed_mps)
         for track in tracks
-        if track.latitude is not None
+        # id is None only for a track that's never been persisted; a
+        # formation of one can't be turned into an incident anyway (see
+        # app/incidents.py's check_formation_incidents, which looks tracks
+        # up by id), so it's excluded the same as any other missing field.
+        if track.id is not None
+        and track.latitude is not None
         and track.longitude is not None
         and track.heading_deg is not None
         and track.speed_mps is not None
@@ -166,12 +197,12 @@ def detect_formations(
 
     for i in range(n):
         for j in range(i + 1, n):
-            track_a, track_b = candidates[i], candidates[j]
-            if haversine_distance_m(track_a.latitude, track_a.longitude, track_b.latitude, track_b.longitude) > max_spacing_m:
+            a, b = candidates[i], candidates[j]
+            if haversine_distance_m(a.lat, a.lon, b.lat, b.lon) > max_spacing_m:
                 continue
-            if _heading_difference_deg(track_a.heading_deg, track_b.heading_deg) > heading_tolerance_deg:
+            if _heading_difference_deg(a.heading_deg, b.heading_deg) > heading_tolerance_deg:
                 continue
-            if abs(track_a.speed_mps - track_b.speed_mps) > speed_tolerance_mps:
+            if abs(a.speed_mps - b.speed_mps) > speed_tolerance_mps:
                 continue
             union(i, j)
 
