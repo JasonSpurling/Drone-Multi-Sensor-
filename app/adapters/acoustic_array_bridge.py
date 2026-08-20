@@ -33,7 +33,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 
@@ -60,7 +60,7 @@ def build_detection_payload(
     return {
         "sensor_id": sensor_id,
         "sensor_type": "acoustic",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "azimuth_deg": azimuth_deg,
         "range_m": assumed_range_m,
         "confidence": confidence,
@@ -96,7 +96,10 @@ def watch(args: argparse.Namespace) -> None:
         )
         try:
             result = post_detection(args.api_url, payload, args.api_key)
-            print(f"-> azimuth={azimuth_deg:.1f} bearing_confidence={bearing_confidence:.2f} track {result.get('track_id')}")
+            print(
+                f"-> azimuth={azimuth_deg:.1f} bearing_confidence={bearing_confidence:.2f} "
+                f"track {result.get('track_id')}"
+            )
         except urllib.error.URLError as exc:
             print(f"ERROR posting detection: {exc}")
 

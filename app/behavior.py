@@ -37,7 +37,11 @@ def detect_loitering(
     # asserting them non-None (to the type checker, and in principle) on
     # every centroid/distance computation below.
     positioned = sorted(
-        ((d.latitude, d.longitude, d.timestamp) for d in detections if d.latitude is not None and d.longitude is not None),
+        (
+            (d.latitude, d.longitude, d.timestamp)
+            for d in detections
+            if d.latitude is not None and d.longitude is not None
+        ),
         key=lambda p: p[2],
     )
     if len(positioned) < 2:
@@ -90,11 +94,19 @@ def detect_shadowing(
     # (lat, lon, timestamp) tuples, narrowing lat/lon to plain floats once
     # up front rather than at every nearest-neighbor/distance computation.
     detections_a = sorted(
-        ((d.latitude, d.longitude, d.timestamp) for d in track_a_detections if d.latitude is not None and d.longitude is not None),
+        (
+            (d.latitude, d.longitude, d.timestamp)
+            for d in track_a_detections
+            if d.latitude is not None and d.longitude is not None
+        ),
         key=lambda p: p[2],
     )
     detections_b = sorted(
-        ((d.latitude, d.longitude, d.timestamp) for d in track_b_detections if d.latitude is not None and d.longitude is not None),
+        (
+            (d.latitude, d.longitude, d.timestamp)
+            for d in track_b_detections
+            if d.latitude is not None and d.longitude is not None
+        ),
         key=lambda p: p[2],
     )
     if len(detections_a) < 2 or len(detections_b) < 2:

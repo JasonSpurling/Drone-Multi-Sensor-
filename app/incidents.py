@@ -28,8 +28,6 @@ from app.db import (
 )
 from app.geo import local_m_to_latlon
 from app.metrics import incidents_opened_total
-from app.notifications import notify_incident
-from app.queue_publisher import publish_incident
 from app.models import (
     Classification,
     Detection,
@@ -41,6 +39,8 @@ from app.models import (
     Zone,
     ZoneType,
 )
+from app.notifications import notify_incident
+from app.queue_publisher import publish_incident
 from app.util import utcnow
 from app.zones import zones_containing_point
 

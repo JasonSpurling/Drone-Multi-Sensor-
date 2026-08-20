@@ -77,7 +77,7 @@ def publish(subject: str, payload: dict) -> None:
                 b'"name":"drone-multi-sensor"}\r\n'
             )
             sock.sendall(f"PUB {subject} {len(data)}\r\n".encode() + data + b"\r\n")
-    except (OSError, socket.timeout) as exc:
+    except (TimeoutError, OSError) as exc:
         logger.warning("NATS publish to %s failed: %s", subject, exc)
 
 

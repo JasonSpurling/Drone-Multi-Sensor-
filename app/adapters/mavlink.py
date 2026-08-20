@@ -17,7 +17,7 @@ source, not an identity channel.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # MAVLink's sentinel for "heading unknown" in GLOBAL_POSITION_INT.hdg (centidegrees).
 _HEADING_UNKNOWN_CDEG = 65535
@@ -49,7 +49,7 @@ def build_detection_payload(
     return {
         "sensor_id": sensor_id,
         "sensor_type": "other",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": lat_e7 / 1e7,
         "longitude": lon_e7 / 1e7,
         "altitude_m": alt_mm / 1000.0,

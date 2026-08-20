@@ -4,7 +4,7 @@ from app.models import Detection, SensorType
 
 
 def make_detection(**overrides) -> Detection:
-    defaults = dict(sensor_id="radar-1", sensor_type=SensorType.RADAR, confidence=0.9)
+    defaults = {"sensor_id": "radar-1", "sensor_type": SensorType.RADAR, "confidence": 0.9}
     defaults.update(overrides)
     return Detection(**defaults)
 

@@ -8,9 +8,9 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def make_detection(**overrides) -> Detection:
-    defaults = dict(
-        sensor_id="radar-1", sensor_type=SensorType.RADAR, timestamp=BASE_TIME, confidence=0.9
-    )
+    defaults = {
+        "sensor_id": "radar-1", "sensor_type": SensorType.RADAR, "timestamp": BASE_TIME, "confidence": 0.9
+    }
     defaults.update(overrides)
     return Detection(**defaults)
 
@@ -32,8 +32,14 @@ def _seed_track(track_uid: str, latitude: float, longitude: float, at: datetime)
             ref_lat=latitude,
             ref_lon=longitude,
             models=[
-                {"x": 0.0, "y": 0.0, "vx": 0.0, "vy": 0.0, "covariance": [[25.0, 0, 0, 0], [0, 25.0, 0, 0], [0, 0, 25.0, 0], [0, 0, 0, 25.0]]},
-                {"x": 0.0, "y": 0.0, "vx": 0.0, "vy": 0.0, "covariance": [[25.0, 0, 0, 0], [0, 25.0, 0, 0], [0, 0, 25.0, 0], [0, 0, 0, 25.0]]},
+                {
+                    "x": 0.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+                    "covariance": [[25.0, 0, 0, 0], [0, 25.0, 0, 0], [0, 0, 25.0, 0], [0, 0, 0, 25.0]],
+                },
+                {
+                    "x": 0.0, "y": 0.0, "vx": 0.0, "vy": 0.0,
+                    "covariance": [[25.0, 0, 0, 0], [0, 25.0, 0, 0], [0, 0, 25.0, 0], [0, 0, 0, 25.0]],
+                },
             ],
             mode_probabilities=[0.9, 0.1],
             updated_at=at,

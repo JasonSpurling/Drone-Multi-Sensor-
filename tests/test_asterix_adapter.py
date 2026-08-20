@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 
 from app.adapters.asterix import build_detection_payload
@@ -68,10 +70,10 @@ def test_confidence_is_configurable():
 
 
 def test_time_of_day_combines_with_todays_date():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     payload = build_detection_payload(FULL_RECORD, sensor_id="asterix-1")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     expected = midnight + timedelta(seconds=27354.6015625)
     assert payload["timestamp"] == expected.isoformat()

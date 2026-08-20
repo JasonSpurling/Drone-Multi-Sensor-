@@ -16,16 +16,16 @@ SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
 
 def make_track(**overrides) -> Track:
-    defaults = dict(
-        track_uid="track-1",
-        first_seen=datetime(2026, 1, 1, 12, 0, 0),
-        last_seen=datetime(2026, 1, 1, 12, 0, 0),
-        status=TrackStatus.ACTIVE,
-        classification=Classification.DRONE,
-        latitude=51.1,
-        longitude=0.0,
-        altitude_m=100,
-    )
+    defaults = {
+        "track_uid": "track-1",
+        "first_seen": datetime(2026, 1, 1, 12, 0, 0),
+        "last_seen": datetime(2026, 1, 1, 12, 0, 0),
+        "status": TrackStatus.ACTIVE,
+        "classification": Classification.DRONE,
+        "latitude": 51.1,
+        "longitude": 0.0,
+        "altitude_m": 100,
+    }
     defaults.update(overrides)
     # Incidents carry a foreign key to track, so it must actually exist in
     # the DB rather than just being an in-memory Track instance.

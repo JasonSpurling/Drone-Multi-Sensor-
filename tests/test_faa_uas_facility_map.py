@@ -72,7 +72,10 @@ def test_missing_ceiling_field_yields_no_altitude_cap():
 def test_non_polygon_features_are_skipped():
     geojson = {
         "type": "FeatureCollection",
-        "features": [{"type": "Feature", "properties": {"CEILING": 100}, "geometry": {"type": "Point", "coordinates": [-0.5, 51.3]}}],
+        "features": [{
+            "type": "Feature", "properties": {"CEILING": 100},
+            "geometry": {"type": "Point", "coordinates": [-0.5, 51.3]},
+        }],
     }
     assert geojson_to_zones(geojson) == []
 

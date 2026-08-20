@@ -90,7 +90,7 @@ def _steered_power(
     summed = np.zeros(channels.shape[1])
     for i in range(n_mics):
         delay_s = steering_delay_s(mic_positions_m[i], azimuth_deg)
-        shift_samples = int(round(delay_s * sample_rate_hz))
+        shift_samples = round(delay_s * sample_rate_hz)
         # A source at `azimuth_deg` reaches this mic `delay_s` earlier/later
         # than the array center; rolling the *opposite* direction realigns
         # it back to the center's timeline before summing.

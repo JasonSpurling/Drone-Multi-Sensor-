@@ -46,7 +46,7 @@ def _synthesize(mic_positions, true_azimuth_deg: float, source_signal: np.ndarra
         for mx, my in mic_positions
     ]
     min_delay = min(delays_s)
-    shifts = [int(round((delay - min_delay) * SAMPLE_RATE_HZ)) for delay in delays_s]
+    shifts = [round((delay - min_delay) * SAMPLE_RATE_HZ) for delay in delays_s]
     return np.array([np.roll(source_signal, shift) for shift in shifts])
 
 
@@ -73,7 +73,7 @@ def test_larger_array_is_more_accurate_than_the_small_one(true_azimuth):
     source = _band_limited_noise(rng, 8192)
     channels = _synthesize(LARGE_ARRAY, true_azimuth, source)
 
-    estimated, confidence = estimate_bearing(channels, LARGE_ARRAY, SAMPLE_RATE_HZ, azimuth_resolution_deg=1.0)
+    estimated, _confidence = estimate_bearing(channels, LARGE_ARRAY, SAMPLE_RATE_HZ, azimuth_resolution_deg=1.0)
 
     assert _angular_error(estimated, true_azimuth) < 6.0
 

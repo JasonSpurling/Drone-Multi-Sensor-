@@ -41,7 +41,7 @@ address for Bluetooth).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def merge_fields(state: dict, fields: dict) -> dict:
@@ -81,7 +81,7 @@ def build_detection_payload(state: dict, sensor_id: str, confidence: float = 0.9
     return {
         "sensor_id": sensor_id,
         "sensor_type": "rf",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": latitude,
         "longitude": longitude,
         "altitude_m": state.get("height_m"),

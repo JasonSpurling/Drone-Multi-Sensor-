@@ -24,7 +24,7 @@ here.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 _NM_TO_M = 1852.0
 _FEET_TO_M = 0.3048
@@ -38,7 +38,7 @@ def _time_of_day_to_timestamp(time_of_day_s: float | None) -> datetime:
     known limitation of ToD-only timestamps rather than something this
     module can resolve without a full ASTERIX time-of-day record.
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     if time_of_day_s is None:
         return now
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)

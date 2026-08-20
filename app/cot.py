@@ -27,7 +27,7 @@ supported transport (what ATAK's own default UDP input listens for).
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.models import Classification, Track
 
@@ -55,7 +55,7 @@ def classification_to_cot_type(classification: Classification) -> str:
 
 
 def _cot_time(offset_seconds: float = 0.0) -> str:
-    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).strftime(_W3C_XML_DATETIME)
+    return (datetime.now(UTC) + timedelta(seconds=offset_seconds)).strftime(_W3C_XML_DATETIME)
 
 
 def build_cot_xml(track: Track, stale_seconds: float = 60.0) -> bytes | None:

@@ -81,7 +81,8 @@ def to_csv(detections: list[Detection]) -> str:
         ["timestamp", "sensor_id", "sensor_type", "latitude", "longitude", "altitude_m", "confidence"]
     )
     for d in detections:
-        writer.writerow(
-            [d.timestamp.isoformat(), d.sensor_id, d.sensor_type.value, d.latitude, d.longitude, d.altitude_m, d.confidence]
-        )
+        writer.writerow([
+            d.timestamp.isoformat(), d.sensor_id, d.sensor_type.value,
+            d.latitude, d.longitude, d.altitude_m, d.confidence,
+        ])
     return buffer.getvalue()

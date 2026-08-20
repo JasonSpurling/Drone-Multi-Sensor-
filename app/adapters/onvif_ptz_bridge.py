@@ -34,7 +34,6 @@ import argparse
 import asyncio
 import json
 import os
-import time
 import urllib.error
 import urllib.request
 
@@ -94,11 +93,20 @@ async def watch(args: argparse.Namespace) -> None:
             move_request.ProfileToken = profile_token
             move_request.Position = {"PanTilt": {"x": pan_normalized, "y": tilt_normalized}}
             await ptz_service.AbsoluteMove(move_request)
-            print(f"-> slewed to pan={pan_normalized:.2f} tilt={tilt_normalized:.2f} (distance={cue['distance_m']:.0f}m)")
+            print(
+                f"-> slewed to pan={pan_normalized:.2f} tilt={tilt_normalized:.2f} "
+                f"(distance={cue['distance_m']:.0f}m)"
+            )
         else:
             print("No cue available (track lost its position, or camera not registered) -- holding position.")
 
-        time.sleep(args.poll_interval)
+        # asyncio.sleep, not time.sleep -- this loop runs inside an async
+        # event loop (asyncio.run(watch(...)) below); a blocking sleep here
+        # would stall the whole loop for the interval, not just this task.
+        # Doesn't matter today (nothing else runs concurrently in this
+        # single-camera script), but would silently break the moment this
+        # bridge is extended to poll multiple cameras via asyncio.gather.
+        await asyncio.sleep(args.poll_interval)
 
 
 def main() -> None:

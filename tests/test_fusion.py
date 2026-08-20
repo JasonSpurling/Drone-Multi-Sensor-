@@ -9,9 +9,9 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def make_detection(**overrides) -> Detection:
-    defaults = dict(
-        sensor_id="s1", sensor_type=SensorType.RADAR, timestamp=BASE_TIME, confidence=0.9
-    )
+    defaults = {
+        "sensor_id": "s1", "sensor_type": SensorType.RADAR, "timestamp": BASE_TIME, "confidence": 0.9
+    }
     defaults.update(overrides)
     return Detection(**defaults)
 
@@ -111,7 +111,7 @@ def test_spoofed_operator_id_without_signature_does_not_grant_friendly():
 
 
 def test_spoofed_operator_id_with_wrong_signature_does_not_grant_friendly():
-    private_key_a, public_key_a = generate_keypair()
+    _private_key_a, public_key_a = generate_keypair()
     private_key_b, _ = generate_keypair()
     upsert_authorized_operator("OP-12345", name="Test Operator", public_key=public_key_a)
 

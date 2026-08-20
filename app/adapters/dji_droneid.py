@@ -49,7 +49,7 @@ care you'd give any personal location data in your deployment.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def is_valid_packet(packet: dict) -> bool:
@@ -85,7 +85,7 @@ def build_detection_payload(packet: dict, sensor_id: str, confidence: float = 0.
     return {
         "sensor_id": sensor_id,
         "sensor_type": "rf",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": latitude,
         "longitude": longitude,
         "altitude_m": packet.get("altitude"),

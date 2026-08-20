@@ -32,7 +32,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 DEFAULT_MIN_CONTOUR_AREA_PX = 500.0
 
@@ -43,7 +43,7 @@ def build_detection_payload(
     return {
         "sensor_id": sensor_id,
         "sensor_type": "camera",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": target_lat,
         "longitude": target_lon,
         "confidence": confidence,
@@ -121,7 +121,9 @@ def main() -> None:
              "sees, so tune this to your scene (e.g. a camera pointed only at open sky can reasonably "
              "use a higher value than one that also sees birds/traffic/trees)",
     )
-    parser.add_argument("--min-area", type=float, default=DEFAULT_MIN_CONTOUR_AREA_PX, help="Min motion area in pixels to report")
+    parser.add_argument(
+        "--min-area", type=float, default=DEFAULT_MIN_CONTOUR_AREA_PX, help="Min motion area in pixels to report"
+    )
     parser.add_argument("--min-interval", type=float, default=2.0, help="Seconds between posted detections")
     parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()

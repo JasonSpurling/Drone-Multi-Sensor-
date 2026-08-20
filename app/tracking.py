@@ -33,6 +33,7 @@ from app.config import (
     TRACK_STALE_SECONDS,
     TRACK_TIME_GATE_SECONDS,
 )
+from app.cot_publisher import publish_track_cot
 from app.db import (
     KalmanStateRecord,
     create_detection,
@@ -43,7 +44,6 @@ from app.db import (
     update_track,
     upsert_kalman_state,
 )
-from app.cot_publisher import publish_track_cot
 from app.fusion import fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
@@ -266,9 +266,9 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     # classification, never overwrites one.
     history = list_recent_detections(track.id, FUSION_HISTORY_LIMIT)
     fused_label = fuse_classification(history)
-    if fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT:
-        track.classification = fused_label
-    elif track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN:
+    upgrades_to_drone = fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT
+    fills_in_unknown = track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN
+    if upgrades_to_drone or fills_in_unknown:
         track.classification = fused_label
     update_track(track)
     publish_track_cot(track)

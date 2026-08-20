@@ -49,11 +49,14 @@ def watch(args: argparse.Namespace) -> None:
         datagram, _addr = sock.recvfrom(65535)
         try:
             records = AsterixParser(datagram).get_result()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- deliberately broad, see comment below
             # A single malformed/garbled datagram (a real risk over UDP --
             # no retransmission, no framing guarantee) must not take the
             # listener down; log and keep going, same posture as a bad
-            # line on the SBS-1 bridge.
+            # line on the SBS-1 bridge. A third-party parser's exact
+            # exception type for "malformed input" isn't part of its
+            # documented API, so narrowing this risks silently missing a
+            # real parse-failure mode instead of logging it.
             print(f"ERROR decoding ASTERIX datagram: {exc}")
             continue
 

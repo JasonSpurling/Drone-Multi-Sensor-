@@ -17,8 +17,8 @@ from app.api import (
     sensor_registry,
     sensors,
     tracks,
-    zones as zones_api,
 )
+from app.api import zones as zones_api
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, require_role
 from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,

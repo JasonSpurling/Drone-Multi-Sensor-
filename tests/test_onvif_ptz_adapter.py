@@ -82,6 +82,7 @@ def test_fetch_cue_reraises_other_http_errors():
         raise urllib.error.HTTPError(request.full_url, 500, "Server Error", {}, None)
 
     import urllib.request as urllib_request_module
+
     import pytest
 
     orig = urllib_request_module.urlopen

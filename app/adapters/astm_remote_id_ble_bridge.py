@@ -142,9 +142,13 @@ def watch(args: argparse.Namespace) -> None:
     import asyncio
 
     async def _run() -> None:
+        # detection_callback runs independently (invoked by BleakScanner
+        # itself on each advertisement); all this needs to do is keep the
+        # scanner's context open indefinitely -- an Event that's never set
+        # blocks forever without the wake-every-second overhead a sleep
+        # loop has, and is the standard idiom for "run until cancelled."
         async with BleakScanner(detection_callback, service_uuids=[REMOTE_ID_SERVICE_UUID]):
-            while True:
-                await asyncio.sleep(1.0)
+            await asyncio.Event().wait()
 
     asyncio.run(_run())
 

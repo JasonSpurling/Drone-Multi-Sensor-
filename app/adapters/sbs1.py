@@ -16,7 +16,7 @@ etc.) are ignored.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 _MIN_FIELD_COUNT = 16
 _MSG_TYPE_INDEX = 1
@@ -49,7 +49,7 @@ def parse_sbs1_line(line: str, sensor_id: str = "dump1090-1") -> dict | None:
     payload: dict = {
         "sensor_id": sensor_id,
         "sensor_type": "adsb",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": float(latitude),
         "longitude": float(longitude),
         "confidence": 0.99,

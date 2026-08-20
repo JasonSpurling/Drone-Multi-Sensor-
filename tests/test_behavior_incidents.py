@@ -8,11 +8,11 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def make_track(track_uid: str, **overrides) -> Track:
-    defaults = dict(
-        track_uid=track_uid, first_seen=BASE_TIME, last_seen=BASE_TIME,
-        status=TrackStatus.ACTIVE, classification=Classification.DRONE,
-        latitude=51.1, longitude=0.0, altitude_m=100.0,
-    )
+    defaults = {
+        "track_uid": track_uid, "first_seen": BASE_TIME, "last_seen": BASE_TIME,
+        "status": TrackStatus.ACTIVE, "classification": Classification.DRONE,
+        "latitude": 51.1, "longitude": 0.0, "altitude_m": 100.0,
+    }
     defaults.update(overrides)
     return create_track(Track(**defaults))
 

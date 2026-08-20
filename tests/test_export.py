@@ -53,11 +53,12 @@ def test_csv_has_a_header_row_and_one_row_per_detection():
 
 
 def test_gpx_and_kml_skip_detections_without_coordinates_but_csv_keeps_them():
-    detections = DETECTIONS + [
+    detections = [
+        *DETECTIONS,
         Detection(
             id=3, sensor_id="s1", sensor_type=SensorType.RADAR, timestamp=datetime(2026, 1, 1, 12, 0, 10),
             track_id=1, azimuth_deg=45.0, range_m=500.0, confidence=0.9,  # never georeferenced
-        )
+        ),
     ]
     gpx_root = ET.fromstring(to_gpx(TRACK, detections))
     kml_root = ET.fromstring(to_kml(TRACK, detections))

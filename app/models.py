@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from app.util import utcnow
 
 
-class SensorType(str, Enum):
+class SensorType(StrEnum):
     RADAR = "radar"
     RF = "rf"
     ACOUSTIC = "acoustic"
@@ -19,19 +19,19 @@ class SensorType(str, Enum):
     OTHER = "other"
 
 
-class SensorStatus(str, Enum):
+class SensorStatus(StrEnum):
     ONLINE = "online"
     STALE = "stale"
     OFFLINE = "offline"
 
 
-class TrackStatus(str, Enum):
+class TrackStatus(StrEnum):
     ACTIVE = "active"
     LOST = "lost"
     CLOSED = "closed"
 
 
-class Classification(str, Enum):
+class Classification(StrEnum):
     UNKNOWN = "unknown"
     DRONE = "drone"
     BIRD = "bird"
@@ -39,7 +39,7 @@ class Classification(str, Enum):
     FRIENDLY = "friendly"
 
 
-class IncidentType(str, Enum):
+class IncidentType(StrEnum):
     ZONE_INCURSION = "zone_incursion"
     PREDICTED_INCURSION = "predicted_incursion"
     UNAUTHORIZED_FLIGHT = "unauthorized_flight"
@@ -51,20 +51,20 @@ class IncidentType(str, Enum):
     OTHER = "other"
 
 
-class IncidentSeverity(str, Enum):
+class IncidentSeverity(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
 
-class IncidentStatus(str, Enum):
+class IncidentStatus(StrEnum):
     OPEN = "open"
     ACKNOWLEDGED = "acknowledged"
     RESOLVED = "resolved"
 
 
-class ZoneType(str, Enum):
+class ZoneType(StrEnum):
     RESTRICTED = "restricted"
     NO_FLY = "no_fly"
     MONITORING = "monitoring"

@@ -36,7 +36,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Classes confidently NOT an aerial object of interest -- skipped outright,
 # unlike plain motion detection which can't tell a car from a drone.
@@ -80,7 +80,7 @@ def build_detection_payload(
     return {
         "sensor_id": sensor_id,
         "sensor_type": "camera",
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "latitude": target_lat,
         "longitude": target_lon,
         "confidence": confidence,

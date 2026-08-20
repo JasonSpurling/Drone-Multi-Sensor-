@@ -11,15 +11,15 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
 def make_detection(**overrides) -> Detection:
-    defaults = dict(
-        sensor_id="radar-1",
-        sensor_type=SensorType.RADAR,
-        timestamp=BASE_TIME,
-        latitude=51.5,
-        longitude=-0.1,
-        altitude_m=100,
-        confidence=0.9,
-    )
+    defaults = {
+        "sensor_id": "radar-1",
+        "sensor_type": SensorType.RADAR,
+        "timestamp": BASE_TIME,
+        "latitude": 51.5,
+        "longitude": -0.1,
+        "altitude_m": 100,
+        "confidence": 0.9,
+    }
     defaults.update(overrides)
     return Detection(**defaults)
 

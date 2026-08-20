@@ -54,9 +54,7 @@ def _within_altitude_band(altitude_m: float | None, zone: Zone) -> bool:
         return True
     if zone.min_altitude_m is not None and altitude_m < zone.min_altitude_m:
         return False
-    if zone.max_altitude_m is not None and altitude_m > zone.max_altitude_m:
-        return False
-    return True
+    return not (zone.max_altitude_m is not None and altitude_m > zone.max_altitude_m)
 
 
 def zones_containing_point(lat: float, lon: float, altitude_m: float | None = None) -> list[Zone]:
