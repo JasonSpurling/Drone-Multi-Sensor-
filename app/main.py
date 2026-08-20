@@ -14,6 +14,7 @@ from app.api import (
     health,
     incidents,
     metrics,
+    reports,
     sensor_registry,
     sensors,
     tracks,
@@ -106,6 +107,7 @@ app.include_router(zones_api.router, prefix="/api", dependencies=_viewer_auth)
 app.include_router(sensors.router, prefix="/api", dependencies=_viewer_auth)
 app.include_router(sensor_registry.router, prefix="/api", dependencies=_viewer_auth)
 app.include_router(authorized_operators.router, prefix="/api", dependencies=_viewer_auth)
+app.include_router(reports.router, prefix="/api", dependencies=_viewer_auth)
 
 
 @app.get("/", include_in_schema=False)

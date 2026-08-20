@@ -512,6 +512,19 @@ def list_incidents(
     return [_row_to_incident(row) for row in rows]
 
 
+def list_incidents_in_range(start: datetime, end: datetime) -> list[Incident]:
+    """All incidents opened in [start, end) -- for app/reporting.py's
+    compliance/analytics rollups, which need a bounded window rather than
+    list_incidents' "most recent N" pagination.
+    """
+    with db_session() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM incident WHERE opened_at >= :start AND opened_at < :end ORDER BY opened_at"),
+            {"start": start.isoformat(), "end": end.isoformat()},
+        ).mappings().all()
+    return [_row_to_incident(row) for row in rows]
+
+
 def _row_to_incident(row) -> Incident:
     return Incident(
         id=row["id"],

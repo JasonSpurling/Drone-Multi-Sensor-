@@ -56,7 +56,7 @@ _PAGERDUTY_SEVERITY = {
 }
 
 
-def _meets_threshold(severity: IncidentSeverity, minimum: str) -> bool:
+def meets_severity_threshold(severity: IncidentSeverity, minimum: str) -> bool:
     try:
         threshold = IncidentSeverity(minimum)
     except ValueError:
@@ -79,7 +79,7 @@ def _summary(incident: Incident) -> str:
 
 
 def notify_slack(incident: Incident) -> None:
-    if not SLACK_WEBHOOK_URL or not _meets_threshold(incident.severity, SLACK_MIN_SEVERITY):
+    if not SLACK_WEBHOOK_URL or not meets_severity_threshold(incident.severity, SLACK_MIN_SEVERITY):
         return
     text = f":rotating_light: *{incident.severity.value.upper()}* {_summary(incident)}"
     try:
@@ -89,7 +89,7 @@ def notify_slack(incident: Incident) -> None:
 
 
 def notify_pagerduty(incident: Incident) -> None:
-    if not PAGERDUTY_ROUTING_KEY or not _meets_threshold(incident.severity, PAGERDUTY_MIN_SEVERITY):
+    if not PAGERDUTY_ROUTING_KEY or not meets_severity_threshold(incident.severity, PAGERDUTY_MIN_SEVERITY):
         return
     payload = {
         "routing_key": PAGERDUTY_ROUTING_KEY,
@@ -115,7 +115,7 @@ def notify_pagerduty(incident: Incident) -> None:
 def notify_sms(incident: Incident) -> None:
     if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER and SMS_TO_NUMBERS):
         return
-    if not _meets_threshold(incident.severity, SMS_MIN_SEVERITY):
+    if not meets_severity_threshold(incident.severity, SMS_MIN_SEVERITY):
         return
 
     body = f"[{incident.severity.value.upper()}] {_summary(incident)}"

@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from app.assignment import hungarian_min_cost
+from app.cluster_lock import cluster_association_lock
 from app.config import (
     FUSION_HISTORY_LIMIT,
     KALMAN_CRUISE_PROCESS_NOISE,
@@ -295,7 +296,7 @@ def associate_detection(detection: Detection) -> Detection:
     detection = georeference(detection)
     measurement_variance = _measurement_variance(detection.confidence)
 
-    with _association_lock:
+    with _association_lock, cluster_association_lock():
         expire_stale_tracks(detection.timestamp)
 
         match = None
@@ -339,7 +340,7 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
     georeferenced = [georeference(d) for d in detections]
     measurement_variances = [_measurement_variance(d.confidence) for d in georeferenced]
 
-    with _association_lock:
+    with _association_lock, cluster_association_lock():
         expire_stale_tracks(max(d.timestamp for d in georeferenced))
 
         active_tracks = [

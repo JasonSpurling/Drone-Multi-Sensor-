@@ -28,6 +28,7 @@ from app.db import (
 )
 from app.geo import local_m_to_latlon
 from app.metrics import incidents_opened_total
+from app.mitigation import notify_mitigation_system
 from app.models import (
     Classification,
     Detection,
@@ -99,6 +100,7 @@ def _open_incident(
     incidents_opened_total.labels(incident_type=incident_type.value, severity=severity.value).inc()
     notify_incident(incident)
     notify_escalations(incident)
+    notify_mitigation_system(incident, track)
     publish_incident(incident.model_dump(mode="json"))
     return incident
 
@@ -143,6 +145,7 @@ def _open_behavioral_incident(track: Track, incident_type: IncidentType, descrip
     incidents_opened_total.labels(incident_type=incident_type.value, severity=severity.value).inc()
     notify_incident(incident)
     notify_escalations(incident)
+    notify_mitigation_system(incident, track)
     publish_incident(incident.model_dump(mode="json"))
     return incident
 

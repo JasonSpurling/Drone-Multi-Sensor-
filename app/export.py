@@ -18,7 +18,7 @@ import csv
 import io
 from xml.sax.saxutils import escape
 
-from app.models import Detection, Track
+from app.models import Detection, Incident, Track
 
 
 def _geo_points(detections: list[Detection]) -> list[Detection]:
@@ -72,6 +72,26 @@ def to_kml(track: Track, detections: list[Detection]) -> str:
         "  </Document>\n"
         "</kml>\n"
     )
+
+
+def incidents_to_csv(incidents: list[Incident]) -> str:
+    """A per-incident audit record (not the aggregate rollup in
+    app/reporting.py) -- for a compliance officer who needs the raw list
+    behind a summary count, e.g. to answer "which specific incidents".
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow([
+        "incident_uid", "incident_type", "severity", "status", "track_id", "zone_id",
+        "opened_at", "closed_at", "acknowledged_by", "description",
+    ])
+    for i in incidents:
+        writer.writerow([
+            i.incident_uid, i.incident_type.value, i.severity.value, i.status.value,
+            i.track_id, i.zone_id, i.opened_at.isoformat(),
+            i.closed_at.isoformat() if i.closed_at else "", i.acknowledged_by or "", i.description or "",
+        ])
+    return buffer.getvalue()
 
 
 def to_csv(detections: list[Detection]) -> str:

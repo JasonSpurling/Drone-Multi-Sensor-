@@ -114,6 +114,19 @@ TWILIO_FROM_NUMBER = os.getenv("DRONE_TWILIO_FROM_NUMBER", "")
 SMS_TO_NUMBERS = [n.strip() for n in os.getenv("DRONE_SMS_TO_NUMBERS", "").split(",") if n.strip()]
 SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
 
+# Mitigation system hook (app/mitigation.py): a generic webhook POST to a
+# downstream counter-UAS system (RF jammer, net gun, interdiction
+# platform, ...) carrying the track's current position/classification
+# alongside the incident, for that system to act on. This app doesn't own
+# or control any mitigation hardware -- it's a notifier, the same role
+# app/alerting.py plays for human-facing channels, just aimed at an
+# automated system instead of a person. Defaults to "high" (not "low" like
+# Slack) since an automated mitigation action has real-world consequences
+# a chat notification doesn't -- a deployment should opt into a lower
+# threshold deliberately, not by inheriting a permissive default.
+MITIGATION_WEBHOOK_URL = os.getenv("DRONE_MITIGATION_WEBHOOK_URL", "")
+MITIGATION_MIN_SEVERITY = os.getenv("DRONE_MITIGATION_MIN_SEVERITY", "high")
+
 # Optional message-queue fan-out (app/queue_publisher.py): best-effort NATS
 # core PUB of every ingested detection and opened incident, alongside (not
 # instead of) the normal synchronous single-process path. Empty (default)
