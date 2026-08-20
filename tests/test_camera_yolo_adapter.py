@@ -47,3 +47,20 @@ def test_build_detection_payload_returns_none_for_non_aerial_class():
         class_name="truck", model_confidence=0.9, box_xyxy=(0.0, 0.0, 1.0, 1.0),
     )
     assert payload is None
+
+
+def test_snapshot_path_omitted_by_default():
+    payload = build_detection_payload(
+        sensor_id="camera-yolo-1", target_lat=51.5, target_lon=-0.1,
+        class_name="kite", model_confidence=0.7, box_xyxy=(0.0, 0.0, 1.0, 1.0),
+    )
+    assert "snapshot_path" not in payload["raw_data"]
+
+
+def test_snapshot_path_included_when_given():
+    payload = build_detection_payload(
+        sensor_id="camera-yolo-1", target_lat=51.5, target_lon=-0.1,
+        class_name="kite", model_confidence=0.7, box_xyxy=(0.0, 0.0, 1.0, 1.0),
+        snapshot_path="/tmp/camera-yolo-1-123.jpg",
+    )
+    assert payload["raw_data"]["snapshot_path"] == "/tmp/camera-yolo-1-123.jpg"

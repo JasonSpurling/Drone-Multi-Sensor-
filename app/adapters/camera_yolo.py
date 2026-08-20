@@ -72,11 +72,21 @@ def classify_yolo_detection(class_name: str, model_confidence: float) -> float |
 
 def build_detection_payload(
     sensor_id: str, target_lat: float, target_lon: float, class_name: str, model_confidence: float,
-    box_xyxy: tuple[float, float, float, float],
+    box_xyxy: tuple[float, float, float, float], snapshot_path: str | None = None,
 ) -> dict | None:
     confidence = classify_yolo_detection(class_name, model_confidence)
     if confidence is None:
         return None
+    raw_data = {
+        "yolo_class": class_name,
+        "yolo_confidence": model_confidence,
+        "box_xyxy": list(box_xyxy),
+    }
+    if snapshot_path is not None:
+        # Consumed by app/adapters/lattice_bridge.py's optional thumbnail
+        # attachment (Lattice Objects API) -- see --snapshot-dir below.
+        # Not read by anything in the core ingest path.
+        raw_data["snapshot_path"] = snapshot_path
     return {
         "sensor_id": sensor_id,
         "sensor_type": "camera",
@@ -84,11 +94,7 @@ def build_detection_payload(
         "latitude": target_lat,
         "longitude": target_lon,
         "confidence": confidence,
-        "raw_data": {
-            "yolo_class": class_name,
-            "yolo_confidence": model_confidence,
-            "box_xyxy": list(box_xyxy),
-        },
+        "raw_data": raw_data,
     }
 
 
@@ -133,8 +139,15 @@ def watch(args: argparse.Namespace) -> None:
                     model_confidence = float(box.conf[0])
                     x1, y1, x2, y2 = (float(v) for v in box.xyxy[0])
                     xyxy = (x1, y1, x2, y2)
+                    snapshot_path = None
+                    if args.snapshot_dir:
+                        snapshot_path = os.path.join(
+                            args.snapshot_dir, f"{args.sensor_id}-{int(now * 1000)}.jpg"
+                        )
+                        cv2.imwrite(snapshot_path, frame)
                     payload = build_detection_payload(
-                        args.sensor_id, args.target_lat, args.target_lon, class_name, model_confidence, xyxy
+                        args.sensor_id, args.target_lat, args.target_lon, class_name, model_confidence, xyxy,
+                        snapshot_path=snapshot_path,
                     )
                     if payload is None:
                         continue
@@ -159,6 +172,13 @@ def main() -> None:
     parser.add_argument("--min-model-confidence", type=float, default=0.4)
     parser.add_argument("--min-interval", type=float, default=1.0, help="Seconds between processed frames")
     parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
+    parser.add_argument(
+        "--snapshot-dir", default=None,
+        help="If set, save a JPEG of each posted detection's frame here and record its path in "
+        "raw_data.snapshot_path -- picked up by app.adapters.lattice_bridge's optional thumbnail "
+        "attachment (Lattice Objects API). Off by default: no extra disk I/O or storage growth "
+        "unless you're actually running the Lattice bridge.",
+    )
     args = parser.parse_args()
     watch(args)
 

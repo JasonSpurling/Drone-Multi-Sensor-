@@ -524,6 +524,55 @@ COCO one. Like `dump1090_bridge.py`, this only runs if you `pip install`
 the camera extras -- `ultralytics` (and its `torch` dependency) is not a
 core dependency of the API server.
 
+## Downstream C2 integration
+
+**Publishing tracks to Anduril Lattice** (`app/adapters/lattice_bridge.py`):
+unlike every other module in `app/adapters/`, which bring a sensor's raw
+signal IN as detections, this pushes this tracker's own fused output OUT --
+polling `GET /api/tracks?status=active` and publishing each as a Lattice
+[Entity](https://developer.anduril.com/reference/rest/entities) via the
+[Lattice SDK](https://pypi.org/project/anduril-lattice-sdk/), so this app's
+tracker can appear as one more contributing source on Lattice's common
+operating picture alongside a deployment's other sensors and assets. The
+field mapping (`app/adapters/lattice.py`) is pure and unit-tested without
+the SDK installed, the same split as `app/adapters/mavlink.py` vs
+`mavlink_bridge.py`.
+
+```bash
+pip install -r requirements-lattice.txt
+export LATTICE_ENDPOINT=lattice-your_env_id.env.sandboxes.developer.anduril.com
+export LATTICE_CLIENT_ID=...
+export LATTICE_CLIENT_SECRET=...
+export SANDBOXES_TOKEN=...          # only needed for Lattice Sandboxes
+.venv/bin/python -m app.adapters.lattice_bridge --api-url http://127.0.0.1:8000/api
+```
+
+Classification maps to Lattice's `mil_view.disposition` conservatively:
+`friendly` -> `DISPOSITION_FRIENDLY`, `drone`/unknown aerial contacts ->
+`DISPOSITION_SUSPICIOUS` (Lattice's "warrants attention" bucket), `bird`/
+`aircraft` -> `DISPOSITION_NEUTRAL`. Never `DISPOSITION_HOSTILE` -- this app
+makes no intent judgment, only a classification one, and mapping to HOSTILE
+would overclaim what it actually knows.
+
+With `--attach-thumbnails`, each published entity also gets a snapshot image
+via the [Objects API](https://developer.anduril.com/reference/rest/objects)
+(the same upload-then-`override_entity` pattern as Anduril's own
+`sample-app-thumbnail`), sourced from the track's most recent camera
+detection -- requires running `camera_yolo.py` with `--snapshot-dir` set, off
+by default so no deployment pays for snapshot disk I/O it doesn't use.
+
+**What this deliberately does NOT do**: publish tracks one-way only, no
+tasking. Anduril's own sample apps also demonstrate commanding a Lattice
+Asset (e.g. an `Orbit` task sending a vehicle to investigate a suspicious
+track) -- that's a genuinely different problem domain this app doesn't
+model. This tracker fuses sensor detections into tracks; it has no concept
+of a commandable asset, an autonomy stack, or a tasking protocol to send
+one. Bolting on a fake "Orbit" call with no real asset behind it would be
+scope creep dressed up as a feature, not a real integration -- if you need
+Lattice-driven tasking, that logic belongs in whatever system actually
+operates your assets, consuming this tracker's published Entities as one of
+its own inputs.
+
 ## Acoustic direction finding
 
 An acoustic detection used to be a single flat confidence number with no
