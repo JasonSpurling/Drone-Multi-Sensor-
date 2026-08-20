@@ -369,6 +369,52 @@ picked up on startup via a lightweight migration check; there's no
 migration framework (Alembic etc.) since the schema is still small enough
 to evolve by hand.
 
+### Backup and restore
+
+Everything durable lives in the one database (`DRONE_DATABASE_URL`) --
+there's no other persistent state to back up separately (config is
+environment variables; zone seed data is re-loaded from
+`app/zones.seed.json` -- or `DRONE_ZONES_SEED_PATH` -- on startup if
+present, not written back to). The
+`track_kalman_state` table is the one exception worth knowing about: it's
+derived, in-flight filter state, not audit data (see its docstring in
+`app/schema.py`) -- losing it just means active tracks reinitialize their
+Kalman filter from their next detection instead of continuing smoothly,
+not lost history. Fine to include in a normal backup; not worth treating
+as critical if a restore predates it.
+
+**SQLite** (the default, `data/drone_sensor.db`): a plain file, but don't
+`cp` it while the app is running -- SQLite's WAL/journal files can leave a
+naive file copy in an inconsistent state. Use SQLite's own online backup
+instead, which is safe against a live writer:
+
+```bash
+sqlite3 data/drone_sensor.db ".backup data/drone_sensor.backup.db"
+# or, equivalently, from any DB client already connected to it:
+sqlite3 data/drone_sensor.db "VACUUM INTO 'data/drone_sensor.backup.db'"
+```
+
+Restore by stopping the app and replacing the live file with the backup
+(or pointing `DRONE_DB_PATH`/`DRONE_DATABASE_URL` at the backup file
+directly to restore into a fresh location instead of overwriting).
+
+**PostgreSQL**: standard `pg_dump`/`pg_restore`, no app-specific wrinkle --
+the schema is plain tables via SQLAlchemy Core, nothing PostgreSQL-only
+(no stored procedures, no extensions) for `pg_dump` to miss.
+
+```bash
+pg_dump -Fc "$DRONE_DATABASE_URL" > drone_sensor_backup.dump
+# restore into a fresh (or freshly-dropped-and-recreated) database:
+pg_restore -d "$DRONE_DATABASE_URL" --clean --if-exists drone_sensor_backup.dump
+```
+
+Neither path has been exercised against a large production-scale database
+in this environment -- `pg_dump`/`sqlite3 .backup` are the standard,
+well-tested tools for each engine, but restore time at real data volumes
+depends on retention settings (`DRONE_DETECTION_RETENTION_DAYS`) and
+deployment-specific data volume, not something this repo can benchmark for
+you.
+
 ## Sensor realism
 
 **Georeferencing** (`app/georeference.py`): a detection that reports
