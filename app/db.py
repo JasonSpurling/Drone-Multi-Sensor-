@@ -15,11 +15,21 @@ from datetime import datetime
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
-from app.config import DATABASE_URL
+from app.config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
 from app.models import Detection, Incident, Track, Zone
 from app.schema import metadata
 
-engine: Engine = create_engine(DATABASE_URL, future=True)
+# pool_size/max_overflow are QueuePool-specific -- SQLite doesn't use
+# QueuePool (SQLAlchemy defaults it to NullPool/SingletonThreadPool
+# depending on the URL), and passing those kwargs to an engine using a pool
+# class that doesn't accept them raises a TypeError. Only apply them for a
+# real (PostgreSQL) connection pool.
+_engine_kwargs: dict = {"future": True}
+if not DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["pool_size"] = DB_POOL_SIZE
+    _engine_kwargs["max_overflow"] = DB_MAX_OVERFLOW
+
+engine: Engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
 @event.listens_for(engine, "connect")

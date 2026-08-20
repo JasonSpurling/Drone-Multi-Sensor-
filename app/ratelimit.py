@@ -49,5 +49,22 @@ class RateLimiter:
                 self._buckets[key] = bucket
             return bucket.allow(now)
 
+    def retry_after(self, key: str, now: float | None = None) -> float:
+        """Seconds until `key` would next have a token available -- a pure
+        peek (doesn't consume a token or otherwise mutate state) for
+        populating a 429 response's Retry-After header, called right after
+        allow() has already returned False for the same key/tick.
+        """
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                return 0.0
+            elapsed = max(0.0, now - bucket.last_refill)
+            tokens = min(bucket.burst, bucket.tokens + elapsed * bucket.rate_per_second)
+            if tokens >= 1.0:
+                return 0.0
+            return (1.0 - tokens) / bucket.rate_per_second
+
 
 detection_rate_limiter = RateLimiter(RATE_LIMIT_PER_SECOND, RATE_LIMIT_BURST)

@@ -1,7 +1,9 @@
+import math
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import ROLE_ADMIN, ROLE_INGEST, require_role
-from app.config import MAX_DETECTION_CLOCK_SKEW_SECONDS
+from app.config import MAX_BATCH_SIZE, MAX_DETECTION_CLOCK_SKEW_SECONDS
 from app.metrics import clock_skew_rejected_total, detections_ingested_total, rate_limited_total
 from app.models import Detection
 from app.ratelimit import detection_rate_limiter
@@ -14,7 +16,12 @@ router = APIRouter()
 def _check_rate_limit(sensor_id: str) -> None:
     if not detection_rate_limiter.allow(sensor_id):
         rate_limited_total.labels(sensor_id=sensor_id).inc()
-        raise HTTPException(status_code=429, detail=f"Rate limit exceeded for sensor '{sensor_id}'")
+        retry_after_s = math.ceil(detection_rate_limiter.retry_after(sensor_id))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded for sensor '{sensor_id}'",
+            headers={"Retry-After": str(retry_after_s)},
+        )
 
 
 def _check_clock_skew(detection: Detection) -> None:
@@ -74,6 +81,12 @@ def ingest_detections_batch(detections: list[Detection]) -> list[Detection]:
     app.tracking.associate_detections_batch for the scope note on not
     mixing multiple sensors' simultaneous reports into one batch.
     """
+    if len(detections) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Batch of {len(detections)} detections exceeds the {MAX_BATCH_SIZE} limit "
+            "(DRONE_MAX_BATCH_SIZE) -- split into smaller batches.",
+        )
     for detection in detections:
         _check_rate_limit(detection.sensor_id)
         _check_clock_skew(detection)

@@ -52,3 +52,9 @@ jobs:
           python-version: "3.11"
       - run: pip install pip-audit
       - run: pip-audit -r requirements.txt -r requirements-postgres.txt -r requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      # Static analysis of this app's own code (unlike pip-audit above,
+      # which only checks third-party CVEs). Findings config is in
+      # pyproject.toml's [tool.bandit] -- every skipped check ID there is
+      # individually justified against this codebase's actual usage.
+      - run: bandit -r app/ -c pyproject.toml

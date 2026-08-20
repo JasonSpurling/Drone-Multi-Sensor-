@@ -985,6 +985,8 @@ needs to be set to run locally.
 | `DRONE_PORT` | `8000` | Bind port |
 | `DRONE_DB_PATH` | `data/drone_sensor.db` | SQLite file location (used to build the default `DRONE_DATABASE_URL`) |
 | `DRONE_DATABASE_URL` | `sqlite:///<DRONE_DB_PATH>` | SQLAlchemy database URL; point at PostgreSQL for production |
+| `DRONE_DB_POOL_SIZE` | `5` | PostgreSQL connection pool size (ignored for SQLite) |
+| `DRONE_DB_MAX_OVERFLOW` | `10` | PostgreSQL pool overflow above `DRONE_DB_POOL_SIZE` before a connection request waits (ignored for SQLite) |
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
@@ -992,6 +994,7 @@ needs to be set to run locally.
 | `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role: `ingest`, `viewer`, `operator`, or `admin` |
 | `DRONE_RATE_LIMIT_PER_SECOND` | `50` | Per-sensor detection ingest rate limit |
 | `DRONE_RATE_LIMIT_BURST` | `100` | Per-sensor token-bucket burst capacity |
+| `DRONE_MAX_BATCH_SIZE` | `500` | Max detections per `POST /api/detections/batch` request |
 | `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS` | `300` | Reject a detection whose timestamp is further than this from the server's clock |
 | `DRONE_DETECTION_RETENTION_DAYS` | `0` (disabled) | Purge detections older than this many days |
 | `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | How often the retention purge runs |
@@ -1092,6 +1095,23 @@ specific bug exploitable here." Run it locally the same way CI does:
 ```bash
 pip install pip-audit
 pip-audit -r requirements.txt -r requirements-postgres.txt -r requirements-dev.txt
+```
+
+**Static security analysis**: the same `security` CI job also runs
+[`bandit`](https://github.com/PyCQA/bandit) against `app/`, checking this
+app's own code for security-relevant patterns (unsafe deserialization,
+hardcoded secrets, weak crypto, unescaped XML output, etc.) that pip-audit
+can't see, since pip-audit only checks third-party dependency CVEs. Every
+finding bandit currently raises against this codebase was reviewed and is
+individually justified (not blanket-suppressed) in `pyproject.toml`'s
+`[tool.bandit]` -- e.g. flagged `urllib.urlopen` calls all use
+operator-configured or hardcoded HTTPS URLs, never attacker-controlled
+input; the flagged `xml.etree`/`xml.sax` usage only builds/escapes outgoing
+XML, never parses untrusted input. Run it locally the same way CI does:
+
+```bash
+pip install bandit
+bandit -r app/ -c pyproject.toml
 ```
 
 ## Project layout

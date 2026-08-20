@@ -20,6 +20,17 @@ ZONES_SEED_PATH = Path(
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname
 DATABASE_URL = os.getenv("DRONE_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
+# PostgreSQL connection pool sizing (ignored for SQLite, which doesn't use
+# SQLAlchemy's QueuePool). Detection ingest is fully serialized through
+# app.tracking's process-wide _association_lock regardless of pool size, so
+# these defaults (SQLAlchemy's own) are plenty for that path; what they
+# actually bound is read-heavy endpoints like GET /api/tracks, which every
+# dashboard viewer polls every few seconds -- exposed as env vars so a
+# deployment with many concurrent dashboard viewers can size the pool to
+# its real concurrency instead of being stuck with a guess baked into code.
+DB_POOL_SIZE = int(os.getenv("DRONE_DB_POOL_SIZE", "5"))
+DB_MAX_OVERFLOW = int(os.getenv("DRONE_DB_MAX_OVERFLOW", "10"))
+
 LOG_LEVEL = os.getenv("DRONE_LOG_LEVEL", "INFO")
 # "text" (human-readable) or "json" (structured, one JSON object per line --
 # suited to log aggregators like ELK/Loki/CloudWatch).
@@ -46,6 +57,14 @@ API_KEYS_JSON = os.getenv("DRONE_API_KEYS", "")
 # limit.
 RATE_LIMIT_PER_SECOND = float(os.getenv("DRONE_RATE_LIMIT_PER_SECOND", "50"))
 RATE_LIMIT_BURST = float(os.getenv("DRONE_RATE_LIMIT_BURST", "100"))
+
+# POST /api/detections/batch's cost isn't linear in the number of plots: its
+# Hungarian assignment builds an n x active-tracks cost matrix and solves it
+# in worse-than-linear time (see the "Load testing" README section), so an
+# unbounded batch size is a real (if low-severity) resource-exhaustion
+# shape. Generous default -- a real radar sweep is nowhere near this size;
+# this exists to reject a pathological request, not constrain normal use.
+MAX_BATCH_SIZE = int(os.getenv("DRONE_MAX_BATCH_SIZE", "500"))
 
 # A detection whose (client-supplied) timestamp is further than this from
 # the server's own clock, in either direction, is rejected rather than fed
