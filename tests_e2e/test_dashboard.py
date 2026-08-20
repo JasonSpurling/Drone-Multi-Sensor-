@@ -51,7 +51,7 @@ def test_dashboard_loads_with_no_console_errors(live_server, page):
 
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#map")
-    page.wait_for_selector("#tracks-table")
+    page.wait_for_selector("#tracks-list")
 
     assert console_errors == []
 
@@ -60,8 +60,8 @@ def test_tracks_table_reflects_ingested_detections(live_server, page):
     _seed_moving_track(live_server)
     page.goto(live_server, wait_until="networkidle")
 
-    page.wait_for_selector("tbody tr[data-id]")
-    rows = page.locator("tbody tr[data-id]")
+    page.wait_for_selector(".track-card[data-id]")
+    rows = page.locator(".track-card[data-id]")
     assert rows.count() == 1
 
 
@@ -69,11 +69,11 @@ def test_selecting_a_track_shows_details_and_playback_scrubber(live_server, page
     _seed_moving_track(live_server)
     page.goto(live_server, wait_until="networkidle")
 
-    page.wait_for_selector("tbody tr[data-id]")
-    page.click("tbody tr[data-id]")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
 
     page.wait_for_selector("#focus-btn")
-    assert page.locator(".detail-header .title").inner_text() != ""
+    assert page.locator(".detail-title-row").inner_text() != ""
 
     # Playback only renders once the track's history (2+ points) has
     # loaded -- give the async fetch a moment.
@@ -112,12 +112,12 @@ def test_map_layer_toggles_are_clickable(live_server, page):
 def test_search_filters_the_tracks_table(live_server, page):
     _seed_moving_track(live_server)
     page.goto(live_server, wait_until="networkidle")
-    page.wait_for_selector("tbody tr[data-id]")
+    page.wait_for_selector(".track-card[data-id]")
 
     page.fill("#search-input", "nonexistent-uid-search-term")
     page.wait_for_selector(".empty")
-    assert page.locator("tbody tr[data-id]").count() == 0
+    assert page.locator(".track-card[data-id]").count() == 0
 
     page.fill("#search-input", "")
-    page.wait_for_selector("tbody tr[data-id]")
-    assert page.locator("tbody tr[data-id]").count() == 1
+    page.wait_for_selector(".track-card[data-id]")
+    assert page.locator(".track-card[data-id]").count() == 1
