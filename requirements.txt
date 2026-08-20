@@ -3,5 +3,5 @@ uvicorn[standard]==0.52.1
 pydantic==2.13.4
 sqlalchemy==2.0.52
 prometheus-client==0.26.0
-cryptography==41.0.7
+cryptography==50.0.0
 numpy==2.4.6

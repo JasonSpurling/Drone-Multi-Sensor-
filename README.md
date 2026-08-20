@@ -1077,6 +1077,23 @@ Without any key configured, don't expose the port beyond localhost —
 anyone who can reach it could inject fake detections or acknowledge
 (silence) real alerts.
 
+**Dependency vulnerability scanning**: a `security` CI job runs
+[`pip-audit`](https://github.com/pypa/pip-audit) against every
+`requirements*.txt` on each push/PR, checking pinned versions against the
+Python Packaging Advisory Database. This is how `cryptography` (used for
+the Ed25519 Remote ID signature scheme -- see "Classification fusion &
+friendly allowlist" above) was found pinned to `41.0.7`, a version with
+several known CVEs, and bumped to `50.0.0`; none of the fixed CVEs were in
+the Ed25519 raw-key code path this app actually uses (they were X.509
+chain validation, PKCS#7, and bundled-OpenSSL issues), but pinning to a
+version with zero known vulnerabilities is the point, not just "was the
+specific bug exploitable here." Run it locally the same way CI does:
+
+```bash
+pip install pip-audit
+pip-audit -r requirements.txt -r requirements-postgres.txt -r requirements-dev.txt
+```
+
 ## Project layout
 
 ```
