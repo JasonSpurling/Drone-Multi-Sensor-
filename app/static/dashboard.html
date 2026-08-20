@@ -219,6 +219,9 @@
   .meter-fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
   .sparkline-wrap { margin-top: 4px; }
   .heading-arrow { display: inline-block; font-size: 14px; }
+  .playback-row { display: flex; align-items: center; gap: 8px; }
+  .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .playback-time { font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -247,7 +250,8 @@
     <div class="map-container">
       <div id="map"></div>
       <div id="map-layer-toggles">
-        <label><input type="checkbox" id="toggle-trail" checked> Trail</label>
+        <label><input type="checkbox" id="toggle-trail" checked> Trails</label>
+        <label><input type="checkbox" id="toggle-vectors" checked> Vectors</label>
         <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
       </div>
       <div id="map-legend">
@@ -257,6 +261,9 @@
         <div class="item"><span class="dot" style="background:var(--friendly)"></span>Friendly</div>
         <div class="item"><span class="dot" style="background:var(--unknown)"></span>Unknown</div>
         <div class="item"><span class="dot" style="background:var(--zone); opacity:0.6;"></span>Restricted zone</div>
+        <!-- 30s matches VECTOR_HORIZON_S below; this is static markup (not
+             a template literal), so it can't interpolate the JS constant. -->
+        <div class="item"><span style="display:inline-block;width:14px;height:0;border-top:2px dotted var(--muted);"></span>Projected path (30s)</div>
       </div>
     </div>
   </section>
@@ -289,9 +296,53 @@ const POLL_MS = 3000;
 const state = {
   tracks: [], incidents: [], zones: [], sensors: [],
   selectedTrackId: null, trail: [], classFilter: "all", search: "",
-  follow: false, showTrail: true, showUncertainty: true,
+  follow: false, showTrail: true, showUncertainty: true, showVectors: true,
+  // null == showing each track's live position; otherwise an index into
+  // `trail` (the selected track's full history, oldest first) being
+  // scrubbed to via the Playback slider in the details panel.
+  scrubIndex: null,
 };
 let apiKey = localStorage.getItem("droneApiKey") || "";
+
+// Recent on-map positions per track, captured from each poll (not fetched
+// history) so every visible track can show a short fading trail without a
+// per-track history request every 3s -- only the *selected* track gets its
+// full server-side history (state.trail, fetched once on selection).
+const breadcrumbs = new Map();
+const BREADCRUMB_MAX_POINTS = 12;
+const BREADCRUMB_MAX_AGE_MS = 10 * 60 * 1000;
+let playbackTimer = null;
+const PLAYBACK_INTERVAL_MS = 300;
+// Fixed visual projection horizon for the map's speed-vector line -- matches
+// PREDICTIVE_HORIZON_SECONDS' documented default (app/config.py), but this
+// is a client-side visual aid, not read from live server config, so it
+// won't track a deployment that overrides that env var.
+const VECTOR_HORIZON_S = 30;
+// Mirrors app/incidents.py's _MIN_SPEED_FOR_PROJECTION_MPS: near-zero speed
+// makes a Kalman-filtered heading too noisy to draw a meaningful vector.
+const MIN_VECTOR_SPEED_MPS = 1.0;
+
+// Spherical-earth forward geodesic, ported from app/geo.py's
+// destination_point so the drawn speed vector matches the same math the
+// backend uses for predictive-incursion projection, not a flat lat/lon-
+// degree approximation that distorts increasingly at higher latitudes.
+function destinationPoint(lat, lon, bearingDeg, distanceM) {
+  const R = 6371000.0;
+  const angularDistance = distanceM / R;
+  const bearingRad = (bearingDeg * Math.PI) / 180;
+  const lat1Rad = (lat * Math.PI) / 180;
+  const lat2Rad = Math.asin(
+    Math.sin(lat1Rad) * Math.cos(angularDistance) +
+      Math.cos(lat1Rad) * Math.sin(angularDistance) * Math.cos(bearingRad)
+  );
+  const lon2Rad =
+    (lon * Math.PI) / 180 +
+    Math.atan2(
+      Math.sin(bearingRad) * Math.sin(angularDistance) * Math.cos(lat1Rad),
+      Math.cos(angularDistance) - Math.sin(lat1Rad) * Math.sin(lat2Rad)
+    );
+  return [(lat2Rad * 180) / Math.PI, (lon2Rad * 180) / Math.PI];
+}
 
 const CLASS_COLOR = {
   drone: "var(--drone)", aircraft: "var(--aircraft)", bird: "var(--bird)",
@@ -377,6 +428,8 @@ function visibleTracks() {
 async function selectTrack(id) {
   state.selectedTrackId = id;
   state.trail = [];
+  state.scrubIndex = null;
+  stopPlayback();
   renderTracks();
   renderMap();
   renderDetails();
@@ -387,12 +440,73 @@ async function selectTrack(id) {
     if (state.selectedTrackId !== id) return; // a newer selection has since won
     state.trail = history
       .filter((d) => d.latitude != null && d.longitude != null)
-      .map((d) => [d.latitude, d.longitude]);
+      .map((d) => ({ lat: d.latitude, lon: d.longitude, t: d.timestamp }));
     renderMap();
+    renderDetails();
   } catch (e) {
     if (e instanceof AuthError) showAuthBar(true);
     console.error(e);
   }
+}
+
+// --- Timeline scrubber: replay the selected track's full history
+// (state.trail, oldest first) instead of only ever showing its live
+// position. ------------------------------------------------------------
+
+function stopPlayback() {
+  if (playbackTimer != null) {
+    clearInterval(playbackTimer);
+    playbackTimer = null;
+  }
+}
+
+function updatePlaybackUI() {
+  const range = document.getElementById("scrub-range");
+  const timeLabel = document.getElementById("scrub-time");
+  const playBtn = document.getElementById("play-btn");
+  const liveBtn = document.getElementById("live-btn");
+  if (range) range.value = String(state.scrubIndex ?? state.trail.length - 1);
+  if (timeLabel) {
+    timeLabel.textContent = state.scrubIndex != null ? fmtTime(state.trail[state.scrubIndex].t) : "Live";
+  }
+  if (playBtn) playBtn.textContent = playbackTimer != null ? "Pause" : "Play";
+  if (liveBtn) liveBtn.disabled = state.scrubIndex == null;
+}
+
+function setScrubIndex(index) {
+  stopPlayback();
+  state.scrubIndex = index;
+  renderMap();
+  updatePlaybackUI();
+}
+
+function goLive() {
+  stopPlayback();
+  state.scrubIndex = null;
+  renderMap();
+  updatePlaybackUI();
+}
+
+function togglePlayback() {
+  if (playbackTimer != null) {
+    stopPlayback();
+    updatePlaybackUI();
+    return;
+  }
+  if (state.trail.length < 2) return;
+  if (state.scrubIndex == null || state.scrubIndex >= state.trail.length - 1) {
+    state.scrubIndex = 0;
+  }
+  playbackTimer = setInterval(() => {
+    state.scrubIndex = (state.scrubIndex ?? -1) + 1;
+    if (state.scrubIndex >= state.trail.length - 1) {
+      state.scrubIndex = state.trail.length - 1;
+      stopPlayback();
+    }
+    renderMap();
+    updatePlaybackUI();
+  }, PLAYBACK_INTERVAL_MS);
+  updatePlaybackUI();
 }
 
 function flyToTrack(id, opts) {
@@ -504,14 +618,14 @@ function renderAlerts() {
 // panel without needing a second full map widget.
 function trailSparkline(trail) {
   if (trail.length < 2) return "";
-  const lats = trail.map((p) => p[0]);
-  const lons = trail.map((p) => p[1]);
+  const lats = trail.map((p) => p.lat);
+  const lons = trail.map((p) => p.lon);
   const minLat = Math.min(...lats), maxLat = Math.max(...lats);
   const minLon = Math.min(...lons), maxLon = Math.max(...lons);
   const latRange = Math.max(maxLat - minLat, 1e-6);
   const lonRange = Math.max(maxLon - minLon, 1e-6);
   const w = 220, h = 60, pad = 6;
-  const points = trail.map(([lat, lon]) => {
+  const points = trail.map(({ lat, lon }) => {
     const x = pad + ((lon - minLon) / lonRange) * (w - 2 * pad);
     const y = h - pad - ((lat - minLat) / latRange) * (h - 2 * pad);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
@@ -590,6 +704,18 @@ function renderDetails() {
         ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
       </div>
     </div>
+
+    ${state.trail.length > 1 ? `
+    <div class="kv-section">
+      <div class="kv-section-title">Playback</div>
+      <div class="playback-row">
+        <button class="secondary" id="play-btn">${playbackTimer != null ? "Pause" : "Play"}</button>
+        <input type="range" id="scrub-range" min="0" max="${state.trail.length - 1}" step="1"
+               value="${state.scrubIndex ?? state.trail.length - 1}">
+        <span class="playback-time" id="scrub-time">${state.scrubIndex != null ? fmtTime(state.trail[state.scrubIndex].t) : "Live"}</span>
+        <button class="secondary" id="live-btn" ${state.scrubIndex == null ? "disabled" : ""}>Live</button>
+      </div>
+    </div>` : ""}
   `;
 
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
@@ -598,6 +724,12 @@ function renderDetails() {
     if (state.follow) flyToTrack(track.id, { animate: true });
     renderDetails();
   });
+  const scrubRange = document.getElementById("scrub-range");
+  if (scrubRange) scrubRange.addEventListener("input", (e) => setScrubIndex(Number(e.target.value)));
+  const playBtn = document.getElementById("play-btn");
+  if (playBtn) playBtn.addEventListener("click", togglePlayback);
+  const liveBtn = document.getElementById("live-btn");
+  if (liveBtn) liveBtn.addEventListener("click", goLive);
 }
 
 let leafletMap = null;
@@ -606,7 +738,14 @@ let trackLayer = null;
 let mapFitted = false;
 
 function initMap() {
-  leafletMap = L.map("map").setView([51.5, -0.1], 11);
+  // zoomControl:false + a manually-added bottom-right one, because the
+  // default top-left position physically overlaps #map-layer-toggles
+  // (also top-left) -- Leaflet's control sits on top and silently eats
+  // clicks meant for the Trails/Vectors/Uncertainty checkboxes underneath
+  // it. Bottom-right is the only corner not already used by another
+  // control (top-right: layers; bottom-left: the legend).
+  leafletMap = L.map("map", { zoomControl: false }).setView([51.5, -0.1], 11);
+  L.control.zoom({ position: "bottomright" }).addTo(leafletMap);
 
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   const cartoAttr = osmAttr + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
@@ -654,6 +793,10 @@ function initMap() {
 
   document.getElementById("toggle-trail").addEventListener("change", (e) => {
     state.showTrail = e.target.checked;
+    renderMap();
+  });
+  document.getElementById("toggle-vectors").addEventListener("change", (e) => {
+    state.showVectors = e.target.checked;
     renderMap();
   });
   document.getElementById("toggle-uncertainty").addEventListener("change", (e) => {
@@ -706,12 +849,36 @@ function renderMap() {
   });
 
   if (state.showTrail && state.trail.length > 1) {
-    L.polyline(state.trail, { color: "#fff", weight: 2, opacity: 0.7, dashArray: "4 4" }).addTo(trackLayer);
+    L.polyline(state.trail.map((p) => [p.lat, p.lon]), { color: "#fff", weight: 2, opacity: 0.7, dashArray: "4 4" })
+      .addTo(trackLayer);
   }
 
   const pts = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
+
+  // Short fading breadcrumb trail per visible track, from recently polled
+  // positions (breadcrumbs) -- unlike the selected track's full history
+  // line above, this works for every track without a per-track history
+  // fetch. Drawn as one short segment per pair of consecutive points, each
+  // more opaque than the last, so the trail reads as "recent motion" with
+  // a clear front/back rather than a static, directionless line.
+  if (state.showTrail) {
+    pts.forEach((t) => {
+      const points = breadcrumbs.get(t.id);
+      if (!points || points.length < 2) return;
+      const color = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
+      for (let i = 1; i < points.length; i++) {
+        const age = i / (points.length - 1); // 0 (oldest segment) -> 1 (newest)
+        L.polyline(
+          [[points[i - 1].lat, points[i - 1].lon], [points[i].lat, points[i].lon]],
+          { color, weight: 2, opacity: 0.15 + age * 0.45 }
+        ).addTo(trackLayer);
+      }
+    });
+  }
+
   pts.forEach((t) => {
     const selected = t.id === state.selectedTrackId;
+    const scrubbing = selected && state.scrubIndex != null;
 
     if (selected && state.showUncertainty && t.position_uncertainty_m) {
       L.circle([t.latitude, t.longitude], {
@@ -724,19 +891,59 @@ function renderMap() {
       }).addTo(trackLayer);
     }
 
+    // A real great-circle projection of where this track will be in
+    // VECTOR_HORIZON_S seconds if it holds its current heading/speed --
+    // not just a color, an actual bearing a viewer can read off the map,
+    // the same way RF direction-finding bearings are shown.
+    if (state.showVectors && t.heading_deg != null && t.speed_mps != null && t.speed_mps >= MIN_VECTOR_SPEED_MPS) {
+      const tip = destinationPoint(t.latitude, t.longitude, t.heading_deg, t.speed_mps * VECTOR_HORIZON_S);
+      L.polyline([[t.latitude, t.longitude], tip], {
+        color: CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown,
+        weight: selected ? 2 : 1.5,
+        opacity: 0.8,
+        dashArray: "1 5",
+        lineCap: "round",
+      }).addTo(trackLayer);
+    }
+
     const marker = L.marker([t.latitude, t.longitude], { icon: markerIcon(t, selected) })
       .on("click", () => selectTrack(t.id))
       .addTo(trackLayer);
+    // Dim the live marker while scrubbing history for this track -- the
+    // ghost marker below (at the scrubbed position) is the one that
+    // should draw the eye.
+    if (scrubbing) marker.setOpacity(0.35);
 
     const labelParts = [`#${t.id}`, t.classification];
     if (t.speed_mps != null) labelParts.push(`${t.speed_mps.toFixed(1)} m/s`);
     const label = labelParts.join(" · ");
-    if (selected) {
+    if (selected && !scrubbing) {
       marker.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip" });
     } else {
+      // Non-permanent (hover-only) for an unselected track, and also for
+      // the selected track's live marker while scrubbing its history --
+      // dimmed context at that point, not the focal point, so a permanent
+      // label would just compete with the ghost marker's below.
       marker.bindTooltip(label, { direction: "top", offset: [0, -10], className: "track-tooltip" });
     }
   });
+
+  if (state.selectedTrackId != null && state.scrubIndex != null && state.trail[state.scrubIndex]) {
+    const point = state.trail[state.scrubIndex];
+    const selTrack = state.tracks.find((tr) => tr.id === state.selectedTrackId);
+    const color = CLASS_COLOR_HEX[(selTrack && selTrack.classification) || "unknown"] || CLASS_COLOR_HEX.unknown;
+    const ghostHtml = `<div style="width:20px;height:20px;">
+      <svg width="20" height="20" viewBox="0 0 20 20">
+        <circle cx="10" cy="10" r="7" fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="2" stroke-dasharray="3 2"/>
+      </svg>
+    </div>`;
+    L.marker([point.lat, point.lon], {
+      icon: L.divIcon({ html: ghostHtml, className: "", iconSize: [20, 20], iconAnchor: [10, 10] }),
+      zIndexOffset: 500,
+    })
+      .bindTooltip(`history · ${fmtTime(point.t)}`, { permanent: true, direction: "top", offset: [0, -12], className: "track-tooltip" })
+      .addTo(trackLayer);
+  }
 
   if (state.follow && state.selectedTrackId != null) {
     flyToTrack(state.selectedTrackId, { animate: false });
@@ -746,6 +953,31 @@ function renderMap() {
       leafletMap.fitBounds(allPts, { padding: [20, 20], maxZoom: 15 });
       mapFitted = true;
     }
+  }
+}
+
+// Append each track's current position to its breadcrumb trail (skipping
+// an unchanged position, so a stationary/hovering track doesn't pile up
+// identical points instead of an actual trail), capped by both point count
+// and age. Drops breadcrumbs for any track that no longer appears at all
+// (closed/expired) so the map doesn't accumulate stale entries forever.
+function recordBreadcrumbs(tracks) {
+  const now = Date.now();
+  const seen = new Set();
+  tracks.forEach((t) => {
+    if (t.latitude == null || t.longitude == null) return;
+    seen.add(t.id);
+    const points = breadcrumbs.get(t.id) || [];
+    const last = points[points.length - 1];
+    if (!last || last.lat !== t.latitude || last.lon !== t.longitude) {
+      points.push({ lat: t.latitude, lon: t.longitude, t: now });
+    }
+    while (points.length > BREADCRUMB_MAX_POINTS) points.shift();
+    while (points.length > 1 && now - points[0].t > BREADCRUMB_MAX_AGE_MS) points.shift();
+    breadcrumbs.set(t.id, points);
+  });
+  for (const id of Array.from(breadcrumbs.keys())) {
+    if (!seen.has(id)) breadcrumbs.delete(id);
   }
 }
 
@@ -781,6 +1013,7 @@ async function refresh() {
     state.incidents = incidents;
     state.zones = zones;
     state.sensors = sensors;
+    recordBreadcrumbs(tracks);
     showAuthBar(false);
     renderTracks();
     renderAlerts();

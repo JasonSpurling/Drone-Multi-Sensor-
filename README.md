@@ -777,7 +777,20 @@ can't set it to fake a position out of the signature's scope.
   a track closes, only purged by age via `DRONE_DETECTION_RETENTION_DAYS`
   above, so there's no separate "archive" to look in -- if retention hasn't
   purged it, the history is still there. The dashboard draws it as a dashed
-  trail on the map when you select a track.
+  trail on the map when you select a track, and the Selected Track panel's
+  **Playback** scrubber lets you step (or auto-play) through that history --
+  dragging the slider moves a dashed "ghost" marker to the track's position
+  at that point in time, dimming its live marker for context; the Live
+  button snaps back to its current position.
+- **Map trails and projected path**: every visible track (not just the
+  selected one) draws a short fading trail from its last several polled
+  positions, so recent motion/direction is readable at a glance without
+  selecting each track in turn. Each track with a heading and speed above
+  1 m/s also draws a dotted line projecting 30s ahead along a real
+  great-circle bearing (the same geodesic math `app/georeference.py` uses
+  server-side, not a flat lat/lon approximation) -- a visual aid, not tied
+  to `DRONE_PREDICTIVE_HORIZON_SECONDS`. Both are togglable via the map's
+  Trails/Vectors checkboxes.
 - **Track history export**: `GET /api/tracks/{track_id}/history/export?format=gpx|kml|csv`
   returns the same history as a downloadable file for an external tool --
   GPX or KML for a GIS/mapping application (Google Earth, QGIS, ...), CSV
