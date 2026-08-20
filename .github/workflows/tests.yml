@@ -24,10 +24,21 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
-      - run: ruff check app/ tests/
+      - run: ruff check app/ tests/ tests_e2e/
       # --ignore-missing-imports: several adapters import optional,
       # hardware/protocol-specific packages (numpy, cryptography excepted --
       # those are core deps) not installed here by design (see
       # requirements-*.txt) -- their own stub-less third-party types aren't
       # what this check is for; app's own code is still fully checked.
       - run: mypy app/ --ignore-missing-imports
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-e2e.txt
+      - run: playwright install --with-deps chromium
+      - run: python -m pytest tests_e2e/ -v

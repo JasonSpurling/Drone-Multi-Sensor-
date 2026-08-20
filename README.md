@@ -127,6 +127,31 @@ DRONE_TEST_DATABASE_URL="postgresql+psycopg2://user:pass@127.0.0.1:5432/drone_te
 Each test drops and recreates the `public` schema on that database, so
 point it at a disposable database, never one with real data.
 
+**Linting and type-checking** (`ruff`, `mypy` -- also run in CI as a
+separate `lint` job): see `pyproject.toml`'s `[tool.ruff]` section for the
+deliberate rule selection and why a few categories (naive-datetime
+warnings, FastAPI's `Depends()`/`Query()` default-argument pattern) are
+intentionally excluded rather than fought.
+
+```bash
+pip install -r requirements-dev.txt
+ruff check app/ tests/ tests_e2e/
+mypy app/ --ignore-missing-imports
+```
+
+**Browser-driven dashboard tests** (`tests_e2e/`, a separate CI job):
+launches the real dashboard in a real headless Chromium via Playwright and
+clicks around in it -- selecting a track, dragging the Playback scrubber,
+toggling map layers -- catching what `tests/`'s API-level tests can't
+(this is exactly how the zoom-control/map-layer-toggles click-interception
+bug documented above was actually found). See `tests_e2e/README.md`.
+
+```bash
+pip install -r requirements-e2e.txt
+playwright install chromium
+python -m pytest tests_e2e/ -v
+```
+
 ## Deployment
 
 **Quick single-container run** (SQLite, fine for trying it out):
@@ -971,6 +996,7 @@ app/
   api/                    Route handlers, one module per resource
   static/dashboard.html   Dashboard (no build step; loads Leaflet + map tiles from a CDN, so it needs internet access)
 tests/                     Pytest suite (runs against SQLite by default, PostgreSQL optionally)
+tests_e2e/                 Browser-driven dashboard tests (Playwright, separate CI job -- see its README.md)
 simulator.py               Posts realistic detections against a running server
 main.py                    Entrypoint (python main.py)
 Dockerfile                 Single-stage container build

@@ -41,6 +41,15 @@ line-length = 120
 #   throughout the codebase, not fix a real bug.
 select = ["E", "F", "B", "C4", "I", "UP", "SIM", "RUF", "BLE", "ASYNC"]
 
+[tool.pytest.ini_options]
+# Default to the unit/API suite only -- tests_e2e/ needs playwright (a
+# separate, heavier install: requirements-e2e.txt, `playwright install
+# chromium`) not part of the base dev setup, and its conftest.py imports
+# playwright at module scope, so an unscoped `pytest`/`python -m pytest`
+# without this would fail to even collect without it installed. Run
+# `pytest tests_e2e/` explicitly for the browser-driven suite.
+testpaths = ["tests"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's own dependency-injection pattern -- Depends(...)/Query(...) as
 # a parameter default -- is correct and idiomatic, not the "mutable
