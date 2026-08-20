@@ -862,6 +862,59 @@ can't set it to fake a position out of the signature's scope.
   over a raw socket rather than a full client library, so it adds no new
   dependency.
 
+## Load testing
+
+`scripts/load_test.py` measures real throughput/latency against a running
+instance -- not a pass/fail CI gate (the numbers are a property of the
+machine running it, not a fixed correctness threshold), just a documented,
+reproducible way to generate them:
+
+```bash
+python scripts/load_test.py --url http://127.0.0.1:8000 --mode single --sensors 20 --duration 15
+python scripts/load_test.py --url http://127.0.0.1:8000 --mode batch --batch-size 30 --requests 100
+```
+
+**Last recorded results** (this container's CPU, single instance, rate
+limiting raised via `DRONE_RATE_LIMIT_PER_SECOND`/`_BURST` to measure the
+actual processing ceiling rather than the deliberate per-sensor throttle --
+see Operations above):
+
+| Backend | Mode | Throughput | p50 / p95 / p99 latency |
+|---|---|---|---|
+| SQLite | single (20 concurrent sensors) | 92.6 req/s | 211 / 258 / 279 ms |
+| SQLite | batch (30 plots/request) | 87.5 plots/s | 330 / 394 / 1244 ms |
+| PostgreSQL | single (20 concurrent sensors) | 67.5 req/s | 288 / 341 / 359 ms |
+| PostgreSQL | batch (30 plots/request) | 69.0 plots/s | 420 / 514 / 848 ms |
+
+Two things worth understanding about these numbers, not just the numbers
+themselves:
+
+- **PostgreSQL is not faster here, and that's expected, not a bug.**
+  `app.tracking`'s `_association_lock` guards the read-then-write
+  detection/track/incident sequence against FastAPI's threadpool running
+  concurrent requests, serializing *all* detection processing through one
+  process-wide lock regardless of backend. That means this benchmark never
+  exercises PostgreSQL's actual advantage (concurrent writers from multiple
+  processes/replicas, which SQLite cannot do at all); it only measures
+  per-query round-trip cost, where SQLite's in-process file access beats a
+  TCP round-trip to Postgres. Point `DRONE_DATABASE_URL` at PostgreSQL for
+  concurrent-write *safety* (multiple app instances, a separate reporting
+  connection) or its operational maturity (replication, backups, monitoring
+  tooling), not for single-instance throughput.
+- **Batch throughput degrades as active track count grows** (visible in the
+  batch mode's much higher p99 vs p50 -- a single slow outlier well above
+  the rest): `associate_detections_batch`'s Hungarian assignment builds an
+  `n × m` cost matrix (n = detections in this batch, m = active tracks) and
+  solves it in better-than-cubic but still superlinear time in the active
+  track count. Fine at the track counts a single site actually sees; a
+  deployment expecting a very large number of simultaneously active tracks
+  should re-measure at that scale specifically, not extrapolate from these
+  numbers.
+
+Reproduce these (or measure your own deployment's real numbers, which will
+differ by hardware): create a fresh scratch database, start the app against
+it, then run both `--mode single` and `--mode batch` above.
+
 ## Configuration
 
 All settings are environment variables with working defaults — nothing
