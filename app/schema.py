@@ -56,6 +56,7 @@ track = Table(
     Column("heading_deg", Float),
     Column("speed_mps", Float),
     Column("position_uncertainty_m", Float),
+    Column("maneuver_probability", Float),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --

@@ -437,9 +437,14 @@ The storage layer (`app/db.py`) is plain SQL via SQLAlchemy Core against a
 schema defined once in `app/schema.py`, so both backends run the exact
 same code path -- the full test suite passes unmodified against either
 (see "Tests" below). Table/column additions since the initial release are
-picked up on startup via a lightweight migration check; there's no
-migration framework (Alembic etc.) since the schema is still small enough
-to evolve by hand.
+picked up automatically on startup via a lightweight migration check --
+no manual step, no separate tool, for that class of change.
+
+**Alembic** (`migrations/`) is available for the migrations that
+startup-time approach structurally can't do safely -- renaming/dropping a
+column, changing a column's type, or a real data migration. It's optional
+tooling for that specific case, not a required deploy step: see
+`migrations/README.md`.
 
 ### Backup and restore
 

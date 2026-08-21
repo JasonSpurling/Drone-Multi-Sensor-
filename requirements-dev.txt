@@ -5,3 +5,8 @@ httpx==0.28.1
 ruff==0.16.3
 mypy==2.3.1
 bandit==1.9.4
+# Only for tests/test_alembic_migrations.py's schema-drift guard (compares
+# app/schema.py against what init_db() actually creates) -- not needed to
+# run the app itself; see requirements-migrations.txt/migrations/README.md
+# for actually authoring/running a migration.
+alembic==1.19.1

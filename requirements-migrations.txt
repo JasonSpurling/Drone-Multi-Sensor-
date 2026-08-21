@@ -1,0 +1,6 @@
+# Alembic (migrations/) -- optional tooling for schema changes app/db.py's
+# own runtime auto-migrator can't safely do (see migrations/README.md and
+# the README's "Database migrations" section). Not needed to run the app
+# itself: init_db() creates/upgrades the schema at startup without this.
+-r requirements-postgres.txt
+alembic==1.19.1
