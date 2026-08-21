@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.db import get_sensor_registration, get_track, list_detections, list_tracks
 from app.export import to_csv, to_gpx, to_kml
 from app.models import Detection, Track, TrackStatus
@@ -8,6 +9,8 @@ from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 
 router = APIRouter()
+
+_viewer_roles = (ROLE_VIEWER, ROLE_OPERATOR, ROLE_ADMIN)
 
 _EXPORT_CONTENT_TYPES = {
     "gpx": "application/gpx+xml",
@@ -21,15 +24,18 @@ def get_tracks(
     status: TrackStatus | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_role(*_viewer_roles)),
 ) -> list[Track]:
-    expire_stale_tracks()
-    return list_tracks(status=status.value if status else None, limit=limit, offset=offset)
+    expire_stale_tracks(principal.site_id)
+    return list_tracks(
+        site_id=principal.site_id, status=status.value if status else None, limit=limit, offset=offset
+    )
 
 
 @router.get("/tracks/{track_id}", response_model=Track)
-def get_track_by_id(track_id: int) -> Track:
-    expire_stale_tracks()
-    track = get_track(track_id)
+def get_track_by_id(track_id: int, principal: Principal = Depends(require_role(*_viewer_roles))) -> Track:
+    expire_stale_tracks(principal.site_id)
+    track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return track
@@ -40,6 +46,7 @@ def get_track_history(
     track_id: int,
     limit: int = Query(default=1000, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_role(*_viewer_roles)),
 ) -> list[Detection]:
     """Every detection that fed this track, oldest first -- a replay of
     where it actually was over time. Detection rows aren't deleted when a
@@ -47,26 +54,27 @@ def get_track_history(
     so this works for a closed/lost track exactly the same as an active
     one -- there's no separate "archive" to look in.
     """
-    if get_track(track_id) is None:
+    if get_track(track_id, principal.site_id) is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return list_detections(track_id=track_id, limit=limit, offset=offset)
+    return list_detections(site_id=principal.site_id, track_id=track_id, limit=limit, offset=offset)
 
 
 @router.get("/tracks/{track_id}/history/export")
 def export_track_history(
     track_id: int,
     format: str = Query(pattern="^(gpx|kml|csv)$"),
+    principal: Principal = Depends(require_role(*_viewer_roles)),
 ) -> Response:
     """The same history as GET .../history, rendered as a downloadable
     file for post-incident review in an external tool: GPX or KML for a
     GIS/mapping application (Google Earth, QGIS, ...), CSV for a
     spreadsheet. See app/export.py for the format details.
     """
-    track = get_track(track_id)
+    track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    detections = list_detections(track_id=track_id, limit=10000)
+    detections = list_detections(site_id=principal.site_id, track_id=track_id, limit=10000)
     if format == "gpx":
         body = to_gpx(track, detections)
     elif format == "kml":
@@ -83,7 +91,9 @@ def export_track_history(
 
 
 @router.get("/tracks/{track_id}/cue/{camera_sensor_id}")
-def get_camera_cue(track_id: int, camera_sensor_id: str) -> dict:
+def get_camera_cue(
+    track_id: int, camera_sensor_id: str, principal: Principal = Depends(require_role(*_viewer_roles))
+) -> dict:
     """Slew-to-cue: the pan/tilt angles a PTZ camera registered as
     `camera_sensor_id` needs to point at this track's current position --
     lets a camera mounted somewhere else entirely be pointed at whatever a
@@ -97,13 +107,13 @@ def get_camera_cue(track_id: int, camera_sensor_id: str) -> dict:
     pushed -- poll this (an external PTZ bridge script, or an operator's
     own tooling) as often as your camera's slew rate can usefully act on.
     """
-    track = get_track(track_id)
+    track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     if track.latitude is None or track.longitude is None:
         raise HTTPException(status_code=409, detail="Track has no resolved position to cue toward")
 
-    camera = get_sensor_registration(camera_sensor_id)
+    camera = get_sensor_registration(camera_sensor_id, principal.site_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera sensor not registered")
 

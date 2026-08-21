@@ -126,17 +126,17 @@ def _apply_filter_to_track(track: Track, imm: IMMFilter, ref_lat: float, ref_lon
     track.maneuver_probability = imm.maneuver_probability
 
 
-def expire_stale_tracks(now: datetime | None = None) -> None:
+def expire_stale_tracks(site_id: int, now: datetime | None = None) -> None:
     """Sweep tracks: active -> lost -> closed once each has gone quiet too long."""
     now = now or utcnow()
 
-    for track in list_tracks(status=TrackStatus.ACTIVE.value):
+    for track in list_tracks(site_id=site_id, status=TrackStatus.ACTIVE.value):
         if now - track.last_seen > timedelta(seconds=TRACK_STALE_SECONDS):
             track.status = TrackStatus.LOST
             update_track(track)
             logger.info("Track %s -> lost (last seen %s)", track.track_uid, track.last_seen)
 
-    for track in list_tracks(status=TrackStatus.LOST.value):
+    for track in list_tracks(site_id=site_id, status=TrackStatus.LOST.value):
         if now - track.last_seen > timedelta(seconds=TRACK_DROP_SECONDS):
             track.status = TrackStatus.CLOSED
             update_track(track)
@@ -160,8 +160,11 @@ def _find_matching_track(detection: Detection, measurement_variance: float) -> _
     if detection.latitude is None or detection.longitude is None:
         return None
 
+    if detection.site_id is None:
+        return None
+
     best: tuple[_Match, float] | None = None
-    for track in list_tracks(status=TrackStatus.ACTIVE.value):
+    for track in list_tracks(site_id=detection.site_id, status=TrackStatus.ACTIVE.value):
         if track.id is None or track.latitude is None or track.longitude is None:
             continue
         if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
@@ -192,8 +195,11 @@ def _find_matching_track(detection: Detection, measurement_variance: float) -> _
 
 
 def _spawn_track(detection: Detection, measurement_variance: float) -> Track:
+    if detection.site_id is None:
+        raise ValueError("_spawn_track requires detection.site_id to be set")
     track = create_track(
         Track(
+            site_id=detection.site_id,
             track_uid=str(uuid.uuid4()),
             first_seen=detection.timestamp,
             last_seen=detection.timestamp,
@@ -265,7 +271,8 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     # bird/unknown/friendly and never re-flagging it is the unsafe failure
     # mode. Any other non-UNKNOWN label only fills in a still-unknown
     # classification, never overwrites one.
-    history = list_recent_detections(track.id, FUSION_HISTORY_LIMIT)
+    assert track.site_id is not None
+    history = list_recent_detections(track.id, track.site_id, FUSION_HISTORY_LIMIT)
     fused_label = fuse_classification(history)
     upgrades_to_drone = fused_label == Classification.DRONE and track.classification != Classification.AIRCRAFT
     fills_in_unknown = track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN
@@ -293,11 +300,14 @@ def associate_detection(detection: Detection) -> Detection:
     see associate_detections_batch for a joint (global nearest neighbor)
     resolution across a whole batch at once.
     """
+    if detection.site_id is None:
+        raise ValueError("associate_detection requires detection.site_id to be set")
+    site_id: int = detection.site_id
     detection = georeference(detection)
     measurement_variance = _measurement_variance(detection.confidence)
 
     with _association_lock, cluster_association_lock():
-        expire_stale_tracks(detection.timestamp)
+        expire_stale_tracks(site_id, detection.timestamp)
 
         match = None
         if detection.latitude is not None and detection.longitude is not None:
@@ -336,15 +346,25 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
     """
     if not detections:
         return []
+    site_ids = {d.site_id for d in detections}
+    if site_ids == {None}:
+        raise ValueError("associate_detections_batch requires every detection.site_id to be set")
+    if len(site_ids) > 1:
+        raise ValueError(
+            "associate_detections_batch requires every detection in a batch to share one site_id "
+            "-- post each site's detections as its own batch"
+        )
+    site_id = next(iter(site_ids))
+    assert site_id is not None
 
     georeferenced = [georeference(d) for d in detections]
     measurement_variances = [_measurement_variance(d.confidence) for d in georeferenced]
 
     with _association_lock, cluster_association_lock():
-        expire_stale_tracks(max(d.timestamp for d in georeferenced))
+        expire_stale_tracks(site_id, max(d.timestamp for d in georeferenced))
 
         active_tracks = [
-            t for t in list_tracks(status=TrackStatus.ACTIVE.value)
+            t for t in list_tracks(site_id=site_id, status=TrackStatus.ACTIVE.value)
             if t.id is not None and t.latitude is not None and t.longitude is not None
         ]
         # A dict comprehension/list filter's condition narrows t.id within

@@ -77,12 +77,13 @@ def _open_incident(
     # ever call this with a persisted track/zone -- checked before the call
     # in each, since a None id can't be looked up or referenced by a
     # foreign key anyway.
-    assert track.id is not None and zone.id is not None
-    if get_open_incident(track.id, zone.id, incident_type.value) is not None:
+    assert track.id is not None and zone.id is not None and track.site_id is not None
+    if get_open_incident(track.id, zone.id, incident_type.value, track.site_id) is not None:
         return None
     severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
     incident = create_incident(
         Incident(
+            site_id=track.site_id,
             incident_uid=str(uuid.uuid4()),
             incident_type=incident_type,
             severity=severity,
@@ -121,14 +122,15 @@ _BEHAVIORAL_SEVERITY = {
 
 
 def _open_behavioral_incident(track: Track, incident_type: IncidentType, description: str) -> Incident | None:
-    if track.id is None:
+    if track.id is None or track.site_id is None:
         return None
-    if get_open_behavioral_incident(track.id, incident_type.value) is not None:
+    if get_open_behavioral_incident(track.id, incident_type.value, track.site_id) is not None:
         return None
 
     severity = _BEHAVIORAL_SEVERITY.get(incident_type, IncidentSeverity.MEDIUM)
     incident = create_incident(
         Incident(
+            site_id=track.site_id,
             incident_uid=str(uuid.uuid4()),
             incident_type=incident_type,
             severity=severity,
@@ -156,9 +158,9 @@ def check_loitering_incident(track: Track) -> Incident | None:
     see app/behavior_sweep.py): does this track's own recent history show
     it circling/hovering in one place rather than transiting through?
     """
-    if track.id is None:
+    if track.id is None or track.site_id is None:
         return None
-    history = list_recent_detections(track.id, 500)
+    history = list_recent_detections(track.id, track.site_id, 500)
     if not detect_loitering(history, radius_m=LOITERING_RADIUS_M, min_duration_s=LOITERING_MIN_DURATION_S):
         return None
     return _open_behavioral_incident(
@@ -208,15 +210,15 @@ def check_shadowing_incidents(tracks: list[Track]) -> list[Incident]:
     first rather than comparing every active pair's full history.
     """
     opened: list[Incident] = []
-    valid_tracks = [t for t in tracks if t.id is not None]
+    valid_tracks = [t for t in tracks if t.id is not None and t.site_id is not None]
     # Each track's history is independent of which pair it's being compared
     # against, so fetch it once per track rather than once per pair --
     # avoids O(n^2) redundant DB reads of the same track's (up to 500-row)
     # history as the active-track count grows.
     histories: dict[int, list[Detection]] = {}
     for t in valid_tracks:
-        assert t.id is not None  # guaranteed by the valid_tracks filter above
-        histories[t.id] = list_recent_detections(t.id, 500)
+        assert t.id is not None and t.site_id is not None  # guaranteed by the valid_tracks filter above
+        histories[t.id] = list_recent_detections(t.id, t.site_id, 500)
     for i, track_a in enumerate(valid_tracks):
         for track_b in valid_tracks[i + 1 :]:
             assert track_a.id is not None and track_b.id is not None  # from valid_tracks
@@ -241,11 +243,11 @@ def check_zone_incidents(track: Track) -> list[Incident]:
     current position falls inside, unless one is already open for that
     track/zone pair.
     """
-    if track.id is None or track.latitude is None or track.longitude is None:
+    if track.id is None or track.site_id is None or track.latitude is None or track.longitude is None:
         return []
 
     opened: list[Incident] = []
-    for zone in zones_containing_point(track.latitude, track.longitude, track.altitude_m):
+    for zone in zones_containing_point(track.latitude, track.longitude, track.site_id, track.altitude_m):
         if zone.zone_type != ZoneType.RESTRICTED or zone.id is None:
             continue
         incident = _open_incident(
@@ -265,6 +267,7 @@ def check_predicted_incursions(track: Track) -> list[Incident]:
     """
     if (
         track.id is None
+        or track.site_id is None
         or track.latitude is None
         or track.longitude is None
         or track.speed_mps is None
@@ -279,11 +282,12 @@ def check_predicted_incursions(track: Track) -> list[Incident]:
     projected_lat, projected_lon = local_m_to_latlon(east_m, north_m, track.latitude, track.longitude)
 
     current_zone_ids = {
-        zone.id for zone in zones_containing_point(track.latitude, track.longitude, track.altitude_m)
+        zone.id
+        for zone in zones_containing_point(track.latitude, track.longitude, track.site_id, track.altitude_m)
     }
 
     opened: list[Incident] = []
-    for zone in zones_containing_point(projected_lat, projected_lon, track.altitude_m):
+    for zone in zones_containing_point(projected_lat, projected_lon, track.site_id, track.altitude_m):
         if zone.zone_type != ZoneType.RESTRICTED or zone.id is None or zone.id in current_zone_ids:
             continue
         incident = _open_incident(

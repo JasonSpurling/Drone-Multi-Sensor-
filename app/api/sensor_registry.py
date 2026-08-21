@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.auth import ROLE_ADMIN, require_role
+from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.db import list_sensor_registrations, upsert_sensor_registration
 from app.models import SensorRegistration, SensorRegistrationInput
 
@@ -8,19 +8,25 @@ router = APIRouter()
 
 
 @router.get("/sensor-registrations", response_model=list[SensorRegistration])
-def get_sensor_registrations() -> list[SensorRegistration]:
-    return [SensorRegistration(**row) for row in list_sensor_registrations()]
+def get_sensor_registrations(
+    principal: Principal = Depends(require_role(ROLE_VIEWER, ROLE_OPERATOR, ROLE_ADMIN)),
+) -> list[SensorRegistration]:
+    return [SensorRegistration(**row) for row in list_sensor_registrations(principal.site_id)]
 
 
 @router.put(
     "/sensor-registrations/{sensor_id}",
     response_model=SensorRegistration,
     status_code=201,
-    dependencies=[Depends(require_role(ROLE_ADMIN))],
 )
-def register_sensor(sensor_id: str, registration: SensorRegistrationInput) -> SensorRegistration:
+def register_sensor(
+    sensor_id: str,
+    registration: SensorRegistrationInput,
+    principal: Principal = Depends(require_role(ROLE_ADMIN)),
+) -> SensorRegistration:
     upsert_sensor_registration(
         sensor_id=sensor_id,
+        site_id=principal.site_id,
         sensor_type=registration.sensor_type.value,
         latitude=registration.latitude,
         longitude=registration.longitude,
@@ -28,4 +34,4 @@ def register_sensor(sensor_id: str, registration: SensorRegistrationInput) -> Se
         azimuth_reference_deg=registration.azimuth_reference_deg,
         active=registration.active,
     )
-    return SensorRegistration(sensor_id=sensor_id, **registration.model_dump())
+    return SensorRegistration(sensor_id=sensor_id, site_id=principal.site_id, **registration.model_dump())

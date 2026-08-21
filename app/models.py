@@ -71,10 +71,27 @@ class ZoneType(StrEnum):
     SAFE = "safe"
 
 
+class Site(BaseModel):
+    """A physical site/campus this deployment monitors. Every row-level
+    record (Track, Detection, Incident, Zone, SensorRegistration,
+    AuthorizedOperator) belongs to exactly one Site -- see app/sites.py
+    and app/auth.py's Principal.site_id for how a request's site is
+    determined (from its API key, not client-supplied).
+    """
+
+    id: int | None = None
+    name: str = Field(min_length=1, max_length=200)
+
+
 class Detection(BaseModel):
     """A single raw detection reported by one sensor."""
 
     id: int | None = None
+    # Set server-side from the authenticated request's Principal.site_id
+    # (see app/auth.py) -- never client-supplied, the same reasoning as
+    # georeferenced below: a client claiming a site it doesn't hold a key
+    # for would let it write into another site's data.
+    site_id: int | None = None
     sensor_id: str = Field(min_length=1, max_length=100)
     sensor_type: SensorType
     timestamp: datetime = Field(default_factory=utcnow)
@@ -99,6 +116,7 @@ class Track(BaseModel):
     """A fused sequence of detections believed to be the same object."""
 
     id: int | None = None
+    site_id: int | None = None
     track_uid: str
     first_seen: datetime
     last_seen: datetime
@@ -125,6 +143,7 @@ class Incident(BaseModel):
     """An actionable event raised from track/zone analysis."""
 
     id: int | None = None
+    site_id: int | None = None
     incident_uid: str
     incident_type: IncidentType
     severity: IncidentSeverity = IncidentSeverity.LOW
@@ -143,6 +162,7 @@ class Zone(BaseModel):
     """A geofenced area of interest, e.g. a no-fly zone."""
 
     id: int | None = None
+    site_id: int | None = None
     name: str
     zone_type: ZoneType
     polygon: list[tuple[float, float]] = Field(
@@ -181,6 +201,7 @@ class SensorRegistrationInput(BaseModel):
 
 class SensorRegistration(SensorRegistrationInput):
     sensor_id: str
+    site_id: int | None = None
 
 
 class AuthorizedOperatorInput(BaseModel):
@@ -201,3 +222,4 @@ class AuthorizedOperatorInput(BaseModel):
 
 class AuthorizedOperator(AuthorizedOperatorInput):
     operator_id: str
+    site_id: int | None = None

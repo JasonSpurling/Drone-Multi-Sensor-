@@ -31,7 +31,7 @@ def test_batch_over_limit_is_rejected(monkeypatch):
         assert "4" in r.json()["detail"]
 
 
-def test_batch_over_limit_persists_nothing(monkeypatch):
+def test_batch_over_limit_persists_nothing(monkeypatch, site_id):
     # An oversized batch must be rejected atomically, before any of its
     # detections are processed -- not partially ingested.
     from app.db import list_tracks
@@ -41,7 +41,7 @@ def test_batch_over_limit_persists_nothing(monkeypatch):
         batch = [{**DETECTION_BODY, "latitude": 51.5 + i * 0.0001} for i in range(4)]
         r = client.post("/api/detections/batch", json=batch)
         assert r.status_code == 413
-    assert list_tracks() == []
+    assert list_tracks(site_id=site_id) == []
 
 
 def test_rate_limited_response_carries_retry_after_header(monkeypatch):

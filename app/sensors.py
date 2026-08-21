@@ -12,7 +12,7 @@ from app.models import SensorHealth, SensorStatus
 from app.util import utcnow
 
 
-def get_sensor_health(now: datetime | None = None) -> list[SensorHealth]:
+def get_sensor_health(site_id: int, now: datetime | None = None) -> list[SensorHealth]:
     now = now or utcnow()
 
     # A correlated-subquery "latest row per group" instead of a bare
@@ -26,12 +26,14 @@ def get_sensor_health(now: datetime | None = None) -> list[SensorHealth]:
                 """
                 SELECT sensor_id, sensor_type, timestamp
                 FROM detection d
-                WHERE timestamp = (
-                    SELECT MAX(timestamp) FROM detection WHERE sensor_id = d.sensor_id
+                WHERE site_id = :site_id AND timestamp = (
+                    SELECT MAX(timestamp) FROM detection
+                    WHERE sensor_id = d.sensor_id AND site_id = :site_id
                 )
                 ORDER BY sensor_id
                 """
-            )
+            ),
+            {"site_id": site_id},
         ).mappings().all()
 
     results: list[SensorHealth] = []

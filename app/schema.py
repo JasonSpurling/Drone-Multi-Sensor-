@@ -14,22 +14,37 @@ from sqlalchemy import Column, Float, ForeignKey, Index, Integer, MetaData, Stri
 
 metadata = MetaData()
 
+# A physical site/campus this deployment monitors. Every row-level table
+# below carries a site_id, and every db.py query is scoped by it -- see
+# app/sites.py for the "auto-create + migrate everything to a default
+# site" startup behavior that keeps a pre-multi-site deployment's data
+# and API keys working unchanged after upgrading.
+site = Table(
+    "site",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(200), nullable=False, unique=True),
+)
+
 zone = Table(
     "zone",
     metadata,
     Column("id", Integer, primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("name", String(200), nullable=False),
     Column("zone_type", String(50), nullable=False),
     Column("polygon", Text, nullable=False),  # JSON list of [lat, lon] pairs
     Column("min_altitude_m", Float),
     Column("max_altitude_m", Float),
     Column("active", Integer, nullable=False, server_default="1"),  # 0/1
+    Index("idx_zone_site_id", "site_id"),
 )
 
 track = Table(
     "track",
     metadata,
     Column("id", Integer, primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("track_uid", String(64), nullable=False, unique=True),
     Column("first_seen", String(40), nullable=False),
     Column("last_seen", String(40), nullable=False),
@@ -48,6 +63,10 @@ track = Table(
     # both become a full table scan + sort once a deployment accumulates
     # more than a handful of closed tracks.
     Index("idx_track_status_last_seen", "status", "last_seen"),
+    # Every query above is also scoped by site_id now (see app/db.py) --
+    # this composite index leads with it so a site-scoped query doesn't
+    # regress to the unscoped index's scan-then-filter.
+    Index("idx_track_site_status_last_seen", "site_id", "status", "last_seen"),
 )
 
 # IMM (Interacting Multiple Model) filter state for a track's motion
@@ -72,6 +91,7 @@ detection = Table(
     "detection",
     metadata,
     Column("id", Integer, primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("sensor_id", String(100), nullable=False),
     Column("sensor_type", String(20), nullable=False),
     Column("timestamp", String(40), nullable=False),
@@ -92,12 +112,14 @@ detection = Table(
     Column("georeferenced", Integer, nullable=False, server_default="0"),
     Index("idx_detection_track_id", "track_id"),
     Index("idx_detection_timestamp", "timestamp"),
+    Index("idx_detection_site_id", "site_id"),
 )
 
 incident = Table(
     "incident",
     metadata,
     Column("id", Integer, primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("incident_uid", String(64), nullable=False, unique=True),
     Column("incident_type", String(50), nullable=False),
     Column("severity", String(20), nullable=False, server_default="low"),
@@ -110,21 +132,33 @@ incident = Table(
     Column("acknowledged_by", String(100)),
     Index("idx_incident_track_id", "track_id"),
     Index("idx_incident_zone_id", "zone_id"),
+    Index("idx_incident_site_id", "site_id"),
 )
 
 # A registered sensor's fixed mounting position/orientation, used to
 # georeference detections that report azimuth/range instead of lat/lon
 # (see app/georeference.py).
+#
+# KNOWN LIMITATION: sensor_id stays the sole primary key (not (site_id,
+# sensor_id)) -- making it composite would need rebuilding this table on
+# upgrade (SQLite/PostgreSQL can't portably ALTER a table's primary key in
+# place), which is a bigger migration than this pass takes on. Until that
+# lands, sensor_id (and authorized_operator's operator_id, same reason)
+# must stay globally unique across every site in one deployment, not just
+# within a site -- namespace them (e.g. "site-a-radar-1") if you're
+# running more than one site with independently-chosen sensor names.
 sensor_registry = Table(
     "sensor_registry",
     metadata,
     Column("sensor_id", String(100), primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("sensor_type", String(20), nullable=False),
     Column("latitude", Float, nullable=False),
     Column("longitude", Float, nullable=False),
     Column("altitude_m", Float),
     Column("azimuth_reference_deg", Float, nullable=False, server_default="0.0"),
     Column("active", Integer, nullable=False, server_default="1"),
+    Index("idx_sensor_registry_site_id", "site_id"),
 )
 
 # Known/authorized drone operators (e.g. FAA Remote ID operator IDs) whose
@@ -137,7 +171,9 @@ authorized_operator = Table(
     "authorized_operator",
     metadata,
     Column("operator_id", String(100), primary_key=True),
+    Column("site_id", Integer, ForeignKey("site.id")),
     Column("name", String(200), nullable=False),
     Column("public_key", String(64)),
     Column("active", Integer, nullable=False, server_default="1"),
+    Index("idx_authorized_operator_site_id", "site_id"),
 )

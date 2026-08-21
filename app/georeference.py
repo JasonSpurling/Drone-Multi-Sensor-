@@ -21,7 +21,9 @@ def georeference(detection: Detection) -> Detection:
     if detection.azimuth_deg is None or detection.range_m is None:
         return detection
 
-    registration = get_sensor_registration(detection.sensor_id)
+    if detection.site_id is None:
+        return detection
+    registration = get_sensor_registration(detection.sensor_id, detection.site_id)
     if registration is None:
         return detection
 

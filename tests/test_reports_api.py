@@ -19,10 +19,11 @@ from app.models import (
 SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
 
-def _seed_incident(opened_at: datetime, severity=IncidentSeverity.MEDIUM) -> Incident:
-    zone = create_zone(Zone(name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+def _seed_incident(site_id: int, opened_at: datetime, severity=IncidentSeverity.MEDIUM) -> Incident:
+    zone = create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
     track = create_track(
         Track(
+            site_id=site_id,
             track_uid=f"track-{opened_at.isoformat()}", first_seen=opened_at, last_seen=opened_at,
             status=TrackStatus.ACTIVE, classification=Classification.DRONE,
             latitude=51.1, longitude=0.0, altitude_m=100,
@@ -30,6 +31,7 @@ def _seed_incident(opened_at: datetime, severity=IncidentSeverity.MEDIUM) -> Inc
     )
     return create_incident(
         Incident(
+            site_id=site_id,
             incident_uid=f"uid-{opened_at.isoformat()}",
             incident_type=IncidentType.ZONE_INCURSION,
             severity=severity,
@@ -41,11 +43,11 @@ def _seed_incident(opened_at: datetime, severity=IncidentSeverity.MEDIUM) -> Inc
     )
 
 
-def test_report_counts_incidents_within_range():
+def test_report_counts_incidents_within_range(site_id):
     with TestClient(app) as client:
-        _seed_incident(datetime(2026, 1, 5))
-        _seed_incident(datetime(2026, 1, 6))
-        _seed_incident(datetime(2026, 2, 1))  # outside range, must not be counted
+        _seed_incident(site_id, datetime(2026, 1, 5))
+        _seed_incident(site_id, datetime(2026, 1, 6))
+        _seed_incident(site_id, datetime(2026, 2, 1))  # outside range, must not be counted
 
         r = client.get("/api/reports/incidents", params={"start": "2026-01-01", "end": "2026-01-31"})
         assert r.status_code == 200
@@ -64,9 +66,9 @@ def test_report_rejects_malformed_date():
         assert r.status_code == 400
 
 
-def test_export_returns_csv_of_incidents_in_range():
+def test_export_returns_csv_of_incidents_in_range(site_id):
     with TestClient(app) as client:
-        _seed_incident(datetime(2026, 1, 5))
+        _seed_incident(site_id, datetime(2026, 1, 5))
 
         r = client.get("/api/reports/incidents/export", params={"start": "2026-01-01", "end": "2026-01-31"})
         assert r.status_code == 200

@@ -13,9 +13,10 @@ from app.models import Zone
 logger = logging.getLogger(__name__)
 
 
-def load_zones_from_file(path: Path = ZONES_SEED_PATH) -> list[Zone]:
+def load_zones_from_file(site_id: int, path: Path = ZONES_SEED_PATH) -> list[Zone]:
     """Insert any zones from the JSON file that aren't already in the database
-    (matched by name), so this is safe to call on every startup.
+    for `site_id` (matched by name), so this is safe to call on every startup.
+    Seeded into the default site -- see app/main.py's startup hook.
     """
     if not path.exists():
         logger.warning("Zone seed file not found: %s", path)
@@ -23,8 +24,8 @@ def load_zones_from_file(path: Path = ZONES_SEED_PATH) -> list[Zone]:
 
     loaded: list[Zone] = []
     for raw in json.loads(path.read_text()):
-        zone = Zone.model_validate(raw)
-        if get_zone_by_name(zone.name) is None:
+        zone = Zone.model_validate({**raw, "site_id": site_id})
+        if get_zone_by_name(zone.name, site_id) is None:
             zone = create_zone(zone)
             logger.info("Loaded zone '%s' (%s) from seed file", zone.name, zone.zone_type.value)
         loaded.append(zone)
@@ -57,9 +58,11 @@ def _within_altitude_band(altitude_m: float | None, zone: Zone) -> bool:
     return not (zone.max_altitude_m is not None and altitude_m > zone.max_altitude_m)
 
 
-def zones_containing_point(lat: float, lon: float, altitude_m: float | None = None) -> list[Zone]:
+def zones_containing_point(
+    lat: float, lon: float, site_id: int, altitude_m: float | None = None
+) -> list[Zone]:
     return [
         zone
-        for zone in list_zones(active_only=True)
+        for zone in list_zones(site_id=site_id, active_only=True)
         if point_in_polygon(lat, lon, zone.polygon) and _within_altitude_band(altitude_m, zone)
     ]

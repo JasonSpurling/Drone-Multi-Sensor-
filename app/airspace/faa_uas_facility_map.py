@@ -109,17 +109,19 @@ def geojson_to_zones(geojson: dict, name_prefix: str = "FAA UAS Facility Map") -
 
 
 def import_facility_map_zones(
-    min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float, site_id: int,
     feature_server_url: str = DEFAULT_FEATURE_SERVER_URL,
 ) -> list[Zone]:
     """Fetch and persist every facility-map grid cell in the given bounding
-    box, skipping any zone name already in the database (matches
-    app.zones.load_zones_from_file's safe-to-rerun behavior).
+    box into `site_id`, skipping any zone name already in the database for
+    that site (matches app.zones.load_zones_from_file's safe-to-rerun
+    behavior).
     """
     geojson = fetch_facility_map_geojson(min_lon, min_lat, max_lon, max_lat, feature_server_url)
     imported: list[Zone] = []
     for zone in geojson_to_zones(geojson):
-        if get_zone_by_name(zone.name) is None:
+        zone = zone.model_copy(update={"site_id": site_id})
+        if get_zone_by_name(zone.name, site_id) is None:
             zone = create_zone(zone)
             logger.info(
                 "Imported FAA UAS Facility Map zone '%s' (ceiling=%s)",

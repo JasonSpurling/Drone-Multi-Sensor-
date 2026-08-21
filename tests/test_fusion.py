@@ -76,10 +76,12 @@ def test_rf_without_raw_data_behaves_exactly_as_before():
     assert fuse_classification([detection]) == Classification.DRONE
 
 
-def test_correctly_signed_authorized_operator_votes_friendly():
+def test_correctly_signed_authorized_operator_votes_friendly(site_id):
     private_key, public_key = generate_keypair()
-    upsert_authorized_operator("OP-12345", name="Test Operator", public_key=public_key)
-    detection = make_detection(sensor_type=SensorType.RADAR, confidence=0.9, raw_data={"operator_id": "OP-12345"})
+    upsert_authorized_operator("OP-12345", site_id, name="Test Operator", public_key=public_key)
+    detection = make_detection(
+        site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9, raw_data={"operator_id": "OP-12345"}
+    )
     signature = sign_detection("OP-12345", detection, private_key)
     detection.raw_data["signature"] = signature
     assert fuse_classification([detection]) == Classification.FRIENDLY
@@ -94,44 +96,51 @@ def test_unregistered_operator_id_does_not_grant_friendly():
     assert fuse_classification(detections) == Classification.DRONE
 
 
-def test_spoofed_operator_id_without_signature_does_not_grant_friendly():
+def test_spoofed_operator_id_without_signature_does_not_grant_friendly(site_id):
     # Regression test for the security-review finding: registering an
     # operator_id used to be enough to trust *any* detection claiming it.
     # Now a bare operator_id claim, with no valid signature, must not vote
     # FRIENDLY -- an attacker who only knows/guesses a valid operator_id
     # (e.g. from having ingest access) gains nothing.
     _, public_key = generate_keypair()
-    upsert_authorized_operator("OP-12345", name="Test Operator", public_key=public_key)
+    upsert_authorized_operator("OP-12345", site_id, name="Test Operator", public_key=public_key)
     detections = [
         make_detection(
-            sensor_type=SensorType.RADAR, confidence=0.9, raw_data={"operator_id": "OP-12345"}
+            site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9,
+            raw_data={"operator_id": "OP-12345"},
         )
     ]
     assert fuse_classification(detections) == Classification.DRONE
 
 
-def test_spoofed_operator_id_with_wrong_signature_does_not_grant_friendly():
+def test_spoofed_operator_id_with_wrong_signature_does_not_grant_friendly(site_id):
     _private_key_a, public_key_a = generate_keypair()
     private_key_b, _ = generate_keypair()
-    upsert_authorized_operator("OP-12345", name="Test Operator", public_key=public_key_a)
+    upsert_authorized_operator("OP-12345", site_id, name="Test Operator", public_key=public_key_a)
 
-    detection = make_detection(sensor_type=SensorType.RADAR, confidence=0.9, raw_data={"operator_id": "OP-12345"})
+    detection = make_detection(
+        site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9,
+        raw_data={"operator_id": "OP-12345"},
+    )
     # Signed with a *different* private key than the one registered for OP-12345.
     forged_signature = sign_detection("OP-12345", detection, private_key_b)
     detection.raw_data["signature"] = forged_signature
     assert fuse_classification([detection]) == Classification.DRONE
 
 
-def test_signature_cannot_be_replayed_onto_a_different_detection():
+def test_signature_cannot_be_replayed_onto_a_different_detection(site_id):
     private_key, public_key = generate_keypair()
-    upsert_authorized_operator("OP-12345", name="Test Operator", public_key=public_key)
+    upsert_authorized_operator("OP-12345", site_id, name="Test Operator", public_key=public_key)
 
-    original = make_detection(sensor_type=SensorType.RADAR, confidence=0.9, raw_data={"operator_id": "OP-12345"})
+    original = make_detection(
+        site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9,
+        raw_data={"operator_id": "OP-12345"},
+    )
     signature = sign_detection("OP-12345", original, private_key)
 
     # Same signature, different detection (different position) -- must not verify.
     replayed = make_detection(
-        sensor_type=SensorType.RADAR, confidence=0.9, latitude=1.0, longitude=1.0,
+        site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9, latitude=1.0, longitude=1.0,
         raw_data={"operator_id": "OP-12345", "signature": signature},
     )
     assert fuse_classification([replayed]) == Classification.DRONE

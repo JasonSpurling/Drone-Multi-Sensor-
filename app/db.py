@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
 from app.config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
-from app.models import Detection, Incident, Track, Zone
+from app.models import Detection, Incident, Site, Track, Zone
 from app.schema import metadata
 
 # pool_size/max_overflow are QueuePool-specific -- SQLite doesn't use
@@ -55,13 +55,19 @@ _TABLE_MIGRATION_COLUMNS = {
         "speed_mps": "REAL",
         "position_uncertainty_m": "REAL",
         "maneuver_probability": "REAL",
+        "site_id": "INTEGER",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
+        "site_id": "INTEGER",
     },
     "detection": {
         "georeferenced": "INTEGER DEFAULT 0",
+        "site_id": "INTEGER",
     },
+    "zone": {"site_id": "INTEGER"},
+    "incident": {"site_id": "INTEGER"},
+    "sensor_registry": {"site_id": "INTEGER"},
 }
 
 
@@ -109,29 +115,110 @@ def _migrate_indexes() -> None:
         )
 
 
+def _backfill_site_id_columns() -> None:
+    """Every row that predates the site_id column (an upgraded deployment)
+    gets assigned to the default site, so existing data and API keys keep
+    working unchanged -- see app/sites.py. A no-op on a fresh database
+    (nothing to backfill) or a re-run (WHERE site_id IS NULL matches
+    nothing once already backfilled).
+    """
+    from app.sites import ensure_default_site
+
+    default_site_id = ensure_default_site()
+    # Every table that carries a site_id column, each statement spelled
+    # out (rather than interpolating a table name into one f-string
+    # query) to avoid the dynamic-SQL shape entirely. Every fresh row
+    # from here on gets a real site_id from the request's Principal (see
+    # app/auth.py), never a default-backfilled one -- this only matters
+    # for rows that predate the site_id column (an upgraded deployment).
+    statements = (
+        "UPDATE zone SET site_id = :site_id WHERE site_id IS NULL",
+        "UPDATE track SET site_id = :site_id WHERE site_id IS NULL",
+        "UPDATE detection SET site_id = :site_id WHERE site_id IS NULL",
+        "UPDATE incident SET site_id = :site_id WHERE site_id IS NULL",
+        "UPDATE sensor_registry SET site_id = :site_id WHERE site_id IS NULL",
+        "UPDATE authorized_operator SET site_id = :site_id WHERE site_id IS NULL",
+    )
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement), {"site_id": default_site_id})
+
+
 def init_db() -> None:
     _migrate_kalman_state_table()
     metadata.create_all(engine, checkfirst=True)
     _migrate_table_columns()
     _migrate_indexes()
+    _backfill_site_id_columns()
+
+
+# --- Site helpers -----------------------------------------------------
+
+def create_site(name: str) -> Site:
+    with db_session() as conn:
+        row = conn.execute(
+            text("INSERT INTO site (name) VALUES (:name) RETURNING id"), {"name": name}
+        ).one()
+    return Site(id=row.id, name=name)
+
+
+def get_site(site_id: int) -> Site | None:
+    with db_session() as conn:
+        row = conn.execute(text("SELECT * FROM site WHERE id = :id"), {"id": site_id}).mappings().fetchone()
+    return Site(id=row["id"], name=row["name"]) if row else None
+
+
+def get_site_by_name(name: str) -> Site | None:
+    with db_session() as conn:
+        row = conn.execute(text("SELECT * FROM site WHERE name = :name"), {"name": name}).mappings().fetchone()
+    return Site(id=row["id"], name=row["name"]) if row else None
+
+
+def list_sites() -> list[Site]:
+    with db_session() as conn:
+        rows = conn.execute(text("SELECT * FROM site ORDER BY name")).mappings().all()
+    return [Site(id=row["id"], name=row["name"]) for row in rows]
+
+
+def count_active_tracks_all_sites() -> int:
+    """Deployment-wide count, not scoped to one site -- for GET /metrics,
+    a Prometheus scrape endpoint with no per-request Principal (it's
+    conventionally left unauthenticated) reporting on the whole
+    deployment's operational health, not any one site's.
+    """
+    with db_session() as conn:
+        return conn.execute(
+            text("SELECT COUNT(*) FROM track WHERE status = :status"), {"status": "active"}
+        ).scalar_one()
+
+
+def count_open_incidents_all_sites() -> int:
+    """See count_active_tracks_all_sites -- same reasoning, deployment-wide."""
+    with db_session() as conn:
+        return conn.execute(
+            text("SELECT COUNT(*) FROM incident WHERE status = :status"), {"status": "open"}
+        ).scalar_one()
 
 
 # --- Detection helpers -----------------------------------------------------
 
 def create_detection(detection: Detection) -> Detection:
+    if detection.site_id is None:
+        raise ValueError("create_detection requires detection.site_id to be set")
     with db_session() as conn:
         row = conn.execute(
             text(
                 """
                 INSERT INTO detection
-                    (sensor_id, sensor_type, timestamp, track_id, latitude, longitude,
+                    (site_id, sensor_id, sensor_type, timestamp, track_id, latitude, longitude,
                      altitude_m, azimuth_deg, range_m, confidence, raw_data, georeferenced)
-                VALUES (:sensor_id, :sensor_type, :timestamp, :track_id, :latitude, :longitude,
+                VALUES (:site_id, :sensor_id, :sensor_type, :timestamp, :track_id, :latitude, :longitude,
                         :altitude_m, :azimuth_deg, :range_m, :confidence, :raw_data, :georeferenced)
                 RETURNING id
                 """
             ),
             {
+                "site_id": detection.site_id,
                 "sensor_id": detection.sensor_id,
                 "sensor_type": detection.sensor_type.value,
                 "timestamp": detection.timestamp.isoformat(),
@@ -150,24 +237,25 @@ def create_detection(detection: Detection) -> Detection:
     return detection
 
 
-def get_detection(detection_id: int) -> Detection | None:
+def get_detection(detection_id: int, site_id: int) -> Detection | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM detection WHERE id = :id"), {"id": detection_id}
+            text("SELECT * FROM detection WHERE id = :id AND site_id = :site_id"),
+            {"id": detection_id, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_detection(row) if row else None
 
 
 def list_detections(
-    track_id: int | None = None, limit: int | None = None, offset: int = 0
+    site_id: int, track_id: int | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Detection]:
     with db_session() as conn:
         if track_id is not None:
-            query = "SELECT * FROM detection WHERE track_id = :track_id ORDER BY timestamp"
-            params: dict = {"track_id": track_id}
+            query = "SELECT * FROM detection WHERE site_id = :site_id AND track_id = :track_id ORDER BY timestamp"
+            params: dict = {"site_id": site_id, "track_id": track_id}
         else:
-            query = "SELECT * FROM detection ORDER BY timestamp"
-            params = {}
+            query = "SELECT * FROM detection WHERE site_id = :site_id ORDER BY timestamp"
+            params = {"site_id": site_id}
         if limit is not None:
             query += " LIMIT :limit OFFSET :offset"
             params.update(limit=limit, offset=offset)
@@ -175,7 +263,7 @@ def list_detections(
     return [_row_to_detection(row) for row in rows]
 
 
-def list_recent_detections(track_id: int, limit: int) -> list[Detection]:
+def list_recent_detections(track_id: int, site_id: int, limit: int) -> list[Detection]:
     """Most recent `limit` detections for a track, for classification
     fusion (app/fusion.py) -- order doesn't matter to a weighted vote, only
     which detections are included.
@@ -183,10 +271,10 @@ def list_recent_detections(track_id: int, limit: int) -> list[Detection]:
     with db_session() as conn:
         rows = conn.execute(
             text(
-                "SELECT * FROM detection WHERE track_id = :track_id "
+                "SELECT * FROM detection WHERE track_id = :track_id AND site_id = :site_id "
                 "ORDER BY timestamp DESC LIMIT :limit"
             ),
-            {"track_id": track_id, "limit": limit},
+            {"track_id": track_id, "site_id": site_id, "limit": limit},
         ).mappings().all()
     return [_row_to_detection(row) for row in rows]
 
@@ -203,6 +291,7 @@ def purge_old_detections(before: datetime) -> int:
 def _row_to_detection(row) -> Detection:
     return Detection(
         id=row["id"],
+        site_id=row["site_id"],
         sensor_id=row["sensor_id"],
         sensor_type=row["sensor_type"],
         timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -221,21 +310,24 @@ def _row_to_detection(row) -> Detection:
 # --- Track helpers -----------------------------------------------------
 
 def create_track(track: Track) -> Track:
+    if track.site_id is None:
+        raise ValueError("create_track requires track.site_id to be set")
     with db_session() as conn:
         row = conn.execute(
             text(
                 """
                 INSERT INTO track
-                    (track_uid, first_seen, last_seen, status, classification,
+                    (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
                      position_uncertainty_m, maneuver_probability)
-                VALUES (:track_uid, :first_seen, :last_seen, :status, :classification,
+                VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
                         :position_uncertainty_m, :maneuver_probability)
                 RETURNING id
                 """
             ),
             {
+                "site_id": track.site_id,
                 "track_uid": track.track_uid,
                 "first_seen": track.first_seen.isoformat(),
                 "last_seen": track.last_seen.isoformat(),
@@ -285,24 +377,25 @@ def update_track(track: Track) -> Track:
     return track
 
 
-def get_track(track_id: int) -> Track | None:
+def get_track(track_id: int, site_id: int) -> Track | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM track WHERE id = :id"), {"id": track_id}
+            text("SELECT * FROM track WHERE id = :id AND site_id = :site_id"),
+            {"id": track_id, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_track(row) if row else None
 
 
 def list_tracks(
-    status: str | None = None, limit: int | None = None, offset: int = 0
+    site_id: int, status: str | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Track]:
     with db_session() as conn:
         if status is not None:
-            query = "SELECT * FROM track WHERE status = :status ORDER BY last_seen DESC"
-            params: dict = {"status": status}
+            query = "SELECT * FROM track WHERE site_id = :site_id AND status = :status ORDER BY last_seen DESC"
+            params: dict = {"site_id": site_id, "status": status}
         else:
-            query = "SELECT * FROM track ORDER BY last_seen DESC"
-            params = {}
+            query = "SELECT * FROM track WHERE site_id = :site_id ORDER BY last_seen DESC"
+            params = {"site_id": site_id}
         if limit is not None:
             query += " LIMIT :limit OFFSET :offset"
             params.update(limit=limit, offset=offset)
@@ -313,6 +406,7 @@ def list_tracks(
 def _row_to_track(row) -> Track:
     return Track(
         id=row["id"],
+        site_id=row["site_id"],
         track_uid=row["track_uid"],
         first_seen=datetime.fromisoformat(row["first_seen"]),
         last_seen=datetime.fromisoformat(row["last_seen"]),
@@ -398,19 +492,22 @@ def get_kalman_state(track_id: int) -> KalmanStateRecord | None:
 # --- Incident helpers -----------------------------------------------------
 
 def create_incident(incident: Incident) -> Incident:
+    if incident.site_id is None:
+        raise ValueError("create_incident requires incident.site_id to be set")
     with db_session() as conn:
         row = conn.execute(
             text(
                 """
                 INSERT INTO incident
-                    (incident_uid, incident_type, severity, status, track_id, zone_id,
+                    (site_id, incident_uid, incident_type, severity, status, track_id, zone_id,
                      opened_at, closed_at, description, acknowledged_by)
-                VALUES (:incident_uid, :incident_type, :severity, :status, :track_id, :zone_id,
+                VALUES (:site_id, :incident_uid, :incident_type, :severity, :status, :track_id, :zone_id,
                         :opened_at, :closed_at, :description, :acknowledged_by)
                 RETURNING id
                 """
             ),
             {
+                "site_id": incident.site_id,
                 "incident_uid": incident.incident_uid,
                 "incident_type": incident.incident_type.value,
                 "severity": incident.severity.value,
@@ -427,10 +524,11 @@ def create_incident(incident: Incident) -> Incident:
     return incident
 
 
-def get_incident(incident_id: int) -> Incident | None:
+def get_incident(incident_id: int, site_id: int) -> Incident | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM incident WHERE id = :id"), {"id": incident_id}
+            text("SELECT * FROM incident WHERE id = :id AND site_id = :site_id"),
+            {"id": incident_id, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
@@ -457,23 +555,23 @@ def update_incident(incident: Incident) -> Incident:
     return incident
 
 
-def get_open_incident(track_id: int, zone_id: int, incident_type: str) -> Incident | None:
+def get_open_incident(track_id: int, zone_id: int, incident_type: str, site_id: int) -> Incident | None:
     with db_session() as conn:
         row = conn.execute(
             text(
                 """
                 SELECT * FROM incident
                 WHERE track_id = :track_id AND zone_id = :zone_id AND incident_type = :incident_type
-                    AND status != 'resolved'
+                    AND site_id = :site_id AND status != 'resolved'
                 ORDER BY opened_at DESC LIMIT 1
                 """
             ),
-            {"track_id": track_id, "zone_id": zone_id, "incident_type": incident_type},
+            {"track_id": track_id, "zone_id": zone_id, "incident_type": incident_type, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
 
-def get_open_behavioral_incident(track_id: int, incident_type: str) -> Incident | None:
+def get_open_behavioral_incident(track_id: int, incident_type: str, site_id: int) -> Incident | None:
     """Like get_open_incident, but for a behavioral incident (loitering,
     formation, shadowing -- app/behavior.py) that isn't tied to any zone.
     `zone_id = :zone_id` in the zone-based query would never match a NULL
@@ -486,25 +584,25 @@ def get_open_behavioral_incident(track_id: int, incident_type: str) -> Incident 
                 """
                 SELECT * FROM incident
                 WHERE track_id = :track_id AND zone_id IS NULL AND incident_type = :incident_type
-                    AND status != 'resolved'
+                    AND site_id = :site_id AND status != 'resolved'
                 ORDER BY opened_at DESC LIMIT 1
                 """
             ),
-            {"track_id": track_id, "incident_type": incident_type},
+            {"track_id": track_id, "incident_type": incident_type, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
 
 def list_incidents(
-    status: str | None = None, limit: int | None = None, offset: int = 0
+    site_id: int, status: str | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Incident]:
     with db_session() as conn:
         if status is not None:
-            query = "SELECT * FROM incident WHERE status = :status ORDER BY opened_at DESC"
-            params: dict = {"status": status}
+            query = "SELECT * FROM incident WHERE site_id = :site_id AND status = :status ORDER BY opened_at DESC"
+            params: dict = {"site_id": site_id, "status": status}
         else:
-            query = "SELECT * FROM incident ORDER BY opened_at DESC"
-            params = {}
+            query = "SELECT * FROM incident WHERE site_id = :site_id ORDER BY opened_at DESC"
+            params = {"site_id": site_id}
         if limit is not None:
             query += " LIMIT :limit OFFSET :offset"
             params.update(limit=limit, offset=offset)
@@ -512,15 +610,18 @@ def list_incidents(
     return [_row_to_incident(row) for row in rows]
 
 
-def list_incidents_in_range(start: datetime, end: datetime) -> list[Incident]:
+def list_incidents_in_range(start: datetime, end: datetime, site_id: int) -> list[Incident]:
     """All incidents opened in [start, end) -- for app/reporting.py's
     compliance/analytics rollups, which need a bounded window rather than
     list_incidents' "most recent N" pagination.
     """
     with db_session() as conn:
         rows = conn.execute(
-            text("SELECT * FROM incident WHERE opened_at >= :start AND opened_at < :end ORDER BY opened_at"),
-            {"start": start.isoformat(), "end": end.isoformat()},
+            text(
+                "SELECT * FROM incident WHERE opened_at >= :start AND opened_at < :end "
+                "AND site_id = :site_id ORDER BY opened_at"
+            ),
+            {"start": start.isoformat(), "end": end.isoformat(), "site_id": site_id},
         ).mappings().all()
     return [_row_to_incident(row) for row in rows]
 
@@ -528,6 +629,7 @@ def list_incidents_in_range(start: datetime, end: datetime) -> list[Incident]:
 def _row_to_incident(row) -> Incident:
     return Incident(
         id=row["id"],
+        site_id=row["site_id"],
         incident_uid=row["incident_uid"],
         incident_type=row["incident_type"],
         severity=row["severity"],
@@ -544,16 +646,19 @@ def _row_to_incident(row) -> Incident:
 # --- Zone helpers -----------------------------------------------------
 
 def create_zone(zone: Zone) -> Zone:
+    if zone.site_id is None:
+        raise ValueError("create_zone requires zone.site_id to be set")
     with db_session() as conn:
         row = conn.execute(
             text(
                 """
-                INSERT INTO zone (name, zone_type, polygon, min_altitude_m, max_altitude_m, active)
-                VALUES (:name, :zone_type, :polygon, :min_altitude_m, :max_altitude_m, :active)
+                INSERT INTO zone (site_id, name, zone_type, polygon, min_altitude_m, max_altitude_m, active)
+                VALUES (:site_id, :name, :zone_type, :polygon, :min_altitude_m, :max_altitude_m, :active)
                 RETURNING id
                 """
             ),
             {
+                "site_id": zone.site_id,
                 "name": zone.name,
                 "zone_type": zone.zone_type.value,
                 "polygon": json.dumps(zone.polygon),
@@ -566,36 +671,42 @@ def create_zone(zone: Zone) -> Zone:
     return zone
 
 
-def get_zone(zone_id: int) -> Zone | None:
+def get_zone(zone_id: int, site_id: int) -> Zone | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM zone WHERE id = :id"), {"id": zone_id}
+            text("SELECT * FROM zone WHERE id = :id AND site_id = :site_id"),
+            {"id": zone_id, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_zone(row) if row else None
 
 
-def get_zone_by_name(name: str) -> Zone | None:
+def get_zone_by_name(name: str, site_id: int) -> Zone | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM zone WHERE name = :name"), {"name": name}
+            text("SELECT * FROM zone WHERE name = :name AND site_id = :site_id"),
+            {"name": name, "site_id": site_id},
         ).mappings().fetchone()
     return _row_to_zone(row) if row else None
 
 
-def list_zones(active_only: bool = False) -> list[Zone]:
+def list_zones(site_id: int, active_only: bool = False) -> list[Zone]:
     with db_session() as conn:
         if active_only:
             rows = conn.execute(
-                text("SELECT * FROM zone WHERE active = 1 ORDER BY name")
+                text("SELECT * FROM zone WHERE site_id = :site_id AND active = 1 ORDER BY name"),
+                {"site_id": site_id},
             ).mappings().all()
         else:
-            rows = conn.execute(text("SELECT * FROM zone ORDER BY name")).mappings().all()
+            rows = conn.execute(
+                text("SELECT * FROM zone WHERE site_id = :site_id ORDER BY name"), {"site_id": site_id}
+            ).mappings().all()
     return [_row_to_zone(row) for row in rows]
 
 
 def _row_to_zone(row) -> Zone:
     return Zone(
         id=row["id"],
+        site_id=row["site_id"],
         name=row["name"],
         zone_type=row["zone_type"],
         polygon=json.loads(row["polygon"]),
@@ -609,6 +720,7 @@ def _row_to_zone(row) -> Zone:
 
 def upsert_sensor_registration(
     sensor_id: str,
+    site_id: int,
     sensor_type: str,
     latitude: float,
     longitude: float,
@@ -621,19 +733,21 @@ def upsert_sensor_registration(
             text(
                 """
                 INSERT INTO sensor_registry
-                    (sensor_id, sensor_type, latitude, longitude, altitude_m,
+                    (sensor_id, site_id, sensor_type, latitude, longitude, altitude_m,
                      azimuth_reference_deg, active)
-                VALUES (:sensor_id, :sensor_type, :latitude, :longitude, :altitude_m,
+                VALUES (:sensor_id, :site_id, :sensor_type, :latitude, :longitude, :altitude_m,
                         :azimuth_reference_deg, :active)
                 ON CONFLICT (sensor_id) DO UPDATE SET
-                    sensor_type = excluded.sensor_type, latitude = excluded.latitude,
-                    longitude = excluded.longitude, altitude_m = excluded.altitude_m,
+                    site_id = excluded.site_id, sensor_type = excluded.sensor_type,
+                    latitude = excluded.latitude, longitude = excluded.longitude,
+                    altitude_m = excluded.altitude_m,
                     azimuth_reference_deg = excluded.azimuth_reference_deg,
                     active = excluded.active
                 """
             ),
             {
                 "sensor_id": sensor_id,
+                "site_id": site_id,
                 "sensor_type": sensor_type,
                 "latitude": latitude,
                 "longitude": longitude,
@@ -644,19 +758,23 @@ def upsert_sensor_registration(
         )
 
 
-def get_sensor_registration(sensor_id: str) -> dict | None:
+def get_sensor_registration(sensor_id: str, site_id: int) -> dict | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM sensor_registry WHERE sensor_id = :sensor_id AND active = 1"),
-            {"sensor_id": sensor_id},
+            text(
+                "SELECT * FROM sensor_registry WHERE sensor_id = :sensor_id "
+                "AND site_id = :site_id AND active = 1"
+            ),
+            {"sensor_id": sensor_id, "site_id": site_id},
         ).mappings().fetchone()
     return dict(row) if row else None
 
 
-def list_sensor_registrations() -> list[dict]:
+def list_sensor_registrations(site_id: int) -> list[dict]:
     with db_session() as conn:
         rows = conn.execute(
-            text("SELECT * FROM sensor_registry ORDER BY sensor_id")
+            text("SELECT * FROM sensor_registry WHERE site_id = :site_id ORDER BY sensor_id"),
+            {"site_id": site_id},
         ).mappings().all()
     return [dict(row) for row in rows]
 
@@ -664,34 +782,45 @@ def list_sensor_registrations() -> list[dict]:
 # --- Authorized operator (friendly allowlist) helpers -----------------
 
 def upsert_authorized_operator(
-    operator_id: str, name: str, public_key: str | None = None, active: bool = True
+    operator_id: str, site_id: int, name: str, public_key: str | None = None, active: bool = True
 ) -> None:
     with db_session() as conn:
         conn.execute(
             text(
                 """
-                INSERT INTO authorized_operator (operator_id, name, public_key, active)
-                VALUES (:operator_id, :name, :public_key, :active)
+                INSERT INTO authorized_operator (operator_id, site_id, name, public_key, active)
+                VALUES (:operator_id, :site_id, :name, :public_key, :active)
                 ON CONFLICT (operator_id) DO UPDATE SET
-                    name = excluded.name, public_key = excluded.public_key, active = excluded.active
+                    site_id = excluded.site_id, name = excluded.name,
+                    public_key = excluded.public_key, active = excluded.active
                 """
             ),
-            {"operator_id": operator_id, "name": name, "public_key": public_key, "active": int(active)},
+            {
+                "operator_id": operator_id,
+                "site_id": site_id,
+                "name": name,
+                "public_key": public_key,
+                "active": int(active),
+            },
         )
 
 
-def get_authorized_operator(operator_id: str) -> dict | None:
+def get_authorized_operator(operator_id: str, site_id: int) -> dict | None:
     with db_session() as conn:
         row = conn.execute(
-            text("SELECT * FROM authorized_operator WHERE operator_id = :operator_id AND active = 1"),
-            {"operator_id": operator_id},
+            text(
+                "SELECT * FROM authorized_operator WHERE operator_id = :operator_id "
+                "AND site_id = :site_id AND active = 1"
+            ),
+            {"operator_id": operator_id, "site_id": site_id},
         ).mappings().fetchone()
     return dict(row) if row else None
 
 
-def list_authorized_operators() -> list[dict]:
+def list_authorized_operators(site_id: int) -> list[dict]:
     with db_session() as conn:
         rows = conn.execute(
-            text("SELECT * FROM authorized_operator ORDER BY operator_id")
+            text("SELECT * FROM authorized_operator WHERE site_id = :site_id ORDER BY operator_id"),
+            {"site_id": site_id},
         ).mappings().all()
     return [dict(row) for row in rows]

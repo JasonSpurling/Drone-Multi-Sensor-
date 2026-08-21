@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.api import (
@@ -17,19 +17,20 @@ from app.api import (
     reports,
     sensor_registry,
     sensors,
+    sites,
     tracks,
 )
 from app.api import zones as zones_api
-from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, require_role
 from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
     DETECTION_RETENTION_DAYS,
     RETENTION_SWEEP_INTERVAL_SECONDS,
 )
-from app.db import init_db, list_tracks, purge_old_detections
+from app.db import init_db, list_sites, list_tracks, purge_old_detections
 from app.incidents import check_formation_incidents, check_shadowing_incidents
 from app.logging_config import configure_logging
 from app.models import TrackStatus
+from app.sites import ensure_default_site
 from app.util import utcnow
 from app.zones import load_zones_from_file
 
@@ -37,8 +38,6 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-
-_viewer_auth = [Depends(require_role(ROLE_VIEWER, ROLE_OPERATOR, ROLE_ADMIN))]
 
 
 async def _retention_sweep_loop() -> None:
@@ -53,9 +52,15 @@ async def _retention_sweep_loop() -> None:
 
 
 def _run_behavior_sweep() -> None:
-    active_tracks = list_tracks(status=TrackStatus.ACTIVE.value)
-    check_formation_incidents(active_tracks)
-    check_shadowing_incidents(active_tracks)
+    # Per-site: formation/shadowing compare active tracks pairwise, and
+    # two tracks at different physical sites being "in formation" with
+    # each other is meaningless -- each site's tracks are only ever
+    # compared against that same site's other tracks.
+    for site in list_sites():
+        assert site.id is not None
+        active_tracks = list_tracks(site_id=site.id, status=TrackStatus.ACTIVE.value)
+        check_formation_incidents(active_tracks)
+        check_shadowing_incidents(active_tracks)
 
 
 async def _behavior_sweep_loop() -> None:
@@ -76,7 +81,7 @@ async def _behavior_sweep_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    load_zones_from_file()
+    load_zones_from_file(site_id=ensure_default_site())
     logger.info("Drone Multi-Sensor API started")
     retention_task = asyncio.create_task(_retention_sweep_loop())
     behavior_task = asyncio.create_task(_behavior_sweep_loop())
@@ -97,17 +102,19 @@ app = FastAPI(title="Drone Multi-Sensor", lifespan=lifespan)
 app.include_router(health.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 
-# POST /detections and the incident acknowledge/resolve actions apply their
-# own per-route role requirements (ingest vs operator); everything else
-# here is read-only and just needs any authenticated (viewer+) key.
+# Every route below applies its own per-route role requirement (rather
+# than a router-level blanket dependency): each handler needs the
+# authenticated Principal itself now, not just an auth check, to know
+# which site's data to read/write (see app/auth.py's Principal.site_id).
 app.include_router(detections.router, prefix="/api")
-app.include_router(tracks.router, prefix="/api", dependencies=_viewer_auth)
+app.include_router(tracks.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
-app.include_router(zones_api.router, prefix="/api", dependencies=_viewer_auth)
-app.include_router(sensors.router, prefix="/api", dependencies=_viewer_auth)
-app.include_router(sensor_registry.router, prefix="/api", dependencies=_viewer_auth)
-app.include_router(authorized_operators.router, prefix="/api", dependencies=_viewer_auth)
-app.include_router(reports.router, prefix="/api", dependencies=_viewer_auth)
+app.include_router(zones_api.router, prefix="/api")
+app.include_router(sensors.router, prefix="/api")
+app.include_router(sensor_registry.router, prefix="/api")
+app.include_router(authorized_operators.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
+app.include_router(sites.router, prefix="/api")
 
 
 @app.get("/", include_in_schema=False)

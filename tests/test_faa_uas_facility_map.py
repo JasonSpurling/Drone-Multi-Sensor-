@@ -111,20 +111,20 @@ def test_fetch_builds_bbox_query_and_parses_response(monkeypatch):
     assert "f=geojson" in captured_urls[0]
 
 
-def test_import_persists_zones_and_is_idempotent(isolated_db, monkeypatch):
+def test_import_persists_zones_and_is_idempotent(site_id, monkeypatch):
     def fake_fetch(*args, **kwargs):
         return SAMPLE_GEOJSON
 
     monkeypatch.setattr("app.airspace.faa_uas_facility_map.fetch_facility_map_geojson", fake_fetch)
 
-    first = import_facility_map_zones(-0.5, 51.3, 0.3, 51.7)
+    first = import_facility_map_zones(-0.5, 51.3, 0.3, 51.7, site_id)
     assert len(first) == 2
     assert all(zone.id is not None for zone in first)
 
-    second = import_facility_map_zones(-0.5, 51.3, 0.3, 51.7)
+    second = import_facility_map_zones(-0.5, 51.3, 0.3, 51.7, site_id)
     assert len(second) == 2
 
     # Re-running the import must not create duplicate rows.
-    all_zones = list_zones()
+    all_zones = list_zones(site_id=site_id)
     facility_map_zones = [z for z in all_zones if z.name.startswith("FAA UAS Facility Map")]
     assert len(facility_map_zones) == 2

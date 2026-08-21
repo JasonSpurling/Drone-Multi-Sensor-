@@ -14,10 +14,11 @@ from app.tracking import associate_detection
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
-def test_concurrent_detections_for_same_object_join_one_track():
+def test_concurrent_detections_for_same_object_join_one_track(site_id):
     def post(i: int):
         return associate_detection(
             Detection(
+                site_id=site_id,
                 sensor_id=f"sensor-{i}",
                 sensor_type=SensorType.RADAR,
                 timestamp=BASE_TIME,
@@ -33,4 +34,4 @@ def test_concurrent_detections_for_same_object_join_one_track():
 
     track_ids = {d.track_id for d in results}
     assert len(track_ids) == 1  # all detections landed on the same track
-    assert len(list_tracks()) == 1
+    assert len(list_tracks(site_id=site_id)) == 1

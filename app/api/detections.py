@@ -2,7 +2,7 @@ import math
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import ROLE_ADMIN, ROLE_INGEST, require_role
+from app.auth import ROLE_ADMIN, ROLE_INGEST, Principal, require_role
 from app.config import MAX_BATCH_SIZE, MAX_DETECTION_CLOCK_SKEW_SECONDS
 from app.metrics import clock_skew_rejected_total, detections_ingested_total, rate_limited_total
 from app.models import Detection
@@ -49,18 +49,22 @@ def _check_clock_skew(detection: Detection) -> None:
     "/detections",
     response_model=Detection,
     status_code=201,
-    dependencies=[Depends(require_role(ROLE_INGEST, ROLE_ADMIN))],
 )
-def ingest_detection(detection: Detection) -> Detection:
+def ingest_detection(
+    detection: Detection, principal: Principal = Depends(require_role(ROLE_INGEST, ROLE_ADMIN))
+) -> Detection:
     _check_rate_limit(detection.sensor_id)
     _check_clock_skew(detection)
     detections_ingested_total.labels(sensor_type=detection.sensor_type.value).inc()
     detection.id = None
     detection.track_id = None
-    # Server-computed only (see app/georeference.py) -- a client claiming
-    # this would let a signed detection's signature verify against a
-    # position it didn't actually sign (app/remote_id.py).
+    # Both server-computed only, from the authenticated request, never
+    # client-supplied: georeferenced the same reasoning as always (a
+    # signed detection's signature must verify against a position it
+    # actually signed), site_id because a client claiming a site it
+    # doesn't hold a key for would let it write into another site's data.
     detection.georeferenced = False
+    detection.site_id = principal.site_id
     return associate_detection(detection)
 
 
@@ -68,9 +72,10 @@ def ingest_detection(detection: Detection) -> Detection:
     "/detections/batch",
     response_model=list[Detection],
     status_code=201,
-    dependencies=[Depends(require_role(ROLE_INGEST, ROLE_ADMIN))],
 )
-def ingest_detections_batch(detections: list[Detection]) -> list[Detection]:
+def ingest_detections_batch(
+    detections: list[Detection], principal: Principal = Depends(require_role(ROLE_INGEST, ROLE_ADMIN))
+) -> list[Detection]:
     """Ingest a batch of simultaneous detections -- e.g. every plot from
     one radar scan/sweep -- resolved jointly via global nearest neighbor
     instead of one at a time. Use this instead of repeated POST
@@ -95,4 +100,5 @@ def ingest_detections_batch(detections: list[Detection]) -> list[Detection]:
         detection.id = None
         detection.track_id = None
         detection.georeferenced = False
+        detection.site_id = principal.site_id
     return associate_detections_batch(detections)

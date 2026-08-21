@@ -20,7 +20,9 @@ def is_authorized_detection(detection: Detection) -> bool:
     if not operator_id or not signature:
         return False
 
-    operator = get_authorized_operator(str(operator_id))
+    if detection.site_id is None:
+        return False
+    operator = get_authorized_operator(str(operator_id), detection.site_id)
     if operator is None or not operator.get("public_key"):
         return False
 

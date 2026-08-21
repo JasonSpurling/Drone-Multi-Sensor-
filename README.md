@@ -1074,7 +1074,7 @@ needs to be set to run locally.
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |
-| `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role: `ingest`, `viewer`, `operator`, or `admin` |
+| `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role (`ingest`\|`viewer`\|`operator`\|`admin`, as a bare string) or `{"role": ..., "site": "site-name"}` to also scope that key to a non-default site -- see "Multi-site" below |
 | `DRONE_RATE_LIMIT_PER_SECOND` | `50` | Per-sensor detection ingest rate limit |
 | `DRONE_RATE_LIMIT_BURST` | `100` | Per-sensor token-bucket burst capacity |
 | `DRONE_MAX_BATCH_SIZE` | `500` | Max detections per `POST /api/detections/batch` request |
@@ -1163,6 +1163,48 @@ Without any key configured, don't expose the port beyond localhost —
 anyone who can reach it could inject fake detections or acknowledge
 (silence) real alerts.
 
+**Multi-site**: every record (tracks, detections, incidents, zones,
+sensor/operator registrations) belongs to exactly one *site* (a physical
+site/campus this deployment monitors — `app/sites.py`, `app/db.py`), and
+every API key is scoped to exactly one site. A fresh or just-upgraded
+deployment has exactly one, auto-created site named `default`, so nothing
+about single-site usage changes unless you deliberately set up more than
+one. To do that:
+
+1. Create the additional site(s) (admin-only):
+   ```bash
+   curl -X POST http://127.0.0.1:8000/api/sites \
+     -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+     -d '{"name":"warehouse-north"}'
+   ```
+2. Scope a key to it via `DRONE_API_KEYS`' per-key `"site"` field (the
+   pre-multi-site bare-role-string format, `{"key":"role"}`, still works
+   unchanged and resolves to the `default` site):
+   ```bash
+   export DRONE_API_KEYS='{
+     "north-radar-key": {"role": "ingest", "site": "warehouse-north"},
+     "north-ops-key": {"role": "operator", "site": "warehouse-north"},
+     "south-radar-key": {"role": "ingest"}
+   }'
+   ```
+
+A key only ever sees and acts on its own site's data — there is no
+cross-site key in this version, and a track/incident/zone id from another
+site 404s rather than leaking a 403 that would confirm it exists. Any
+`admin`-role key can list/create sites (`GET`/`POST /api/sites`)
+regardless of which site it's scoped to — there's no separate
+"deployment owner" vs. "site admin" distinction yet, so treat every admin
+key as trusted with the whole deployment's site catalog, not just its own
+site's data.
+
+**Known limitation**: `sensor_id` (sensor registrations) and
+`operator_id` (authorized operators) must still be globally unique across
+every site in one deployment, not just within a site — making that
+composite-keyed would need rebuilding those tables on upgrade, a bigger
+migration than this version takes on. Namespace them (e.g.
+`warehouse-north-radar-1`) if two sites would otherwise pick the same
+sensor/operator id independently.
+
 **Dependency vulnerability scanning**: a `security` CI job runs
 [`pip-audit`](https://github.com/pypa/pip-audit) against every
 `requirements*.txt` on each push/PR, checking pinned versions against the
@@ -1207,7 +1249,8 @@ app/
   schema.py             SQLAlchemy table definitions (the schema, portable across backends)
   config.py             Environment-variable settings
   logging_config.py     Logging setup (text or JSON)
-  auth.py               API key + role-based access control (RBAC)
+  auth.py               API key + role-based access control (RBAC) + per-key site scoping
+  sites.py               Default-site bootstrap for the multi-site migration (see app/db.py)
   ratelimit.py          Per-sensor token-bucket rate limiter
   metrics.py             Prometheus counters
   notifications.py       Outbound webhook alerting on incident open

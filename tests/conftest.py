@@ -43,7 +43,23 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr("app.db.engine", test_engine)
 
     from app.db import init_db
+    from app.sites import reset_cache_for_tests
 
+    # Each test gets a brand-new database -- a default site id cached from
+    # a *previous* test's (now-disposed) database would be stale here and
+    # violate the new database's site.id foreign key.
+    reset_cache_for_tests()
     init_db()
     yield test_engine
     test_engine.dispose()
+
+
+@pytest.fixture
+def site_id(isolated_db) -> int:
+    """The default site's id in this test's isolated database -- most
+    tests only care about one site and can just pass this straight
+    through to whatever they're constructing/calling.
+    """
+    from app.sites import ensure_default_site
+
+    return ensure_default_site()
