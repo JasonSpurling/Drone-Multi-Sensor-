@@ -179,6 +179,37 @@ def test_search_filters_the_tracks_table(live_server, page):
     assert page.locator(".track-card[data-id]").count() == 1
 
 
+def test_empty_tracks_panel_offers_a_simulate_button_that_actually_seeds_a_track(live_server, page):
+    """Regression test: the tracks empty state used to be a bare "No
+    tracks match." with no way to tell "nothing has arrived yet" apart
+    from "your filter excludes everything," and no obvious next step for
+    someone looking at an otherwise-empty dashboard for the first time.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#simulate-tracks-btn")
+    assert "Waiting for sensor data" in page.locator("#tracks-list").inner_text()
+
+    page.click("#simulate-tracks-btn")
+    page.wait_for_selector(".track-card[data-id]", timeout=10000)
+    assert page.locator(".track-card[data-id]").count() >= 1
+
+
+def test_empty_sensors_panel_shows_a_connection_checklist(live_server, page):
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=sensors]")
+    page.wait_for_selector("#sensors-table .empty-guidance")
+    text = page.locator("#sensors-table").inner_text()
+    assert "No sensors connected" in text
+    assert "/api/detections" in text
+
+
+def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zones, page):
+    page.goto(live_server_no_seed_zones, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=zones]")
+    page.wait_for_selector("#zones-list .empty")
+    assert "New zone" in page.locator("#zones-list").inner_text()
+
+
 def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail(live_server, page):
     """Regression test: #details-panel used to be right-anchored at a
     fixed 360px width regardless of viewport, so on a narrow (phone-width)

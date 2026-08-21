@@ -255,6 +255,15 @@
   .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
   .empty-ok { color: var(--muted); padding: 14px 6px; display: flex; align-items: center; gap: 8px; }
   .empty-ok .check { color: var(--active); font-size: 16px; }
+  .empty-guidance { padding: 16px 14px; color: var(--muted); }
+  .empty-guidance .empty-title { color: var(--text); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .empty-guidance .empty-body { font-size: 12px; line-height: 1.5; }
+  .empty-guidance .empty-checklist { margin: 10px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+  .empty-guidance code {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px;
+    padding: 1px 4px; font-size: 11px;
+  }
+  .empty-guidance button { margin-top: 10px; }
   .alert-item {
     border: 1px solid var(--border);
     border-left: 3px solid var(--border);
@@ -768,6 +777,48 @@ async function acknowledge(id) {
   }
 }
 
+// Posts a short sequence of detections forming one moving track, via the
+// same public /api/detections path any real sensor uses -- lets the
+// empty-state "Simulate tracks" button show what the dashboard actually
+// looks like with live data, without needing app/simulator.py running
+// separately. Positioned well outside app/zones.seed.json's bundled
+// restricted zone so clicking it doesn't also surprise a first-time
+// viewer with an unrelated incident.
+async function simulateDemoTracks() {
+  const btn = document.getElementById("simulate-tracks-btn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Simulating…";
+  }
+  try {
+    const base = { sensor_id: "demo-radar-1", sensor_type: "radar", confidence: 0.9 };
+    let lat = 51.45;
+    let lon = -0.2;
+    for (let i = 0; i < 6; i++) {
+      lat += 0.0015;
+      lon += 0.0012;
+      await fetchJSON("/api/detections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...base, latitude: lat, longitude: lon }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) {
+      showAuthBar(true);
+    } else {
+      console.error(e);
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Simulate tracks";
+    }
+  }
+}
+
 // A <span>/<div> with a click handler is invisible to keyboard-only and
 // screen-reader users -- not just unlabeled, entirely unreachable (no
 // tab stop, no Enter/Space activation). role="button" + tabindex="0" +
@@ -831,7 +882,22 @@ function renderTracks() {
   const tracks = visibleTracks();
   document.getElementById("tracks-count").textContent = `${tracks.length}/${state.tracks.length}`;
   if (tracks.length === 0) {
-    el.innerHTML = '<div class="empty">No tracks match.</div>';
+    // Two different empty states: nothing has ever come in yet (a fresh
+    // deployment or a demo with no sensor/simulator running), vs. real
+    // tracks exist but the current search/filter excludes all of them --
+    // "no tracks match your filter" would be actively misleading for the
+    // first case, and "waiting for sensor data" would be misleading for
+    // the second.
+    if (state.tracks.length === 0) {
+      el.innerHTML = `<div class="empty-guidance">
+        <div class="empty-title">No tracks detected</div>
+        <div class="empty-body">Waiting for sensor data — a track appears here automatically once a detection is posted to <code>/api/detections</code>.</div>
+        <button id="simulate-tracks-btn">Simulate tracks</button>
+      </div>`;
+      document.getElementById("simulate-tracks-btn").addEventListener("click", simulateDemoTracks);
+    } else {
+      el.innerHTML = '<div class="empty">No tracks match your search/filter.</div>';
+    }
     return;
   }
 
@@ -1291,7 +1357,15 @@ function recordBreadcrumbs(tracks) {
 function renderSensors() {
   const el = document.getElementById("sensors-table");
   if (state.sensors.length === 0) {
-    el.innerHTML = '<div class="empty">No sensor data yet.</div>';
+    el.innerHTML = `<div class="empty-guidance">
+      <div class="empty-title">No sensors connected</div>
+      <div class="empty-body">A sensor appears here automatically the first time it reports a detection -- nothing to register or configure in advance.</div>
+      <ol class="empty-checklist">
+        <li>Point your sensor/adapter at <code>POST /api/detections</code> on this server</li>
+        <li>Include a <code>sensor_id</code>, <code>sensor_type</code>, and a position (or azimuth/range from a registered mount)</li>
+        <li>If an API key is configured, send it as the <code>X-API-Key</code> header</li>
+      </ol>
+    </div>`;
     return;
   }
   const rows = state.sensors
@@ -1316,7 +1390,7 @@ function renderSensors() {
 function renderZones() {
   const el = document.getElementById("zones-list");
   if (state.allZones.length === 0) {
-    el.innerHTML = '<div class="empty">No zones defined yet.</div>';
+    el.innerHTML = '<div class="empty">No zones defined yet. Click "+ New zone" above, then click points on the map to draw one.</div>';
     return;
   }
   el.innerHTML = state.allZones

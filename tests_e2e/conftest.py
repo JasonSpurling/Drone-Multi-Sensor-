@@ -47,15 +47,10 @@ def _wait_for_health(base_url: str, timeout_s: float = 15.0) -> None:
     raise RuntimeError(f"App server never became healthy at {base_url}") from last_error
 
 
-@pytest.fixture
-def live_server(tmp_path):
-    """Starts the real FastAPI app (via uvicorn, as a subprocess -- not
-    TestClient's in-process ASGI transport) against a fresh SQLite database,
-    and yields its base URL once /api/health responds.
-    """
+def _spawn_live_server(tmp_path, extra_env: dict | None = None):
     port = _free_port()
     db_path = tmp_path / "e2e.db"
-    env = {**os.environ, "DRONE_DATABASE_URL": f"sqlite:///{db_path}"}
+    env = {**os.environ, "DRONE_DATABASE_URL": f"sqlite:///{db_path}", **(extra_env or {})}
     process = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
         env=env,
@@ -72,6 +67,28 @@ def live_server(tmp_path):
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+@pytest.fixture
+def live_server(tmp_path):
+    """Starts the real FastAPI app (via uvicorn, as a subprocess -- not
+    TestClient's in-process ASGI transport) against a fresh SQLite database,
+    and yields its base URL once /api/health responds.
+    """
+    yield from _spawn_live_server(tmp_path)
+
+
+@pytest.fixture
+def live_server_no_seed_zones(tmp_path):
+    """Same as live_server, but with an empty zones seed file -- the
+    default live_server (like any deployment that hasn't overridden
+    DRONE_ZONES_SEED_PATH) always loads app/zones.seed.json's bundled
+    "Central London Restricted Zone" at startup, so the zones panel's
+    genuinely-zero-zones empty state is otherwise unreachable in a test.
+    """
+    seed_path = tmp_path / "empty_zones.json"
+    seed_path.write_text("[]")
+    yield from _spawn_live_server(tmp_path, {"DRONE_ZONES_SEED_PATH": str(seed_path)})
 
 
 @pytest.fixture(scope="session")
