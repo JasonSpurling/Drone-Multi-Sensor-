@@ -1146,7 +1146,8 @@ needs to be set to run locally.
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |
-| `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role (`ingest`\|`viewer`\|`operator`\|`admin`, as a bare string) or `{"role": ..., "site": "site-name"}` to also scope that key to a non-default site -- see "Multi-site" below |
+| `DRONE_API_KEYS` | *(unset)* | JSON object mapping each key to a role (`ingest`\|`viewer`\|`operator`\|`admin`, as a bare string) or `{"role": ..., "site": "site-name", "label": ..., "expires_at": ..., "revoked": ...}` to also scope/label/expire/revoke that key -- see "Multi-site" and "Key lifecycle" below |
+| `DRONE_CORS_ORIGINS` | *(unset)* | Comma-separated origins allowed to make cross-origin browser requests; unset means no CORS headers at all (default, same as before this existed). Only needed for a frontend hosted on a different origin than this API |
 | `DRONE_RATE_LIMIT_PER_SECOND` | `50` | Per-sensor detection ingest rate limit |
 | `DRONE_RATE_LIMIT_BURST` | `100` | Per-sensor token-bucket burst capacity |
 | `DRONE_MAX_BATCH_SIZE` | `500` | Max detections per `POST /api/detections/batch` request |

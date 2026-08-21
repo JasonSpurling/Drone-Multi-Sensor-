@@ -59,6 +59,17 @@ LOG_FORMAT = os.getenv("DRONE_LOG_FORMAT", "text")
 API_KEY = os.getenv("DRONE_API_KEY", "")
 API_KEYS_JSON = os.getenv("DRONE_API_KEYS", "")
 
+# Comma-separated origins allowed to make cross-origin browser requests
+# (e.g. https://ops.example.com) -- empty (default) means no CORS headers
+# are sent at all, so a browser blocks any cross-origin JS from reading a
+# response, same as before this existed. Only needed if you're hosting the
+# dashboard (or a different frontend) on a different origin than this API;
+# same-origin use (the bundled dashboard.html served from this app, or a
+# server-to-server integration) never needs this set. "*" allows any origin
+# -- fine for a public read-only integration, never combine with a
+# deployment that also has authentication disabled.
+CORS_ORIGINS = [o.strip() for o in os.getenv("DRONE_CORS_ORIGINS", "").split(",") if o.strip()]
+
 # Requests per second a single sensor_id may submit detections at before
 # POST /api/detections starts returning 429. Generous default -- this is a
 # backstop against a malfunctioning or malicious sensor, not a normal-load

@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.api import (
@@ -25,6 +26,7 @@ from app.api import keys as keys_api
 from app.api import zones as zones_api
 from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
+    CORS_ORIGINS,
     DETECTION_RETENTION_DAYS,
     RETENTION_SWEEP_INTERVAL_SECONDS,
 )
@@ -98,6 +100,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Drone Multi-Sensor", lifespan=lifespan)
+
+if CORS_ORIGINS:
+    # Off by default (empty list -- CORSMiddleware isn't even added), so a
+    # deployment that never sets DRONE_CORS_ORIGINS behaves exactly as
+    # before this existed: no CORS headers, cross-origin browser JS
+    # blocked. Only needed when the dashboard (or another frontend) is
+    # hosted on a different origin than this API -- see app/config.py.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=False,  # this app authenticates via X-API-Key, not cookies
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Left unauthenticated: conventional for liveness/scrape endpoints, and
 # neither exposes anything beyond aggregate operational state.
