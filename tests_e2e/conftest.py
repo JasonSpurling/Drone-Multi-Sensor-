@@ -8,6 +8,7 @@ report healthy, and tears it down after the test.
 
 from __future__ import annotations
 
+import io
 import os
 import re
 import socket
@@ -19,9 +20,11 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Locator, sync_playwright
 
 VENDORED_LEAFLET_DIR = Path(__file__).parent / "vendor" / "leaflet"
+VISUAL_BASELINE_DIR = Path(__file__).parent / "visual_baselines"
+VISUAL_FAILURE_DIR = Path(__file__).parent / ".visual_failures"
 
 
 def _free_port() -> int:
@@ -110,3 +113,91 @@ def page(browser):
     p.route("**://unpkg.com/**", _route_leaflet)
     yield p
     ctx.close()
+
+
+# Fraction of pixels allowed to differ (beyond _PER_PIXEL_TOLERANCE) before a
+# visual regression test fails. Not 0 -- font hinting/anti-aliasing varies by
+# a pixel or two at element edges even between two runs on the same machine
+# with nothing actually changed, and this suite needs to catch real layout
+# regressions (like the rail-badge-positioning bug that motivated it), not
+# flag that noise.
+_DIFF_RATIO_TOLERANCE = 0.005
+# Per-channel (0-255) difference below which a pixel doesn't count as
+# "different" at all -- the same anti-aliasing noise, filtered before the
+# ratio above ever sees it.
+_PER_PIXEL_TOLERANCE = 24
+
+
+def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
+    """Screenshots `locator` and compares it against
+    tests_e2e/visual_baselines/{name}.png, the way a human reviewing a
+    screenshot would have caught the rail-badge-positioning bug (see
+    app/static/dashboard.html's git history) well before it shipped.
+
+    A missing baseline fails the test rather than silently creating one --
+    a new baseline is a real assertion about what "correct" looks like and
+    needs a human to look at it once, the same way a new golden file would
+    in any snapshot-testing setup. Set UPDATE_VISUAL_BASELINES=1 to write
+    (or overwrite) the baseline instead of asserting against it, then
+    review the PNG with `git diff`/an image viewer before committing it.
+    """
+    from PIL import Image, ImageChops
+
+    locator.wait_for(state="visible")
+    png_bytes = locator.screenshot(animations="disabled")
+    baseline_path = VISUAL_BASELINE_DIR / f"{name}.png"
+
+    if os.environ.get("UPDATE_VISUAL_BASELINES") == "1":
+        VISUAL_BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_bytes(png_bytes)
+        pytest.skip(f"Wrote new baseline for {name!r} -- review it, then re-run without UPDATE_VISUAL_BASELINES")
+
+    if not baseline_path.is_file():
+        pytest.fail(
+            f"No visual baseline at {baseline_path} -- run with "
+            f"UPDATE_VISUAL_BASELINES=1 to create one, review the PNG, and commit it."
+        )
+
+    actual = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    expected = Image.open(baseline_path).convert("RGB")
+
+    if actual.size != expected.size:
+        pytest.fail(
+            f"{name}: size changed ({expected.size} -> {actual.size}) -- "
+            f"review and, if intentional, regenerate with UPDATE_VISUAL_BASELINES=1"
+        )
+
+    diff = ImageChops.difference(actual, expected)
+    # A pixel counts as "different" if its worst-case channel delta exceeds
+    # the noise floor -- take the per-pixel max across R/G/B.
+    r, g, b = diff.split()
+    worst = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    # histogram() is a 256-bucket count of an "L"-mode image's pixel
+    # values -- summing buckets above the tolerance avoids iterating every
+    # pixel in Python (and the getdata() API this used to use is
+    # deprecated as of Pillow 12).
+    differing_pixels = sum(worst.histogram()[_PER_PIXEL_TOLERANCE + 1 :])
+    total_pixels = actual.size[0] * actual.size[1]
+    diff_ratio = differing_pixels / total_pixels if total_pixels else 0.0
+
+    if diff_ratio > _DIFF_RATIO_TOLERANCE:
+        VISUAL_FAILURE_DIR.mkdir(parents=True, exist_ok=True)
+        actual_path = VISUAL_FAILURE_DIR / f"{name}.actual.png"
+        diff_path = VISUAL_FAILURE_DIR / f"{name}.diff.png"
+        actual.save(actual_path)
+        diff.save(diff_path)
+        pytest.fail(
+            f"{name}: {diff_ratio:.2%} of pixels differ from the baseline "
+            f"(tolerance {_DIFF_RATIO_TOLERANCE:.2%}). Actual/diff saved to "
+            f"{actual_path} / {diff_path} for review. If this is an intentional "
+            f"UI change, regenerate the baseline with UPDATE_VISUAL_BASELINES=1."
+        )
+
+
+@pytest.fixture
+def assert_visual_baseline():
+    """A test-callable fixture (rather than a plain importable function --
+    tests_e2e/ isn't a package) wrapping _assert_matches_visual_baseline.
+    Usage: assert_visual_baseline(page.locator("#icon-rail"), "icon_rail").
+    """
+    return _assert_matches_visual_baseline

@@ -144,7 +144,11 @@ launches the real dashboard in a real headless Chromium via Playwright and
 clicks around in it -- selecting a track, dragging the Playback scrubber,
 toggling map layers -- catching what `tests/`'s API-level tests can't
 (this is exactly how the zoom-control/map-layer-toggles click-interception
-bug documented above was actually found). See `tests_e2e/README.md`.
+bug documented above was actually found). Also includes pixel-level visual
+regression tests for a few static bits of UI chrome, catching a CSS
+layout break that every behavioral/ARIA assertion would still pass (see
+`tests_e2e/README.md`'s "Visual regression tests" section). See
+`tests_e2e/README.md`.
 
 ```bash
 pip install -r requirements-e2e.txt

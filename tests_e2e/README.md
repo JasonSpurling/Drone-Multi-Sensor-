@@ -33,6 +33,41 @@ path (e.g. a sandboxed environment with restricted network egress), set
 `PLAYWRIGHT_CHROMIUM_PATH` to its executable -- unset by default, so real
 CI (which runs `playwright install chromium` fresh) is unaffected.
 
+## Visual regression tests
+
+`test_visual_regression.py` catches what the rest of this suite
+structurally can't: a CSS change that leaves every selector, click target,
+and ARIA attribute correct while quietly breaking the *layout* -- exactly
+the shape of bug that shipped once already (`.rail-btn .rail-badge` was
+positioned relative to the wrong ancestor because `.rail-btn` was missing
+`position: relative`; every behavioral assertion about it still passed).
+
+It screenshots a handful of small, static bits of UI chrome (the icon
+rail with an active alert, the map-layer-toggle checkboxes) -- not the map
+(real tile imagery, non-deterministic) and not the track list (live "Ns
+ago" timestamps) -- and compares pixel-for-pixel against a baseline PNG in
+`tests_e2e/visual_baselines/`, via `assert_visual_baseline`
+(`conftest.py`). A small tolerance (0.5% of pixels, each needing to differ
+by more than 24/255 in some channel) absorbs font-hinting/anti-aliasing
+noise between runs without masking a real layout change.
+
+**Updating a baseline** after an intentional UI change:
+
+```bash
+UPDATE_VISUAL_BASELINES=1 python -m pytest tests_e2e/test_visual_regression.py -v
+```
+
+This writes the new PNG(s) and skips (not passes) the test, so CI can't
+silently accept an unreviewed baseline -- always `git diff`/open the PNG
+in an image viewer to confirm it actually looks right before committing
+it. A failing visual test also writes the actual screenshot and a diff
+image to `tests_e2e/.visual_failures/` (gitignored) for the same kind of
+review when a change is *not* expected.
+
+These run in the same CI job as the rest of `tests_e2e/`, on the same
+pinned Chromium version CI installs -- keeping browser and OS fixed is
+what keeps the tolerance able to stay this tight without becoming flaky.
+
 ## Browser coverage
 
 This suite only runs against Chromium -- a deliberate scope choice (one

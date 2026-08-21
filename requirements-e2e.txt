@@ -5,3 +5,4 @@
 -r requirements-dev.txt
 playwright==1.62.0
 requests==2.33.1
+pillow==12.3.0
