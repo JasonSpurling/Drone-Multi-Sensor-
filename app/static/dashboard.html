@@ -123,7 +123,8 @@
     flex-direction: column;
     overflow: hidden;
   }
-  #left-panel { left: 64px; }
+  #left-panel { left: 64px; transition: transform 0.15s ease; }
+  #left-panel.collapsed { transform: translateX(-120%); }
   /* Unlike #left-panel (which always has a long, scrollable list and
      benefits from claiming the full viewport height), a single track's
      details are a fixed, usually-short amount of content -- pinning this
@@ -307,6 +308,28 @@
   .playback-row { display: flex; align-items: center; gap: 8px; }
   .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .playback-time { font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; white-space: nowrap; }
+
+  /* --- Narrow viewport: the desktop layout's two side-by-side floating
+     panels (each 340-360px) plus the icon rail don't fit next to each
+     other below ~900px -- #details-panel's fixed right-anchored width
+     left its left edge overlapping the rail (which sits on top, z-index-
+     wise, silently clipping the panel's own back button under it) well
+     before that, too. Below 760px both panels go full-width (anchored
+     past the rail, which stays reachable) and stack instead of
+     overlapping: only one is ever visible at a time, and the rail's
+     already-active-icon-click (below) collapses the tracks/alerts/
+     sensors panel entirely so the map itself is reachable, not just
+     visible in the gaps around a panel that otherwise never closes. --- */
+  @media (max-width: 760px) {
+    #left-panel, #details-panel { left: 60px; right: 12px; width: auto; }
+    body.details-open #left-panel { display: none; }
+    #map-legend { display: none; }
+    #map-layer-toggles {
+      left: 60px; right: 12px; transform: none;
+      justify-content: space-around; font-size: 10px;
+    }
+    header.topbar .topbar-left h1 { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -537,6 +560,7 @@ function visibleTracks() {
 // side rail instead of three permanently-stacked panels competing for
 // screen space now that the map is full-bleed behind them. -------------
 function showPanel(name) {
+  document.getElementById("left-panel").classList.remove("collapsed");
   state.activePanel = name;
   document.querySelectorAll(".rail-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.panel === name);
@@ -550,8 +574,22 @@ function showPanel(name) {
   document.getElementById("tracks-count").style.display = name === "tracks" ? "inline" : "none";
 }
 
+// Clicking the already-active rail icon collapses its panel instead of
+// re-showing an already-visible one -- on a narrow viewport (see the
+// max-width: 760px block above) the left panel otherwise never closes,
+// leaving no way to actually see the map underneath it.
+function toggleOrShowPanel(name) {
+  const leftPanel = document.getElementById("left-panel");
+  if (state.activePanel === name && !leftPanel.classList.contains("collapsed")) {
+    leftPanel.classList.add("collapsed");
+    return;
+  }
+  showPanel(name);
+}
+
 function showDetailsPanel(show) {
   document.getElementById("details-panel").style.display = show ? "flex" : "none";
+  document.body.classList.toggle("details-open", show);
 }
 
 async function selectTrack(id) {
@@ -1238,7 +1276,7 @@ document.getElementById("search-input").addEventListener("input", (e) => {
   renderMap();
 });
 document.querySelectorAll(".rail-btn").forEach((btn) => {
-  btn.addEventListener("click", () => showPanel(btn.dataset.panel));
+  btn.addEventListener("click", () => toggleOrShowPanel(btn.dataset.panel));
 });
 document.getElementById("details-back").addEventListener("click", deselectTrack);
 document.getElementById("details-close").addEventListener("click", deselectTrack);

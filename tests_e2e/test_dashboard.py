@@ -121,3 +121,46 @@ def test_search_filters_the_tracks_table(live_server, page):
     page.fill("#search-input", "")
     page.wait_for_selector(".track-card[data-id]")
     assert page.locator(".track-card[data-id]").count() == 1
+
+
+def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail(live_server, page):
+    """Regression test: #details-panel used to be right-anchored at a
+    fixed 360px width regardless of viewport, so on a narrow (phone-width)
+    screen its left edge landed under the icon rail (which sits on top,
+    z-index-wise) -- silently clipping its own back button out of reach.
+    The max-width: 760px layout must keep it fully inside the viewport.
+    """
+    _seed_moving_track(live_server)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(live_server, wait_until="networkidle")
+
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#details-back")
+
+    back_button = page.locator("#details-back")
+    box = back_button.bounding_box()
+    assert box is not None
+    assert box["x"] >= 0  # not pushed off-screen or under the rail's left edge
+
+    # The rail must stay clickable (it sits on top, but with the panel's
+    # back button now inside the viewport, the two shouldn't overlap).
+    rail_box = page.locator(".rail-btn[data-panel=tracks]").bounding_box()
+    assert rail_box is not None
+    assert box["x"] >= rail_box["x"] + rail_box["width"]
+
+
+def test_narrow_viewport_collapsing_the_left_panel_reveals_the_map(live_server, page):
+    _seed_moving_track(live_server)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    left_panel = page.locator("#left-panel")
+    assert "collapsed" not in (left_panel.get_attribute("class") or "")
+
+    # The tracks icon is already active on load -- clicking it again
+    # collapses the panel instead of re-showing it.
+    page.click(".rail-btn[data-panel=tracks]")
+    page.wait_for_timeout(300)  # CSS transform transition
+    assert "collapsed" in (left_panel.get_attribute("class") or "")
