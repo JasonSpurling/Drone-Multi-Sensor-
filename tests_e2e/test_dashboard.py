@@ -210,6 +210,42 @@ def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zon
     assert "New zone" in page.locator("#zones-list").inner_text()
 
 
+def test_map_shows_a_watermark_with_no_active_tracks_and_hides_it_once_one_appears(live_server, page):
+    """Regression test: an empty map used to just be a dark, featureless
+    grid, giving no signal that the blankness is expected rather than the
+    dashboard being broken.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    watermark = page.locator("#map-empty-state")
+    assert watermark.is_visible()
+    assert "No active tracks" in watermark.inner_text()
+
+    _seed_moving_track(live_server)
+    page.wait_for_selector(".track-card[data-id]")
+    assert not watermark.is_visible()
+
+
+def test_filter_chips_show_live_counts(live_server, page):
+    """Regression test: an "All" chip reading just "All" gave no signal
+    that its 0 was real data rather than the dashboard having failed to
+    load -- a count on every chip (even at 0) makes that legible.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    all_chip = page.locator('.filter-chip[data-class="all"]')
+    drone_chip = page.locator('.filter-chip[data-class="drone"]')
+    page.wait_for_selector(".filter-chip-count")
+    assert all_chip.locator(".filter-chip-count").inner_text() == "0"
+    assert drone_chip.locator(".filter-chip-count").inner_text() == "0"
+
+    _seed_moving_track(live_server)
+    page.wait_for_selector(".track-card[data-id]")
+    # The simulated/seeded track defaults to a radar detection with no
+    # camera/RF classifier input -- it lands in "unknown", not "drone",
+    # so only the "All" count (not every per-class count) is guaranteed
+    # to have moved off zero here.
+    assert all_chip.locator(".filter-chip-count").inner_text() == "1"
+
+
 def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail(live_server, page):
     """Regression test: #details-panel used to be right-anchored at a
     fixed 360px width regardless of viewport, so on a narrow (phone-width)

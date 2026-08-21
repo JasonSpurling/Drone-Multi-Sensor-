@@ -163,6 +163,11 @@
   }
   .filter-chip:hover { color: var(--text); border-color: #3a4763; }
   .filter-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .filter-chip-count {
+    display: inline-block; min-width: 14px; margin-left: 2px; padding: 0 4px;
+    border-radius: 999px; background: rgba(255,255,255,0.12); font-size: 10px; font-weight: 600;
+  }
+  .filter-chip.active .filter-chip-count { background: rgba(255,255,255,0.28); }
   .filter-chip:focus-visible, .track-card:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 1px;
   }
@@ -239,6 +244,13 @@
     display: flex; gap: 14px;
   }
   #map-layer-toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  #map-empty-state {
+    position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; pointer-events: none; /* never intercepts a map click/drag */
+    color: var(--muted); text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  }
+  #map-empty-state .map-empty-title { font-size: 16px; font-weight: 600; color: var(--text); opacity: 0.5; }
+  #map-empty-state .map-empty-body { font-size: 12px; margin-top: 4px; opacity: 0.4; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
   .leaflet-container { font-family: inherit; background: #05070a; }
   .leaflet-control-layers {
@@ -385,6 +397,11 @@
 
 <div id="app-shell">
   <div id="map"></div>
+
+  <div id="map-empty-state" style="display:none" aria-hidden="true">
+    <div class="map-empty-title">No active tracks</div>
+    <div class="map-empty-body">Waiting for sensor data…</div>
+  </div>
 
   <div id="map-layer-toggles">
     <label><input type="checkbox" id="toggle-trail" checked> Trails</label>
@@ -841,10 +858,22 @@ function makeKeyboardActivatable(el, activate) {
 
 function renderClassFilters() {
   const el = document.getElementById("class-filters");
+  // Each chip's count is "how many tracks you'd see if you picked this
+  // one, given your current search" -- independent of which chip is
+  // *currently* selected (that would make every non-active chip's count
+  // trivially reflect a filter it isn't applying). Without this, "All"
+  // selected with zero results reads as broken rather than as "genuinely
+  // nothing yet, in any category."
+  const search = state.search.trim().toLowerCase();
+  const searchMatches = state.tracks.filter((t) => {
+    if (!search) return true;
+    return String(t.id).includes(search) || t.track_uid.toLowerCase().includes(search);
+  });
   el.innerHTML = CLASS_LABELS.map((c) => {
     const activeClass = state.classFilter === c ? "active" : "";
     const label = c === "all" ? "All" : c.charAt(0).toUpperCase() + c.slice(1);
-    return `<span class="filter-chip ${activeClass}" data-class="${c}" aria-pressed="${state.classFilter === c}">${label}</span>`;
+    const count = c === "all" ? searchMatches.length : searchMatches.filter((t) => t.classification === c).length;
+    return `<span class="filter-chip ${activeClass}" data-class="${c}" aria-pressed="${state.classFilter === c}">${label} <span class="filter-chip-count">${count}</span></span>`;
   }).join("");
   el.querySelectorAll(".filter-chip").forEach((chip) => {
     makeKeyboardActivatable(chip, () => {
@@ -1226,6 +1255,19 @@ function renderMap() {
 
   const pts = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
 
+  // An empty map reads as "is this even working?" without some signal
+  // that the blankness is expected -- distinguishes "nothing's arrived
+  // yet at all" from "your search/filter excludes everything currently
+  // on the map" the same way the tracks panel's own empty state does.
+  const mapEmptyState = document.getElementById("map-empty-state");
+  if (pts.length > 0) {
+    mapEmptyState.style.display = "none";
+  } else {
+    mapEmptyState.style.display = "block";
+    mapEmptyState.querySelector(".map-empty-body").textContent =
+      state.tracks.length === 0 ? "Waiting for sensor data…" : "No tracks match your search/filter";
+  }
+
   // Short fading breadcrumb trail per visible track, from recently polled
   // positions (breadcrumbs) -- unlike the selected track's full history
   // line above, this works for every track without a per-track history
@@ -1587,6 +1629,7 @@ async function refresh() {
     state.allZones = allZones;
     recordBreadcrumbs(tracks);
     showAuthBar(false);
+    renderClassFilters();
     renderTracks();
     renderAlerts();
     renderMap();
@@ -1627,6 +1670,7 @@ document.getElementById("auth-input").addEventListener("keydown", (e) => {
 });
 document.getElementById("search-input").addEventListener("input", (e) => {
   state.search = e.target.value;
+  renderClassFilters();
   renderTracks();
   renderMap();
 });
