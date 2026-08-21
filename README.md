@@ -212,6 +212,61 @@ default, time sync across physical sensors, ...) -- it's specifically
 about running the software itself reliably once you do have real sensors
 feeding it.
 
+### Running multiple replicas behind a load balancer
+
+**Requires PostgreSQL, not SQLite.** SQLite's single-writer model makes it
+inherently single-process (see the Database section) -- there's no correct
+way to point two replicas at the same SQLite file. Everything below
+assumes the "Full stack with PostgreSQL" setup above.
+
+**Why this is safe at all**: `app/tracking.py`'s detection-association
+critical section is guarded by an in-process `threading.Lock` *and*, when
+the DB dialect is PostgreSQL, `app/cluster_lock.py`'s
+`cluster_association_lock()` -- a session-level `pg_advisory_lock` held for
+the same critical section. Two detections for the same object landing on
+two different replicas at the same instant now serialize against each
+other cluster-wide instead of each replica only serializing against
+itself, which is what stops them from independently concluding "no
+existing track" and each creating a duplicate. This is automatic --
+nothing to configure -- as long as every replica talks to the same
+Postgres database.
+
+**Process manager**: with Docker Compose, `docker compose up -d --scale
+app=3` runs 3 copies of the `app` service -- but first remove `app`'s
+`ports:` mapping in `docker-compose.yml` (only one container can bind a
+given host port, so a fixed mapping breaks past 1 replica) and instead
+put a reverse proxy in front that load-balances to `app:8000`: Compose's
+built-in DNS resolves that service name to all 3 replicas' addresses, and
+Caddy/nginx round-robin across them automatically -- no static list of
+replica addresses to maintain as you scale up or down. The commented-out
+`caddy` service in `docker-compose.yml` already does this (its
+`reverse_proxy app:8000` line needs no change to pick up added replicas).
+On bare metal/VMs, copy
+`deploy/drone-multi-sensor.service` to a per-instance unit name (e.g.
+`drone-multi-sensor@.service` with `%i` in `ExecStart`'s `--port`, or just
+several differently-named copies each with its own `--port` and
+`EnvironmentFile`), one per replica, all pointing `DRONE_DATABASE_URL` at
+the same Postgres instance.
+
+**Load balancer health-check wiring**: point the LB's health check at each
+replica's `GET /api/health`, not a raw TCP check -- it does a real
+`SELECT 1` and returns 503 if the database is unreachable, so the LB
+routes around a replica that's up but can't actually serve requests (e.g.
+during a Postgres failover). Don't route traffic to a replica until its
+first `/api/health` call succeeds.
+
+**`DRONE_DB_POOL_SIZE` sizing per replica**: each replica's connection
+pool can grow up to `DRONE_DB_POOL_SIZE + DRONE_DB_MAX_OVERFLOW`
+connections to Postgres (defaults: 5 + 10 = 15). That's *per replica* --
+with N replicas, Postgres needs to accept at least
+`N * (DRONE_DB_POOL_SIZE + DRONE_DB_MAX_OVERFLOW)` concurrent connections,
+plus headroom for anything else connected to the same database (backups,
+`psql`, a metrics exporter). Stock `postgres:16-alpine`'s default
+`max_connections` is 100 -- at the defaults that's already enough for 6
+replicas; past that, either raise `max_connections` (and Postgres's
+`shared_buffers`/memory alongside it) or lower `DRONE_DB_POOL_SIZE` per
+replica so the product still fits.
+
 ## API
 
 | Endpoint | Description |
