@@ -68,6 +68,11 @@
     70% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
     100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
   }
+  @keyframes pulse-alert {
+    0% { box-shadow: 0 0 0 2px rgba(10,14,24,0.92), 0 0 0 2px rgba(239,68,68,0.6); }
+    70% { box-shadow: 0 0 0 2px rgba(10,14,24,0.92), 0 0 0 7px rgba(239,68,68,0); }
+    100% { box-shadow: 0 0 0 2px rgba(10,14,24,0.92), 0 0 0 2px rgba(239,68,68,0); }
+  }
   #status-line { color: var(--muted); font-size: 11px; }
 
   /* --- App shell: icon rail + floating panels over a full-bleed map. --- */
@@ -88,6 +93,7 @@
     backdrop-filter: blur(6px);
   }
   .rail-btn {
+    position: relative;
     width: 30px; height: 30px;
     background: transparent; border: 1px solid transparent; border-radius: 7px;
     color: var(--muted); font-size: 15px;
@@ -97,12 +103,13 @@
   .rail-btn:hover { color: var(--text); background: var(--panel-2); }
   .rail-btn.active { color: #fff; background: var(--accent); }
   .rail-btn .rail-badge {
-    position: absolute; margin: -18px 0 0 14px;
+    position: absolute; top: -4px; right: -4px;
     background: var(--high); color: #fff; font-size: 9px; font-weight: 700;
-    border-radius: 999px; padding: 1px 4px; min-width: 13px; text-align: center;
+    border-radius: 999px; padding: 1px 4px; min-width: 13px; line-height: 1.4; text-align: center;
+    box-shadow: 0 0 0 2px rgba(10,14,24,0.92);
     display: none;
   }
-  .rail-btn .rail-badge.show { display: block; }
+  .rail-btn .rail-badge.show { display: block; animation: pulse-alert 2s infinite; }
 
   .floating-panel {
     position: absolute; z-index: 15; top: 12px; bottom: 12px;
@@ -117,7 +124,15 @@
     overflow: hidden;
   }
   #left-panel { left: 64px; }
-  #details-panel { right: 12px; width: 360px; }
+  /* Unlike #left-panel (which always has a long, scrollable list and
+     benefits from claiming the full viewport height), a single track's
+     details are a fixed, usually-short amount of content -- pinning this
+     panel to the viewport bottom the same way left a large dead gap below
+     "Track quality" for a track with no motion/playback data yet. Sizing
+     to content (capped so a track WITH playback data still scrolls
+     instead of overflowing the viewport) reads as a real panel instead of
+     a container with empty space at the bottom. */
+  #details-panel { right: 12px; width: 360px; bottom: auto; max-height: calc(100vh - 24px); }
 
   .panel-header {
     padding: 12px 14px;
@@ -637,7 +652,11 @@ function togglePlayback() {
 function flyToTrack(id, opts) {
   const track = state.tracks.find((t) => t.id === id);
   if (!track || track.latitude == null || !leafletMap) return;
-  const zoom = Math.max(leafletMap.getZoom(), 13);
+  // 15, not 13: a typical position_uncertainty_m ring (tens of meters) is
+  // only a handful of pixels wide at zoom 13 -- easy to mistake for "not
+  // drawn at all" when it's actually just smaller than the marker sitting
+  // on top of it. 15 gives it enough screen size to read as a ring.
+  const zoom = Math.max(leafletMap.getZoom(), 15);
   if (opts && opts.animate) {
     leafletMap.flyTo([track.latitude, track.longitude], zoom, { duration: 0.6 });
   } else {
@@ -1046,13 +1065,15 @@ function renderMap() {
     const scrubbing = selected && state.scrubIndex != null;
 
     if (selected && state.showUncertainty && t.position_uncertainty_m) {
+      const uColor = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
       L.circle([t.latitude, t.longitude], {
         radius: t.position_uncertainty_m,
-        color: CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown,
-        weight: 1,
-        fillColor: CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown,
-        fillOpacity: 0.08,
-        dashArray: "3 4",
+        color: uColor,
+        weight: 2,
+        opacity: 0.9,
+        fillColor: uColor,
+        fillOpacity: 0.18,
+        dashArray: "4 4",
       }).addTo(trackLayer);
     }
 
@@ -1185,8 +1206,12 @@ async function refresh() {
     renderMap();
     renderDetails();
     renderSensors();
-    document.getElementById("status-line").textContent =
-      `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${incidents.filter(i => i.status !== "resolved").length} active alerts`;
+    const activeCount = incidents.filter((i) => i.status !== "resolved").length;
+    const alertPart = activeCount > 0
+      ? `<span style="color:var(--high); font-weight:700;">${activeCount} active alert${activeCount === 1 ? "" : "s"}</span>`
+      : "0 active alerts";
+    document.getElementById("status-line").innerHTML =
+      `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${alertPart}`;
   } catch (e) {
     if (e instanceof AuthError) {
       showAuthBar(true);
