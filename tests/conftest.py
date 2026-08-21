@@ -42,6 +42,7 @@ def isolated_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr("app.db.engine", test_engine)
 
+    from app.auth import reset_usage_throttle_for_tests
     from app.db import init_db
     from app.sites import reset_cache_for_tests
 
@@ -49,6 +50,10 @@ def isolated_db(tmp_path, monkeypatch):
     # a *previous* test's (now-disposed) database would be stale here and
     # violate the new database's site.id foreign key.
     reset_cache_for_tests()
+    # Same reasoning: a key-usage flush timestamp cached from a previous
+    # test's (real) clock would silently swallow this test's own usage
+    # writes to its own fresh database.
+    reset_usage_throttle_for_tests()
     init_db()
     yield test_engine
     test_engine.dispose()

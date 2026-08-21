@@ -223,3 +223,33 @@ class AuthorizedOperatorInput(BaseModel):
 class AuthorizedOperator(AuthorizedOperatorInput):
     operator_id: str
     site_id: int | None = None
+
+
+class AuditLogEntry(BaseModel):
+    """One recorded admin action -- see app/schema.py's audit_log table
+    for which actions get recorded and why.
+    """
+
+    id: int | None = None
+    site_id: int | None = None
+    occurred_at: datetime
+    actor: str
+    action: str
+    target: str | None = None
+    detail: str | None = None
+
+
+class ApiKeyStatus(BaseModel):
+    """One configured key's non-secret metadata plus its recorded usage,
+    for GET /api/admin/keys -- never the raw key itself (see
+    app/auth.py's _configured_keys(); the raw key only ever exists
+    in-process, matched against the caller's X-API-Key header).
+    """
+
+    label: str
+    role: str
+    site: str | None = None
+    revoked: bool = False
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    use_count: int = 0

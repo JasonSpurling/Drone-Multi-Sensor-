@@ -13,8 +13,8 @@ owner would need that distinction added first.
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import ROLE_ADMIN, require_role
-from app.db import create_site, get_site_by_name, list_sites
+from app.auth import ROLE_ADMIN, Principal, require_role
+from app.db import create_site, get_site_by_name, list_sites, record_audit
 from app.models import Site
 
 router = APIRouter()
@@ -29,8 +29,12 @@ def get_sites() -> list[Site]:
     return list_sites()
 
 
-@router.post("/sites", response_model=Site, status_code=201, dependencies=[Depends(require_role(ROLE_ADMIN))])
-def create_new_site(site: Site) -> Site:
+@router.post("/sites", response_model=Site, status_code=201)
+def create_new_site(site: Site, principal: Principal = Depends(require_role(ROLE_ADMIN))) -> Site:
     if get_site_by_name(site.name) is not None:
         raise HTTPException(status_code=409, detail=f"Site '{site.name}' already exists")
-    return create_site(site.name)
+    created = create_site(site.name)
+    # No site_id of its own -- this action isn't scoped to the site it
+    # created (see app/schema.py's audit_log.site_id docstring).
+    record_audit(site_id=None, actor=principal.name, action="site.create", target=site.name)
+    return created

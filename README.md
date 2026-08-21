@@ -300,6 +300,8 @@ replica so the product still fits.
 | `PUT /api/sensor-registrations/{sensor_id}` | Register/update a sensor's fixed position and orientation (admin) |
 | `GET /api/authorized-operators` | List authorized ("friendly") drone operators (admin) |
 | `PUT /api/authorized-operators/{operator_id}` | Register/update an authorized operator (admin) |
+| `GET /api/audit-log` | Who did what admin action, when (admin) |
+| `GET /api/admin/keys` | Every configured key's label/role/site/expiry plus last-used time and use count, never the raw key (admin) |
 
 ## Tracking core
 
@@ -1274,6 +1276,49 @@ composite-keyed would need rebuilding those tables on upgrade, a bigger
 migration than this version takes on. Namespace them (e.g.
 `warehouse-north-radar-1`) if two sites would otherwise pick the same
 sensor/operator id independently.
+
+**Key lifecycle**: a `DRONE_API_KEYS` entry can carry `"label"`,
+`"expires_at"`, and `"revoked"` alongside `"role"`/`"site"`:
+
+```bash
+export DRONE_API_KEYS='{
+  "north-radar-key": {"role": "ingest", "site": "warehouse-north", "label": "north-radar-1"},
+  "contractor-key": {"role": "operator", "expires_at": "2027-03-01T00:00:00", "label": "acme-contractor"}
+}'
+```
+
+`expires_at` (ISO-8601, evaluated in UTC) makes a key stop working past
+that timestamp without needing a redeploy to pull it; `revoked: true` does
+the same immediately. Both fail closed with a 401, the same as an unknown
+key — a revoked/expired key never gets far enough to leak which role it
+used to have via a 403. `label` is what shows up as the actor in the
+audit log (below) and in `GET /api/admin/keys` (admin-only) instead of a
+bare role name — useful once more than one key shares a role. There's no
+separate revocation list or database table for keys themselves: since
+keys already live in `DRONE_API_KEYS`, revoking one is just editing that
+JSON and restarting (or, for `expires_at`, doing nothing and letting the
+clock do it).
+
+`GET /api/admin/keys` also reports each key's last-used time and use
+count — useful for spotting a key nobody's used in months (a candidate to
+revoke) without grepping logs. That usage tracking is deliberately
+throttled to about once per 30 seconds per key (`app/auth.py`'s
+`_KEY_USAGE_FLUSH_INTERVAL_S`), not updated on literally every request:
+a real database write on every single authenticated call — including
+every detection a sensor posts — would add write load to exactly the
+path this app is most performance-sensitive about, for a feature where
+"last used within the last 30 seconds" carries the same practical
+information as "last used at this exact millisecond."
+
+**Audit log**: `GET /api/audit-log` (admin-only) records who did what for
+the admin actions that can change what the system trusts or silence a
+real alert — registering a sensor or authorized operator, creating a
+site, and acknowledging/resolving an incident — each entry naming the
+acting key's label (or role, if unlabeled; never the raw key), what it
+did, and what it acted on. It's not a general activity log for
+everything the app does — detections/tracks/incidents already carry
+their own timestamps for that — specifically the actions that otherwise
+have no other record of *who* performed them.
 
 **Dependency vulnerability scanning**: a `security` CI job runs
 [`pip-audit`](https://github.com/pypa/pip-audit) against every

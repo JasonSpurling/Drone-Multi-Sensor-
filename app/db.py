@@ -12,12 +12,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import bindparam, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
 
 from app.config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
-from app.models import Detection, Incident, Site, Track, Zone
+from app.models import AuditLogEntry, Detection, Incident, Site, Track, Zone
 from app.schema import metadata
+from app.util import utcnow
 
 # pool_size/max_overflow are QueuePool-specific -- SQLite doesn't use
 # QueuePool (SQLAlchemy defaults it to NullPool/SingletonThreadPool
@@ -178,6 +179,112 @@ def list_sites() -> list[Site]:
     with db_session() as conn:
         rows = conn.execute(text("SELECT * FROM site ORDER BY name")).mappings().all()
     return [Site(id=row["id"], name=row["name"]) for row in rows]
+
+
+# --- Audit log ----------------------------------------------------------
+
+def record_audit(
+    *, site_id: int | None, actor: str, action: str, target: str | None = None, detail: str | None = None
+) -> None:
+    """Records one admin action. Called from the request handler that just
+    performed it (see app/api/sensor_registry.py, authorized_operators.py,
+    sites.py, incidents.py) -- not from db.py's own mutation helpers, so
+    what gets logged stays an explicit decision at each call site rather
+    than "every UPDATE anywhere," most of which (a track's Kalman state
+    updating on each detection, for instance) isn't an admin action at all.
+    """
+    with db_session() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO audit_log (site_id, occurred_at, actor, action, target, detail) "
+                "VALUES (:site_id, :occurred_at, :actor, :action, :target, :detail)"
+            ),
+            {
+                "site_id": site_id,
+                "occurred_at": utcnow().isoformat(),
+                "actor": actor,
+                "action": action,
+                "target": target,
+                "detail": detail,
+            },
+        )
+
+
+def list_audit_log(limit: int = 200, offset: int = 0) -> list[AuditLogEntry]:
+    """Deployment-wide, like list_sites() -- not scoped to one caller's
+    site, and for the same reason app/api/sites.py's endpoints aren't:
+    only an admin key can reach this (see app/api/audit_log.py), and an
+    admin who can create/list every site in the deployment already isn't
+    confined to one site's view of anything else admin-shaped.
+    """
+    with db_session() as conn:
+        rows = (
+            conn.execute(
+                text("SELECT * FROM audit_log ORDER BY occurred_at DESC LIMIT :limit OFFSET :offset"),
+                {"limit": limit, "offset": offset},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        AuditLogEntry(
+            id=row["id"],
+            site_id=row["site_id"],
+            occurred_at=datetime.fromisoformat(row["occurred_at"]),
+            actor=row["actor"],
+            action=row["action"],
+            target=row["target"],
+            detail=row["detail"],
+        )
+        for row in rows
+    ]
+
+
+# --- API key usage --------------------------------------------------------
+
+def record_key_usage(key_hash: str, *, when: datetime) -> None:
+    """Upsert-style: create the row on first use, otherwise bump
+    use_count and last_used_at. Called from app/auth.py's
+    record_key_usage() wrapper, which throttles how often this actually
+    runs per key -- see that function's docstring for why (this is called
+    from the request-auth hot path, including every detection POST).
+    """
+    # ON CONFLICT ... DO UPDATE is standard, identical syntax on both
+    # SQLite (3.24+) and PostgreSQL -- this app already relies on RETURNING
+    # (SQLite 3.35+) elsewhere, so no extra version floor is introduced here.
+    with db_session() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO api_key_usage (key_hash, last_used_at, use_count) "
+                "VALUES (:key_hash, :when, 1) "
+                "ON CONFLICT (key_hash) DO UPDATE SET "
+                "last_used_at = excluded.last_used_at, use_count = api_key_usage.use_count + 1"
+            ),
+            {"key_hash": key_hash, "when": when.isoformat()},
+        )
+
+
+def get_key_usage(key_hashes: list[str]) -> dict[str, tuple[datetime, int]]:
+    """key_hash -> (last_used_at, use_count) for whichever of the given
+    hashes have ever been recorded. Looking up by a caller-supplied list
+    (rather than returning every row) keeps this from ever needing to
+    reverse a hash back to a key -- the caller (GET /api/admin/keys)
+    already knows every configured key and just wants each one's usage.
+    """
+    if not key_hashes:
+        return {}
+    with db_session() as conn:
+        rows = (
+            conn.execute(
+                text("SELECT * FROM api_key_usage WHERE key_hash IN :hashes").bindparams(
+                    bindparam("hashes", expanding=True)
+                ),
+                {"hashes": key_hashes},
+            )
+            .mappings()
+            .all()
+        )
+    return {row["key_hash"]: (datetime.fromisoformat(row["last_used_at"]), row["use_count"]) for row in rows}
 
 
 def count_active_tracks_all_sites() -> int:

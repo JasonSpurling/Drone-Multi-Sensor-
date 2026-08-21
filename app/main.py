@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.api import (
+    audit_log,
     authorized_operators,
     detections,
     health,
@@ -20,6 +21,7 @@ from app.api import (
     sites,
     tracks,
 )
+from app.api import keys as keys_api
 from app.api import zones as zones_api
 from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
@@ -115,6 +117,8 @@ app.include_router(sensor_registry.router, prefix="/api")
 app.include_router(authorized_operators.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(sites.router, prefix="/api")
+app.include_router(audit_log.router, prefix="/api")
+app.include_router(keys_api.router, prefix="/api")
 
 
 @app.get("/", include_in_schema=False)

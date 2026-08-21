@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
-from app.db import list_sensor_registrations, upsert_sensor_registration
+from app.db import list_sensor_registrations, record_audit, upsert_sensor_registration
 from app.models import SensorRegistration, SensorRegistrationInput
 
 router = APIRouter()
@@ -33,5 +33,8 @@ def register_sensor(
         altitude_m=registration.altitude_m,
         azimuth_reference_deg=registration.azimuth_reference_deg,
         active=registration.active,
+    )
+    record_audit(
+        site_id=principal.site_id, actor=principal.name, action="sensor.register", target=sensor_id
     )
     return SensorRegistration(sensor_id=sensor_id, site_id=principal.site_id, **registration.model_dump())

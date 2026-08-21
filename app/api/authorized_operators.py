@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.auth import ROLE_ADMIN, Principal, require_role
-from app.db import list_authorized_operators, upsert_authorized_operator
+from app.db import list_authorized_operators, record_audit, upsert_authorized_operator
 from app.models import AuthorizedOperator, AuthorizedOperatorInput
 
 router = APIRouter()
@@ -34,6 +34,9 @@ def register_authorized_operator(
         name=body.name,
         public_key=body.public_key,
         active=body.active,
+    )
+    record_audit(
+        site_id=principal.site_id, actor=principal.name, action="operator.register", target=operator_id
     )
     return AuthorizedOperator(
         operator_id=operator_id,

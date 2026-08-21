@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
-from app.db import get_incident, list_incidents, update_incident
+from app.db import get_incident, list_incidents, record_audit, update_incident
 from app.models import Incident, IncidentStatus
 from app.util import utcnow
 
@@ -33,7 +33,14 @@ def acknowledge_incident(
         )
     incident.status = IncidentStatus.ACKNOWLEDGED
     incident.acknowledged_by = principal.name
-    return update_incident(incident)
+    updated = update_incident(incident)
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="incident.acknowledge",
+        target=str(incident_id),
+    )
+    return updated
 
 
 @router.post("/incidents/{incident_id}/resolve", response_model=Incident)
@@ -49,4 +56,8 @@ def resolve_incident(
     incident.closed_at = utcnow()
     if incident.acknowledged_by is None:
         incident.acknowledged_by = principal.name
-    return update_incident(incident)
+    updated = update_incident(incident)
+    record_audit(
+        site_id=principal.site_id, actor=principal.name, action="incident.resolve", target=str(incident_id)
+    )
+    return updated

@@ -177,3 +177,48 @@ authorized_operator = Table(
     Column("active", Integer, nullable=False, server_default="1"),
     Index("idx_authorized_operator_site_id", "site_id"),
 )
+
+# Who did what, when -- covers the admin-role write paths that can change
+# what the system trusts or silence a real alert (registering a sensor/
+# operator, creating a site, acknowledging/resolving an incident), so
+# there's a real answer to "who did this" beyond the request logs. Not a
+# general-purpose event log for everything the app does (detections/
+# tracks/incidents already have their own timestamped rows for that) --
+# specifically the admin actions that have no other record of *who*
+# performed them.
+audit_log = Table(
+    "audit_log",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    # Nullable: an action can be deployment-wide rather than one site's
+    # (e.g. creating a new site itself has no single site_id to attach to).
+    Column("site_id", Integer, ForeignKey("site.id")),
+    Column("occurred_at", String(40), nullable=False),
+    # The acting Principal's name (its configured key label, or its role
+    # if unlabeled -- see app/auth.py) -- never the raw API key.
+    Column("actor", String(200), nullable=False),
+    Column("action", String(100), nullable=False),
+    # What the action targeted (a sensor_id, operator_id, site name,
+    # incident id, ...) -- free-form since the target's own id shape
+    # varies by action.
+    Column("target", String(200)),
+    # Free-form JSON string with whatever extra context that action's
+    # caller thought was worth recording (e.g. the fields being changed).
+    Column("detail", Text),
+    Index("idx_audit_log_site_occurred_at", "site_id", "occurred_at"),
+)
+
+# Per-key usage tracking, keyed by a SHA-256 hash of the raw key -- never
+# the key itself -- so an admin can see "is this key actually being used,
+# and when was it last seen" without the app persisting anything that
+# would let a reader of this table impersonate the key. See
+# app/auth.py's record_key_usage(): updates are throttled (not one write
+# per request) specifically so this doesn't add write load to the
+# detection-ingest hot path.
+api_key_usage = Table(
+    "api_key_usage",
+    metadata,
+    Column("key_hash", String(64), primary_key=True),
+    Column("last_used_at", String(40), nullable=False),
+    Column("use_count", Integer, nullable=False, server_default="0"),
+)
