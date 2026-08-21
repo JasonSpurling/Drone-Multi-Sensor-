@@ -51,6 +51,7 @@ from app.georeference import georeference
 from app.imm import IMMFilter
 from app.incidents import check_loitering_incident, check_predicted_incursions, check_zone_incidents
 from app.kalman import ConstantVelocityKalmanFilter
+from app.live import publish as publish_live_event
 from app.models import Classification, Detection, Track, TrackStatus
 from app.queue_publisher import publish_detection
 from app.util import utcnow
@@ -280,6 +281,7 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
         track.classification = fused_label
     update_track(track)
     publish_track_cot(track)
+    publish_live_event(track.site_id, {"type": "track_update", "track": track.model_dump(mode="json")})
 
     check_zone_incidents(track)
     check_predicted_incursions(track)

@@ -420,7 +420,14 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const POLL_MS = 3000;
+// A fallback safety net, not the primary update path -- see
+// connectLiveSocket() below, which pushes an update within milliseconds
+// of a new detection/incident instead of waiting up to this long. Kept
+// long (not eliminated) because a WebSocket push only reaches the one
+// replica a client happens to be connected to behind a load balancer
+// (see app/live.py's docstring) -- polling is what catches anything a
+// different replica processed.
+const POLL_MS = 15000;
 
 const state = {
   tracks: [], incidents: [], zones: [], sensors: [],
@@ -1301,6 +1308,12 @@ document.getElementById("auth-save").addEventListener("click", () => {
   apiKey = input.value.trim();
   localStorage.setItem("droneApiKey", apiKey);
   refresh();
+  // The live socket authenticates via its own connection-time query
+  // param (see connectLiveSocket()) -- a key entered after an earlier
+  // rejected/unauthenticated connection needs a fresh connection to
+  // actually take effect, not just the next HTTP request.
+  disconnectLiveSocket();
+  connectLiveSocket();
 });
 document.getElementById("auth-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("auth-save").click();
@@ -1340,23 +1353,67 @@ function stopPolling() {
   pollTimer = null;
 }
 
+// Pushes a refresh within milliseconds of a new detection/incident,
+// instead of waiting for the next POLL_MS tick -- see app/live.py and
+// app/api/live.py. On any message this just calls refresh() again
+// (the same fetch a poll would do) rather than trying to patch state
+// incrementally from the push payload -- one rendering path to keep
+// correct, not two.
+let liveSocket = null;
+let liveReconnectTimer = null;
+
+function connectLiveSocket() {
+  if (liveSocket !== null) return;
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}/ws/live${apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : ""}`;
+  const ws = new WebSocket(url);
+  liveSocket = ws;
+  ws.addEventListener("message", refresh);
+  ws.addEventListener("close", (event) => {
+    liveSocket = null;
+    // 4401/4403 (see app/api/live.py) mean the key is missing/wrong/
+    // lacks access -- reconnecting every few seconds against the same
+    // rejected key would just spam the server for no benefit; the
+    // auth-save handler below reconnects once a key is actually entered.
+    if (document.hidden || event.code === 4401 || event.code === 4403) return;
+    liveReconnectTimer = setTimeout(connectLiveSocket, 3000);
+  });
+  ws.addEventListener("error", () => ws.close());
+}
+
+function disconnectLiveSocket() {
+  if (liveReconnectTimer !== null) {
+    clearTimeout(liveReconnectTimer);
+    liveReconnectTimer = null;
+  }
+  if (liveSocket !== null) {
+    liveSocket.close();
+    liveSocket = null;
+  }
+}
+
 // A hidden/backgrounded tab has no visible map or track list to update, so
-// polling the API every 3s there just burns battery and load for nothing.
-// Refresh once immediately on return so the view isn't stale from whenever
-// it was backgrounded.
+// polling the API every few seconds (or holding a live socket open) there
+// just burns battery and load for nothing. Refresh once immediately on
+// return so the view isn't stale from whenever it was backgrounded.
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     stopPolling();
+    disconnectLiveSocket();
   } else {
     refresh();
     startPolling();
+    connectLiveSocket();
   }
 });
 
 renderClassFilters();
 initMap();
 refresh();
-if (!document.hidden) startPolling();
+if (!document.hidden) {
+  startPolling();
+  connectLiveSocket();
+}
 </script>
 </body>
 </html>

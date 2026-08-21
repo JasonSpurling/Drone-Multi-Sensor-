@@ -27,6 +27,7 @@ from app.db import (
     list_recent_detections,
 )
 from app.geo import local_m_to_latlon
+from app.live import publish as publish_live_event
 from app.metrics import incidents_opened_total
 from app.mitigation import notify_mitigation_system
 from app.models import (
@@ -103,6 +104,7 @@ def _open_incident(
     notify_escalations(incident)
     notify_mitigation_system(incident, track)
     publish_incident(incident.model_dump(mode="json"))
+    publish_live_event(track.site_id, {"type": "incident_opened", "incident": incident.model_dump(mode="json")})
     return incident
 
 
@@ -149,6 +151,7 @@ def _open_behavioral_incident(track: Track, incident_type: IncidentType, descrip
     notify_escalations(incident)
     notify_mitigation_system(incident, track)
     publish_incident(incident.model_dump(mode="json"))
+    publish_live_event(track.site_id, {"type": "incident_opened", "incident": incident.model_dump(mode="json")})
     return incident
 
 

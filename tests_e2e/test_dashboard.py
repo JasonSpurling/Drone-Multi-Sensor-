@@ -65,6 +65,25 @@ def test_tracks_table_reflects_ingested_detections(live_server, page):
     assert rows.count() == 1
 
 
+def test_a_new_detection_appears_via_the_live_socket_without_waiting_for_a_poll(live_server, page):
+    """Proves the WebSocket push (app/live.py, app/api/live.py) actually
+    drives the UI, not just that a connection opens: POLL_MS is 15s (see
+    dashboard.html), so a track appearing well before that only happens
+    if the push -- not the fallback poll -- is what triggered the
+    refresh.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+    page.wait_for_function("liveSocket !== null && liveSocket.readyState === WebSocket.OPEN")
+    assert page.locator(".track-card[data-id]").count() == 0
+
+    requests.post(f"{live_server}/api/detections", json=DETECTION_BODY, timeout=5).raise_for_status()
+
+    # Comfortably under POLL_MS -- if this only worked via the polling
+    # fallback, it would still be empty at this point.
+    page.wait_for_selector(".track-card[data-id]", timeout=5000)
+
+
 def test_selecting_a_track_shows_details_and_playback_scrubber(live_server, page):
     _seed_moving_track(live_server)
     page.goto(live_server, wait_until="networkidle")
@@ -188,14 +207,19 @@ def test_track_card_is_keyboard_operable(live_server, page):
 
 
 def test_polling_pauses_while_the_tab_is_hidden(live_server, page):
-    """Regression test: the 3s poll used to run unconditionally, even in a
+    """Regression test: the poll used to run unconditionally, even in a
     backgrounded tab where nothing on screen changes. document.hidden can't
     be forced true by a real OS-level tab switch in a headless test, so this
     fakes it the way the app itself observes it: override the `hidden`
     getter and fire the same visibilitychange event the browser would.
+
+    Also covers the live WebSocket (app/live.py): it should disconnect on
+    the same signal, for the same reason -- no visible UI to push updates
+    into.
     """
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#tracks-list")
+    page.wait_for_function("liveSocket !== null && liveSocket.readyState === WebSocket.OPEN")
 
     request_count = {"n": 0}
     page.on(
@@ -210,14 +234,18 @@ def test_polling_pauses_while_the_tab_is_hidden(live_server, page):
     )
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
 
+    assert page.evaluate("liveSocket") is None
+
     request_count["n"] = 0
-    page.wait_for_timeout(3500)  # longer than POLL_MS -- would have polled at least once
+    poll_ms = page.evaluate("POLL_MS")
+    page.wait_for_timeout(poll_ms + 500)  # longer than one poll interval -- would have polled at least once
     assert request_count["n"] == 0
 
     page.evaluate(
         "Object.defineProperty(document, 'hidden', {value: false, configurable: true})"
     )
     page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_function("liveSocket !== null && liveSocket.readyState === WebSocket.OPEN")
     page.wait_for_timeout(200)
     assert request_count["n"] >= 1  # the immediate refresh on becoming visible again
 

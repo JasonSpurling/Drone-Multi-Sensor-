@@ -155,6 +155,45 @@ def _resolve_site_id(site_name: str | None) -> int:
     return site.id
 
 
+def authenticate_key(raw_key: str | None, required: set[str], *, missing_key_detail: str) -> Principal:
+    """The actual authentication/authorization logic behind require_role()
+    below, factored out so a context that can't use FastAPI's
+    Header()-based dependency injection -- specifically the WebSocket
+    endpoint (app/api/live.py), since a browser WebSocket client can't
+    set a custom X-API-Key header and instead authenticates via an
+    `api_key` query param -- can still run exactly the same checks
+    (revocation, expiry, role, usage tracking) rather than a second,
+    divergent copy of them.
+    """
+    keys = configured_keys()
+    if not keys:
+        from app.sites import ensure_default_site
+
+        return Principal(role=ROLE_ADMIN, site_id=ensure_default_site())
+
+    if raw_key is None:
+        raise HTTPException(status_code=401, detail=missing_key_detail)
+
+    matched = next((entry for key, entry in keys.items() if secrets.compare_digest(raw_key, key)), None)
+    if matched is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # Checked before the role/403 check below -- a revoked or expired key
+    # gets 401 regardless of which role it was, the same as an
+    # unrecognized key would, rather than leaking through 403 which role
+    # it used to have.
+    if matched["revoked"]:
+        raise HTTPException(status_code=401, detail="API key has been revoked")
+    if matched["expires_at"] is not None and utcnow() >= matched["expires_at"]:
+        raise HTTPException(status_code=401, detail="API key has expired")
+
+    matched_role = matched["role"]
+    if not (_ROLE_IMPLIES.get(matched_role, {matched_role}) & required):
+        raise HTTPException(status_code=403, detail=f"Role '{matched_role}' cannot access this endpoint")
+    record_key_usage(raw_key)
+    return Principal(role=matched_role, site_id=_resolve_site_id(matched["site"]), label=matched["label"])
+
+
 def require_role(*roles: str):
     """FastAPI dependency factory: the caller's key must map to a role that
     satisfies at least one of `roles`.
@@ -162,38 +201,6 @@ def require_role(*roles: str):
     required = set(roles)
 
     def dependency(x_api_key: str | None = Header(default=None)) -> Principal:
-        keys = configured_keys()
-        if not keys:
-            from app.sites import ensure_default_site
-
-            return Principal(role=ROLE_ADMIN, site_id=ensure_default_site())
-
-        if x_api_key is None:
-            raise HTTPException(status_code=401, detail="Missing X-API-Key header")
-
-        matched = next(
-            (entry for key, entry in keys.items() if secrets.compare_digest(x_api_key, key)), None
-        )
-        if matched is None:
-            raise HTTPException(status_code=401, detail="Invalid X-API-Key header")
-
-        # Checked before the role/403 check below -- a revoked or expired
-        # key gets 401 regardless of which role it was, the same as an
-        # unrecognized key would, rather than leaking through 403 which
-        # role it used to have.
-        if matched["revoked"]:
-            raise HTTPException(status_code=401, detail="API key has been revoked")
-        if matched["expires_at"] is not None and utcnow() >= matched["expires_at"]:
-            raise HTTPException(status_code=401, detail="API key has expired")
-
-        matched_role = matched["role"]
-        if not (_ROLE_IMPLIES.get(matched_role, {matched_role}) & required):
-            raise HTTPException(
-                status_code=403, detail=f"Role '{matched_role}' cannot access this endpoint"
-            )
-        record_key_usage(x_api_key)
-        return Principal(
-            role=matched_role, site_id=_resolve_site_id(matched["site"]), label=matched["label"]
-        )
+        return authenticate_key(x_api_key, required, missing_key_detail="Missing X-API-Key header")
 
     return dependency

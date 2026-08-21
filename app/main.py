@@ -23,6 +23,7 @@ from app.api import (
     tracks,
 )
 from app.api import keys as keys_api
+from app.api import live as live_api
 from app.api import zones as zones_api
 from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
@@ -32,6 +33,7 @@ from app.config import (
 )
 from app.db import init_db, list_sites, list_tracks, purge_old_detections
 from app.incidents import check_formation_incidents, check_shadowing_incidents
+from app.live import set_event_loop
 from app.logging_config import configure_logging
 from app.models import TrackStatus
 from app.sites import ensure_default_site
@@ -86,6 +88,10 @@ async def _behavior_sweep_loop() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     load_zones_from_file(site_id=ensure_default_site())
+    # app.live.publish() is called from sync endpoint code (a worker
+    # thread, not this event loop) and needs a reference to this loop to
+    # safely hand events back to it -- see that module's docstring.
+    set_event_loop(asyncio.get_running_loop())
     logger.info("Drone Multi-Sensor API started")
     retention_task = asyncio.create_task(_retention_sweep_loop())
     behavior_task = asyncio.create_task(_behavior_sweep_loop())
@@ -135,6 +141,7 @@ app.include_router(reports.router, prefix="/api")
 app.include_router(sites.router, prefix="/api")
 app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
+app.include_router(live_api.router)
 
 
 @app.get("/", include_in_schema=False)

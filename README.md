@@ -314,6 +314,31 @@ replica so the product still fits.
 | `PUT /api/authorized-operators/{operator_id}` | Register/update an authorized operator (admin) |
 | `GET /api/audit-log` | Who did what admin action, when (admin) |
 | `GET /api/admin/keys` | Every configured key's label/role/site/expiry plus last-used time and use count, never the raw key (admin) |
+| `GET /ws/live` | WebSocket: pushes `track_update`/`incident_opened` events in near-real-time (`?api_key=` for a key-authenticated deployment; see "Live updates" below) |
+
+### Live updates
+
+`GET /ws/live` (WebSocket) pushes a `{"type": "track_update", ...}` or
+`{"type": "incident_opened", ...}` event within milliseconds of a
+detection landing or an incident opening, instead of the dashboard
+waiting for its next poll -- `app/live.py` is the in-process pub/sub
+behind it, `app/api/live.py` the endpoint. The dashboard uses it
+automatically (`dashboard.html`'s `connectLiveSocket()`); a browser
+WebSocket client can't set a custom `X-API-Key` header, so authenticate
+via `?api_key=` on the connection URL instead when any key is configured.
+
+Polling isn't removed, just slowed down (`POLL_MS`, 3s -> 15s) and kept
+as a fallback -- for two reasons. First, resilience: a push is
+best-effort (see `app/live.py`'s `publish()`), so a poll is still what
+guarantees the view is eventually correct even if a push is dropped.
+Second, and more fundamentally, **a push only reaches whichever replica
+the client happens to be connected to** -- this is in-process pub/sub, not
+routed through NATS or any other cross-replica bus. Behind a load
+balancer fronting multiple replicas (see "Running multiple replicas
+behind a load balancer" above), a detection processed by replica B never
+pushes to a dashboard client connected to replica A; that client still
+gets it, just at the next poll rather than instantly. Single-replica
+deployments (the common case) don't have this gap at all.
 
 ## Tracking core
 
