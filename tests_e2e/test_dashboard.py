@@ -164,3 +164,48 @@ def test_narrow_viewport_collapsing_the_left_panel_reveals_the_map(live_server, 
     page.click(".rail-btn[data-panel=tracks]")
     page.wait_for_timeout(300)  # CSS transform transition
     assert "collapsed" in (left_panel.get_attribute("class") or "")
+
+
+def test_track_card_is_keyboard_operable(live_server, page):
+    """Regression test: .track-card is a <div> with a click handler, not a
+    native <button> (see dashboard.html's makeKeyboardActivatable comment
+    for why it isn't one) -- without role="button"/tabindex/a keydown
+    handler it would be completely unreachable for a keyboard-only user,
+    not just unlabeled for a screen reader.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    card = page.locator(".track-card[data-id]").first
+    assert card.get_attribute("role") == "button"
+    assert card.get_attribute("tabindex") == "0"
+
+    card.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#details-panel[style*='flex']", timeout=3000)
+    assert page.locator(".detail-title-row").inner_text() != ""
+
+
+def test_icon_only_buttons_have_accessible_names(live_server, page):
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    for selector in (
+        '.rail-btn[data-panel="tracks"]',
+        '.rail-btn[data-panel="alerts"]',
+        '.rail-btn[data-panel="sensors"]',
+    ):
+        label = page.locator(selector).get_attribute("aria-label")
+        assert label, f"{selector} has no accessible name"
+
+    # The details panel's back/close buttons only exist once a track is
+    # selected -- seed one and open it.
+    requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5)
+    page.reload(wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#details-back")
+
+    assert page.locator("#details-back").get_attribute("aria-label")
+    assert page.locator("#details-close").get_attribute("aria-label")
