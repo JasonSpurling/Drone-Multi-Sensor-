@@ -152,6 +152,17 @@ playwright install chromium
 python -m pytest tests_e2e/ -v
 ```
 
+**Browser coverage is Chromium-only** -- a deliberate scope choice (one
+browser to install and run in CI, matching most teams' practice), not an
+oversight, but worth naming plainly: a dashboard CSS/layout bug specific
+to Firefox or Safari (e.g. a flexbox or `:focus-visible` quirk) would pass
+this suite and CI undetected. If that risk matters for your deployment
+(e.g. operators are mandated onto a specific non-Chromium browser),
+Playwright can run the same suite against `firefox`/`webkit` by changing
+`p.chromium.launch(...)` to `p.firefox.launch(...)`/`p.webkit.launch(...)`
+in `tests_e2e/conftest.py`'s `browser` fixture -- nothing else in the
+suite is Chromium-specific.
+
 ## Deployment
 
 **Quick single-container run** (SQLite, fine for trying it out):

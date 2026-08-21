@@ -33,6 +33,17 @@ path (e.g. a sandboxed environment with restricted network egress), set
 `PLAYWRIGHT_CHROMIUM_PATH` to its executable -- unset by default, so real
 CI (which runs `playwright install chromium` fresh) is unaffected.
 
+## Browser coverage
+
+This suite only runs against Chromium -- a deliberate scope choice (one
+browser to install and run in CI), not an oversight. It's worth naming
+plainly, though: a dashboard CSS/layout bug specific to Firefox or Safari
+would pass this suite and CI undetected. Nothing in the tests themselves
+is Chromium-specific; to also run against Firefox or WebKit, change
+`p.chromium.launch(...)` to `p.firefox.launch(...)`/`p.webkit.launch(...)`
+in the `browser` fixture above (and `playwright install firefox`/`webkit`
+instead of `chromium`).
+
 ## Updating the vendored Leaflet copy
 
 If `app/static/dashboard.html`'s pinned Leaflet version
