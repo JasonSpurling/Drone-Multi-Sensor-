@@ -15,6 +15,14 @@ ZONES_SEED_PATH = Path(
     os.getenv("DRONE_ZONES_SEED_PATH", str(BASE_DIR / "app" / "zones.seed.json"))
 )
 
+# Unset by default -- unlike ZONES_SEED_PATH, this app ships no bundled file
+# here, because there is no real per-model RF signature data to bundle (see
+# app/rf_signatures.py's module docstring). Point this at a JSON file of
+# your own operator-supplied signatures (real captures, a licensed RF
+# signature library, or verified FCC equipment-authorization filings) to
+# get real per-model fidelity; this app never fabricates that data itself.
+RF_SIGNATURES_PATH = Path(os.environ["DRONE_RF_SIGNATURES_PATH"]) if os.getenv("DRONE_RF_SIGNATURES_PATH") else None
+
 # SQLite by default (zero setup). Point this at a PostgreSQL instance for
 # production deployments that need concurrent-write throughput SQLite can't
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname

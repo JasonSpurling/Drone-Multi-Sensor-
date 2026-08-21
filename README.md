@@ -638,10 +638,43 @@ reported confidence, so a low-confidence RF detection with a
 signal-shape that matches a known drone link still classifies as `drone`.
 It cannot decode a link's payload, extract telemetry, or identify a
 specific aircraft -- only that its RF envelope is consistent with a known
-type of control/video link. The band/bandwidth windows in `SIGNATURES` are
-drawn from published consumer/hobbyist RF specifications and are
-approximate, not exact per-model specs -- tune them to your own RF
-sensor's measured characteristics if you have one.
+type of control/video link. The band/bandwidth windows in
+`BUILT_IN_SIGNATURES` are drawn from published consumer/hobbyist RF
+specifications and are approximate, by protocol family -- not exact
+per-model specs. That's a deliberate limit, not an oversight: getting
+real per-model fidelity (telling a DJI Mavic 3 apart from a Mini 4 Pro by
+RF envelope alone) needs a verified signal-sample dataset or a licensed
+signature library, and this project has no access to one -- a
+confidently-specific-looking but unverified number would be worse than
+an honestly approximate one in a system people make security decisions
+from.
+
+**Plugging in real signatures**: point `DRONE_RF_SIGNATURES_PATH` at a
+JSON file of your own -- real captured/verified RF samples, a licensed
+signature library, or FCC ID equipment-authorization filings you've
+looked up yourself -- and `app/rf_signatures.py` loads them via
+`load_operator_signatures()`, tried *before* the built-in family-level
+table, so a verified per-model entry wins over the approximate fallback
+for the same frequency/bandwidth window:
+
+```json
+[
+  {
+    "name": "my_verified_model",
+    "label": "Example Drone Model X1",
+    "freq_bands_mhz": [[2400.0, 2483.5]],
+    "bandwidth_mhz": [9.0, 11.0],
+    "frequency_hopping": true,
+    "drone_link_confidence": 0.97,
+    "source": "field capture 2026-01-01, verified against known unit S/N ..."
+  }
+]
+```
+
+`source` is free text (shown in logs when a signature loads) so a
+reviewer can tell an approximate built-in from a verified operator entry
+at a glance -- always fill it in with where the numbers actually came
+from, not a placeholder.
 
 ## DJI DroneID payload decoding
 
@@ -1037,6 +1070,7 @@ needs to be set to run locally.
 | `DRONE_DB_POOL_SIZE` | `5` | PostgreSQL connection pool size (ignored for SQLite) |
 | `DRONE_DB_MAX_OVERFLOW` | `10` | PostgreSQL pool overflow above `DRONE_DB_POOL_SIZE` before a connection request waits (ignored for SQLite) |
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
+| `DRONE_RF_SIGNATURES_PATH` | unset | Operator-supplied RF signatures JSON file (see "RF signature fingerprinting" below); no default -- unlike zones, this app ships no bundled file since it has no real per-model data to bundle |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |
