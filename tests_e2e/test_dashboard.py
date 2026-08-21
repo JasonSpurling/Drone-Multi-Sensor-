@@ -187,6 +187,41 @@ def test_track_card_is_keyboard_operable(live_server, page):
     assert page.locator(".detail-title-row").inner_text() != ""
 
 
+def test_polling_pauses_while_the_tab_is_hidden(live_server, page):
+    """Regression test: the 3s poll used to run unconditionally, even in a
+    backgrounded tab where nothing on screen changes. document.hidden can't
+    be forced true by a real OS-level tab switch in a headless test, so this
+    fakes it the way the app itself observes it: override the `hidden`
+    getter and fire the same visibilitychange event the browser would.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    request_count = {"n": 0}
+    page.on(
+        "request",
+        lambda req: request_count.__setitem__("n", request_count["n"] + 1)
+        if "/api/tracks" in req.url
+        else None,
+    )
+
+    page.evaluate(
+        "Object.defineProperty(document, 'hidden', {value: true, configurable: true})"
+    )
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+
+    request_count["n"] = 0
+    page.wait_for_timeout(3500)  # longer than POLL_MS -- would have polled at least once
+    assert request_count["n"] == 0
+
+    page.evaluate(
+        "Object.defineProperty(document, 'hidden', {value: false, configurable: true})"
+    )
+    page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_timeout(200)
+    assert request_count["n"] >= 1  # the immediate refresh on becoming visible again
+
+
 def test_icon_only_buttons_have_accessible_names(live_server, page):
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#tracks-list")

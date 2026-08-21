@@ -1327,10 +1327,36 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+let pollTimer = null;
+
+function startPolling() {
+  if (pollTimer !== null) return;
+  pollTimer = setInterval(refresh, POLL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer === null) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+// A hidden/backgrounded tab has no visible map or track list to update, so
+// polling the API every 3s there just burns battery and load for nothing.
+// Refresh once immediately on return so the view isn't stale from whenever
+// it was backgrounded.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    refresh();
+    startPolling();
+  }
+});
+
 renderClassFilters();
 initMap();
 refresh();
-setInterval(refresh, POLL_MS);
+if (!document.hidden) startPolling();
 </script>
 </body>
 </html>
