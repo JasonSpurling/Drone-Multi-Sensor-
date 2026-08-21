@@ -246,6 +246,18 @@ existing track" and each creating a duplicate. This is automatic --
 nothing to configure -- as long as every replica talks to the same
 Postgres database.
 
+Verified end-to-end, not just argued from reading the code:
+`tests/test_multi_process_failover.py` spawns two real `uvicorn`
+processes against one real PostgreSQL database (Docker Compose's exact
+topology, just without the load balancer in front) and fires pairs of
+near-simultaneous "first sighting" detections at each, one replica per
+detection, for ten independent objects. It asserts exactly ten tracks
+result -- confirmed this actually catches the race it's for by
+temporarily disabling `cluster_association_lock()` locally and watching
+the same test fail with 15 tracks instead of 10. Requires
+`DRONE_TEST_DATABASE_URL` pointed at PostgreSQL (skipped otherwise, same
+as every other PostgreSQL-only test -- see "Tests" above).
+
 **Process manager**: with Docker Compose, `docker compose up -d --scale
 app=3` runs 3 copies of the `app` service -- but first remove `app`'s
 `ports:` mapping in `docker-compose.yml` (only one container can bind a
