@@ -124,8 +124,19 @@ def page(browser):
 _DIFF_RATIO_TOLERANCE = 0.005
 # Per-channel (0-255) difference below which a pixel doesn't count as
 # "different" at all -- the same anti-aliasing noise, filtered before the
-# ratio above ever sees it.
-_PER_PIXEL_TOLERANCE = 24
+# ratio above ever sees it. 40, not 24: a real CI run (a freshly
+# `playwright install`ed Chromium, a different minor version than
+# whatever's pinned in a given dev/CI environment at baseline-generation
+# time) showed up to ~0.5% of #icon-rail's pixels differing from a
+# baseline that was otherwise pixel-identical in content -- soft-edge
+# font-hinting/anti-aliasing noise from the version difference, not a
+# layout regression. That noise is characteristically small per-pixel
+# deltas spread over many pixels; a real regression (like the
+# rail-badge-positioning bug this suite exists to catch) is a block of
+# fully-wrong-color pixels with a much larger per-pixel delta, so raising
+# this floor filters the former without blinding the ratio check to the
+# latter.
+_PER_PIXEL_TOLERANCE = 40
 
 
 def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
