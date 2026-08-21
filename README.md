@@ -306,7 +306,9 @@ replica so the product still fits.
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
 | `POST /api/incidents/{id}/resolve` | Resolve an incident |
-| `GET /api/zones` | List active zones |
+| `GET /api/zones` | List active zones (`?include_inactive=true` for the zone-management UI, which also needs to find and reactivate a deactivated one) |
+| `POST /api/zones` | Create a zone (admin) |
+| `PUT /api/zones/{id}` | Update a zone -- polygon, type, altitude band, active state (admin) |
 | `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
 | `GET /api/sensor-registrations` | List registered sensors (position/orientation used for georeferencing) |
 | `PUT /api/sensor-registrations/{sensor_id}` | Register/update a sensor's fixed position and orientation (admin) |
@@ -921,7 +923,34 @@ against your own hardware before relying on it.
 
 By default, zones come from the single hand-seeded polygon in
 `app/zones.seed.json` -- fine for a demo, not for representing real
-airspace. Two real, publicly published FAA data sources can supplement or
+airspace. Three ways to add real zones, in increasing order of how much
+setup they need:
+
+**The dashboard, at runtime** -- click the zones icon in the rail, "+ New
+zone", then click points on the map (3 minimum) to draw a polygon, fill
+in name/type/altitude band, and save. Editing an existing zone
+(re-drawing its polygon, changing its type, deactivating it) works the
+same way via each zone's "Edit" button. Requires an admin-role key (see
+"Security & access control" below) -- this is the operational path, no
+file edits or restart needed.
+
+**`POST`/`PUT /api/zones`** directly, admin-only, if you're scripting zone
+setup rather than clicking through the UI:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/zones \
+  -H "X-API-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "warehouse-perimeter", "zone_type": "restricted",
+       "polygon": [[51.49, -0.11], [51.49, -0.09], [51.51, -0.09], [51.51, -0.11]]}'
+```
+
+**`app/zones.seed.json`** (or `DRONE_ZONES_SEED_PATH`), loaded at every
+startup -- still the right place for a zone that should exist by default
+in every fresh deployment (what ships with this repo), not for zones an
+operator adds afterward; those belong in the database via the two options
+above, not in a file a deploy might overwrite.
+
+Two real, publicly published FAA data sources can supplement or
 replace it:
 
 **FAA UAS Facility Map** (`app/airspace/faa_uas_facility_map.py`): the

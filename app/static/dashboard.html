@@ -283,6 +283,28 @@
   button.secondary:hover { background: #24314a; }
   button.secondary.active { background: var(--accent); border-color: var(--accent); }
 
+  #view-zones .panel-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .zone-item { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .zone-item .top-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .zone-item .name { font-weight: 600; }
+  .zone-item .name.inactive { color: var(--muted); text-decoration: line-through; }
+  .zone-item .actions { display: flex; gap: 6px; margin-top: 6px; }
+  #zone-draw-hint {
+    padding: 8px 14px; background: var(--panel-2); color: var(--text);
+    font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  #zone-form { padding: 14px; border-bottom: 1px solid var(--border); }
+  #zone-form label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 3px; }
+  #zone-form input, #zone-form select {
+    width: 100%; background: #0b0f19; border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 5px 8px; font-size: 13px; box-sizing: border-box;
+  }
+  #zone-form .row { display: flex; gap: 8px; }
+  #zone-form .row > div { flex: 1; }
+  #zone-form .actions { display: flex; gap: 6px; margin-top: 10px; }
+  #zone-form .actions button { flex: 1; }
+  #zone-form-error { color: var(--high); font-size: 12px; margin-top: 6px; }
+
   #details-panel .panel-body { flex: 1; overflow-y: auto; padding: 14px; }
   .status-pill {
     font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
@@ -371,6 +393,9 @@
     <button class="rail-btn" data-panel="sensors" title="Sensor health" aria-label="Sensor health" aria-pressed="false">
       &#9738;
     </button>
+    <button class="rail-btn" data-panel="zones" title="Zones" aria-label="Zones" aria-pressed="false">
+      &#11040;
+    </button>
   </nav>
 
   <aside class="floating-panel" id="left-panel">
@@ -392,6 +417,14 @@
       <div class="panel-view" id="view-sensors">
         <div class="group-header" style="color:var(--text);">Sensor health</div>
         <div id="sensors-table"></div>
+      </div>
+      <div class="panel-view" id="view-zones">
+        <div class="panel-toolbar">
+          <button id="zone-new-btn">+ New zone</button>
+        </div>
+        <div id="zone-draw-hint" style="display:none;"></div>
+        <div id="zone-form" style="display:none;"></div>
+        <div id="zones-list"></div>
       </div>
     </div>
   </aside>
@@ -430,7 +463,7 @@
 const POLL_MS = 15000;
 
 const state = {
-  tracks: [], incidents: [], zones: [], sensors: [],
+  tracks: [], incidents: [], zones: [], sensors: [], allZones: [],
   selectedTrackId: null, trail: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true,
   activePanel: "tracks",
@@ -438,6 +471,9 @@ const state = {
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
   scrubIndex: null,
+  // Non-null while creating/editing a zone by clicking points on the map
+  // (see startZoneDraw() below) -- {points, editingZoneId, original}.
+  zoneDraft: null,
 };
 let apiKey = localStorage.getItem("droneApiKey") || "";
 
@@ -574,6 +610,10 @@ function visibleTracks() {
 // side rail instead of three permanently-stacked panels competing for
 // screen space now that the map is full-bleed behind them. -------------
 function showPanel(name) {
+  // Leaving the zones panel mid-draw would otherwise strand the map's
+  // click-to-add-vertex listener and crosshair cursor active underneath
+  // whatever panel is shown next.
+  if (name !== "zones" && state.zoneDraft) cancelZoneDraw();
   document.getElementById("left-panel").classList.remove("collapsed");
   state.activePanel = name;
   document.querySelectorAll(".rail-btn").forEach((btn) => {
@@ -585,7 +625,7 @@ function showPanel(name) {
     view.classList.toggle("visible", view.id === `view-${name}`);
   });
   document.getElementById("left-panel-search").style.display = name === "tracks" ? "block" : "none";
-  const titles = { tracks: "Tracks", alerts: "Alerts", sensors: "Sensor health" };
+  const titles = { tracks: "Tracks", alerts: "Alerts", sensors: "Sensor health", zones: "Zones" };
   document.getElementById("left-panel-title").firstChild.textContent = titles[name] + " ";
   document.getElementById("tracks-count").style.display = name === "tracks" ? "inline" : "none";
 }
@@ -999,6 +1039,7 @@ function renderDetails() {
 let leafletMap = null;
 let zoneLayer = null;
 let trackLayer = null;
+let zoneDrawLayer = null;
 let mapFitted = false;
 
 function initMap() {
@@ -1267,18 +1308,209 @@ function renderSensors() {
   </table>`;
 }
 
+// --- Zone management: draw a polygon on the map, then POST/PUT it via
+// /api/zones (admin-only) -- previously the only way to add or change a
+// restricted zone was hand-editing app/zones.seed.json and restarting
+// the app. -------------------------------------------------------------
+
+function renderZones() {
+  const el = document.getElementById("zones-list");
+  if (state.allZones.length === 0) {
+    el.innerHTML = '<div class="empty">No zones defined yet.</div>';
+    return;
+  }
+  el.innerHTML = state.allZones
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((z) => `
+      <div class="zone-item">
+        <div class="top-row">
+          <span class="name${z.active ? "" : " inactive"}">${escapeHtml(z.name)}</span>
+          <span style="color:var(--muted); font-size:11px;">${escapeHtml(z.zone_type)}</span>
+        </div>
+        <div class="actions">
+          <button class="secondary" data-zone-edit="${z.id}">Edit</button>
+          <button class="secondary" data-zone-toggle="${z.id}">${z.active ? "Deactivate" : "Activate"}</button>
+        </div>
+      </div>`)
+    .join("");
+  el.querySelectorAll("[data-zone-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const zone = state.allZones.find((z) => z.id === Number(btn.dataset.zoneEdit));
+      if (zone) startZoneDraw(zone);
+    });
+  });
+  el.querySelectorAll("[data-zone-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleZoneActive(Number(btn.dataset.zoneToggle)));
+  });
+}
+
+async function toggleZoneActive(zoneId) {
+  const zone = state.allZones.find((z) => z.id === zoneId);
+  if (!zone) return;
+  try {
+    await fetchJSON(`/api/zones/${zoneId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...zone, active: !zone.active }),
+    });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    console.error(e);
+  }
+}
+
+function startZoneDraw(existingZone) {
+  cancelZoneDraw();
+  showPanel("zones");
+  state.zoneDraft = {
+    points: existingZone ? existingZone.polygon.map((p) => [p[0], p[1]]) : [],
+    editingZoneId: existingZone ? existingZone.id : null,
+    original: existingZone || null,
+  };
+  zoneDrawLayer = L.layerGroup().addTo(leafletMap);
+  leafletMap.getContainer().style.cursor = "crosshair";
+  leafletMap.on("click", onZoneDrawClick);
+  document.getElementById("zone-draw-hint").style.display = "block";
+  updateZoneDrawHint();
+  redrawZoneDraft();
+  showZoneForm(existingZone);
+}
+
+function onZoneDrawClick(e) {
+  state.zoneDraft.points.push([e.latlng.lat, e.latlng.lng]);
+  redrawZoneDraft();
+  updateZoneDrawHint();
+}
+
+function redrawZoneDraft() {
+  zoneDrawLayer.clearLayers();
+  const pts = state.zoneDraft.points;
+  pts.forEach((p) => L.circleMarker(p, { radius: 4, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1 }).addTo(zoneDrawLayer));
+  if (pts.length >= 2) {
+    L.polyline(pts, { color: "#f59e0b", weight: 2, dashArray: "4 4" }).addTo(zoneDrawLayer);
+  }
+  if (pts.length >= 3) {
+    L.polygon(pts, { color: "#f59e0b", weight: 2, fillOpacity: 0.15 }).addTo(zoneDrawLayer);
+  }
+}
+
+function updateZoneDrawHint() {
+  const n = state.zoneDraft.points.length;
+  document.getElementById("zone-draw-hint").textContent =
+    n < 3
+      ? `Click the map to add a point (${n} so far -- need at least 3 to form a zone).`
+      : `${n} points -- click to add more, or fill in the form below and save.`;
+}
+
+function cancelZoneDraw() {
+  if (zoneDrawLayer) {
+    leafletMap.removeLayer(zoneDrawLayer);
+    zoneDrawLayer = null;
+  }
+  if (leafletMap) {
+    leafletMap.off("click", onZoneDrawClick);
+    leafletMap.getContainer().style.cursor = "";
+  }
+  state.zoneDraft = null;
+  document.getElementById("zone-draw-hint").style.display = "none";
+  document.getElementById("zone-form").style.display = "none";
+}
+
+const ZONE_TYPES = ["restricted", "no_fly", "monitoring", "safe"];
+
+function showZoneForm(existingZone) {
+  const form = document.getElementById("zone-form");
+  form.style.display = "block";
+  form.innerHTML = `
+    <label for="zone-name-input">Name</label>
+    <input id="zone-name-input" type="text" value="${existingZone ? escapeHtml(existingZone.name) : ""}">
+    <label for="zone-type-input">Type</label>
+    <select id="zone-type-input">
+      ${ZONE_TYPES.map((t) => `<option value="${t}" ${existingZone && existingZone.zone_type === t ? "selected" : ""}>${t}</option>`).join("")}
+    </select>
+    <div class="row">
+      <div>
+        <label for="zone-min-alt-input">Min altitude (m)</label>
+        <input id="zone-min-alt-input" type="number" placeholder="none" value="${existingZone && existingZone.min_altitude_m != null ? existingZone.min_altitude_m : ""}">
+      </div>
+      <div>
+        <label for="zone-max-alt-input">Max altitude (m)</label>
+        <input id="zone-max-alt-input" type="number" placeholder="none" value="${existingZone && existingZone.max_altitude_m != null ? existingZone.max_altitude_m : ""}">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="zone-save-btn">${existingZone ? "Save changes" : "Create zone"}</button>
+      <button class="secondary" id="zone-cancel-btn">Cancel</button>
+    </div>
+    <div id="zone-form-error"></div>
+  `;
+  document.getElementById("zone-save-btn").addEventListener("click", saveZoneDraft);
+  document.getElementById("zone-cancel-btn").addEventListener("click", cancelZoneDraw);
+}
+
+async function saveZoneDraft() {
+  const draft = state.zoneDraft;
+  const errorEl = document.getElementById("zone-form-error");
+  errorEl.textContent = "";
+  if (draft.points.length < 3) {
+    errorEl.textContent = "Draw at least 3 points on the map first.";
+    return;
+  }
+  const name = document.getElementById("zone-name-input").value.trim();
+  if (!name) {
+    errorEl.textContent = "Name is required.";
+    return;
+  }
+  const parseAlt = (id) => {
+    const v = document.getElementById(id).value;
+    return v === "" ? null : Number(v);
+  };
+  const body = {
+    name,
+    zone_type: document.getElementById("zone-type-input").value,
+    polygon: draft.points,
+    min_altitude_m: parseAlt("zone-min-alt-input"),
+    max_altitude_m: parseAlt("zone-max-alt-input"),
+    active: draft.original ? draft.original.active : true,
+  };
+  try {
+    const url = draft.editingZoneId ? `/api/zones/${draft.editingZoneId}` : "/api/zones";
+    const method = draft.editingZoneId ? "PUT" : "POST";
+    await fetchJSON(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    cancelZoneDraw();
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) {
+      showAuthBar(true);
+      errorEl.textContent = "Not authorized -- an admin API key is required to manage zones.";
+    } else {
+      errorEl.textContent = `Save failed: ${e.message}`;
+    }
+    console.error(e);
+  }
+}
+
+document.getElementById("zone-new-btn").addEventListener("click", () => startZoneDraw(null));
+
 async function refresh() {
   try {
-    const [tracks, incidents, zones, sensors] = await Promise.all([
+    const [tracks, incidents, zones, sensors, allZones] = await Promise.all([
       fetchJSON("/api/tracks"),
       fetchJSON("/api/incidents"),
       fetchJSON("/api/zones"),
       fetchJSON("/api/sensors"),
+      // Separate from `zones` above (active-only, what the map draws) --
+      // the zone-management panel also needs to show/reactivate a
+      // deactivated zone, which the map deliberately never renders.
+      fetchJSON("/api/zones?include_inactive=true"),
     ]);
     state.tracks = tracks;
     state.incidents = incidents;
     state.zones = zones;
     state.sensors = sensors;
+    state.allZones = allZones;
     recordBreadcrumbs(tracks);
     showAuthBar(false);
     renderTracks();
@@ -1286,6 +1518,7 @@ async function refresh() {
     renderMap();
     renderDetails();
     renderSensors();
+    renderZones();
     const activeCount = incidents.filter((i) => i.status !== "resolved").length;
     const alertPart = activeCount > 0
       ? `<span style="color:var(--high); font-weight:700;">${activeCount} active alert${activeCount === 1 ? "" : "s"}</span>`

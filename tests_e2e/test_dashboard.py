@@ -111,6 +111,43 @@ def test_selecting_a_track_shows_details_and_playback_scrubber(live_server, page
     assert page.locator("#scrub-time").inner_text() != "Live"
 
 
+def test_drawing_a_new_zone_on_the_map_persists_it(live_server, page):
+    """The point of app/api/zones.py's POST/PUT endpoints: previously the
+    only way to add a restricted zone was hand-editing
+    app/zones.seed.json and restarting the app. This clicks three points
+    on the map to draw one, saves it through the form, and confirms it
+    comes back from a fresh page load -- proving the whole path (map
+    click -> draft -> POST /api/zones -> GET /api/zones) actually works,
+    not just that the individual pieces do in isolation.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=zones]")
+    page.click("#zone-new-btn")
+    page.wait_for_selector("#zone-draw-hint")
+
+    # #map is full-bleed behind everything, including the floating
+    # left-panel (open here, showing the Zones view) -- clicking at the
+    # map's own bounding-box center would actually land on that panel.
+    # Anchor clicks well to the right of it instead, where the map is
+    # the topmost element under the cursor.
+    map_box = page.locator("#map").bounding_box()
+    cx = map_box["x"] + map_box["width"] * 0.75
+    cy = map_box["y"] + map_box["height"] / 2
+    for dx, dy in ((-40, -30), (40, -30), (0, 40)):
+        page.mouse.click(cx + dx, cy + dy)
+
+    page.fill("#zone-name-input", "e2e-drawn-zone")
+    page.click("#zone-save-btn")
+
+    page.wait_for_selector(".zone-item .name:has-text('e2e-drawn-zone')")
+
+    # Reload from scratch -- proves it round-tripped through the API and
+    # the database, not just that the in-page state object still has it.
+    page.reload(wait_until="networkidle")
+    page.click(".rail-btn[data-panel=zones]")
+    page.wait_for_selector(".zone-item .name:has-text('e2e-drawn-zone')")
+
+
 def test_map_layer_toggles_are_clickable(live_server, page):
     """Regression test: Leaflet's default zoom control used to sit exactly
     on top of #map-layer-toggles (both top-left), silently intercepting

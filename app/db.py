@@ -778,6 +778,39 @@ def create_zone(zone: Zone) -> Zone:
     return zone
 
 
+def update_zone(zone: Zone) -> Zone:
+    """zone.id and zone.site_id must already be set (see
+    app/api/zones.py's edit_zone -- it fetches the existing row by both
+    first, the same 404-not-403-on-a-different-site's-id pattern every
+    other site-scoped update in this app follows, so this never needs to
+    guard against updating a different site's zone itself).
+    """
+    if zone.id is None or zone.site_id is None:
+        raise ValueError("update_zone requires zone.id and zone.site_id to be set")
+    with db_session() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE zone SET
+                    name = :name, zone_type = :zone_type, polygon = :polygon,
+                    min_altitude_m = :min_altitude_m, max_altitude_m = :max_altitude_m, active = :active
+                WHERE id = :id AND site_id = :site_id
+                """
+            ),
+            {
+                "id": zone.id,
+                "site_id": zone.site_id,
+                "name": zone.name,
+                "zone_type": zone.zone_type.value,
+                "polygon": json.dumps(zone.polygon),
+                "min_altitude_m": zone.min_altitude_m,
+                "max_altitude_m": zone.max_altitude_m,
+                "active": int(zone.active),
+            },
+        )
+    return zone
+
+
 def get_zone(zone_id: int, site_id: int) -> Zone | None:
     with db_session() as conn:
         row = conn.execute(

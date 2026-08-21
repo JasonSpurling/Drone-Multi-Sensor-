@@ -173,6 +173,23 @@ class Zone(BaseModel):
     active: bool = True
 
 
+class ZoneInput(BaseModel):
+    """A zone as an admin creates/edits it via POST/PUT /api/zones -- same
+    shape as Zone minus id/site_id, which are always server-assigned (see
+    app/api/zones.py), the same reasoning as SensorRegistrationInput and
+    AuthorizedOperatorInput above.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    zone_type: ZoneType
+    polygon: list[tuple[float, float]] = Field(
+        min_length=3, description="List of (latitude, longitude) vertices -- at least 3 to form a real polygon"
+    )
+    min_altitude_m: float | None = None
+    max_altitude_m: float | None = None
+    active: bool = True
+
+
 class SensorHealth(BaseModel):
     """Derived liveness status for a sensor, based on its most recent detection."""
 
