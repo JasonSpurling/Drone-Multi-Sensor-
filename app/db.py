@@ -395,6 +395,72 @@ def purge_old_detections(before: datetime) -> int:
     return result.rowcount
 
 
+def purge_old_tracks(before: datetime) -> int:
+    """Delete tracks that finished (status != 'active') before `before`.
+    Returns the number removed.
+
+    An active track is never purged regardless of age -- last_seen only
+    moves forward while a track keeps updating, so "active and old" just
+    means "long-lived", not "stale". track_kalman_state cascades via its
+    own FK-shaped delete first (SQLite doesn't enforce FKs by default, and
+    even on PostgreSQL this table declares no ON DELETE behavior, so a
+    leftover orphan row would otherwise survive the track it belongs to).
+    detection.track_id and incident.track_id are detached (set NULL)
+    rather than deleted -- detection/incident retention are separate,
+    independent policies (see purge_old_detections and
+    DRONE_AUDIT_LOG_RETENTION_DAYS), and an incident's own record of what
+    happened shouldn't disappear just because the track it pointed at
+    aged out.
+    """
+    with db_session() as conn:
+        track_ids = [
+            row[0]
+            for row in conn.execute(
+                text("SELECT id FROM track WHERE status != 'active' AND last_seen < :before"),
+                {"before": before.isoformat()},
+            ).all()
+        ]
+        if not track_ids:
+            return 0
+        conn.execute(
+            text("DELETE FROM track_kalman_state WHERE track_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": track_ids},
+        )
+        conn.execute(
+            text("UPDATE detection SET track_id = NULL WHERE track_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": track_ids},
+        )
+        conn.execute(
+            text("UPDATE incident SET track_id = NULL WHERE track_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": track_ids},
+        )
+        result = conn.execute(
+            text("DELETE FROM track WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+            {"ids": track_ids},
+        )
+    return result.rowcount
+
+
+def purge_old_audit_log(before: datetime) -> int:
+    """Delete audit log entries older than `before`. Returns the number
+    removed. A separate knob from detection/track retention
+    (DRONE_AUDIT_LOG_RETENTION_DAYS) -- audit trail compliance requirements
+    commonly call for a longer (or indefinite) retention window than raw
+    sensor data needs.
+    """
+    with db_session() as conn:
+        result = conn.execute(
+            text("DELETE FROM audit_log WHERE occurred_at < :before"), {"before": before.isoformat()}
+        )
+    return result.rowcount
+
+
 def _row_to_detection(row) -> Detection:
     return Detection(
         id=row["id"],

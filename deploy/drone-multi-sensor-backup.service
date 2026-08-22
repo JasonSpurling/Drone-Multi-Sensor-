@@ -1,0 +1,24 @@
+# Runs scripts/backup.sh once -- paired with
+# drone-multi-sensor-backup.timer for a recurring schedule. Install
+# alongside drone-multi-sensor.service (see that file's header for the
+# base install steps):
+#
+#   sudo cp deploy/drone-multi-sensor-backup.service deploy/drone-multi-sensor-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now drone-multi-sensor-backup.timer
+#
+# journalctl -u drone-multi-sensor-backup shows each run's output; systemctl
+# list-timers shows when the next one fires.
+
+[Unit]
+Description=Drone Multi-Sensor database backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=drone
+Group=drone
+WorkingDirectory=/opt/drone-multi-sensor
+EnvironmentFile=/etc/drone-multi-sensor.env
+Environment=BACKUP_DIR=/opt/drone-multi-sensor/backups
+ExecStart=/opt/drone-multi-sensor/scripts/backup.sh

@@ -499,10 +499,36 @@ Kalman filter from their next detection instead of continuing smoothly,
 not lost history. Fine to include in a normal backup; not worth treating
 as critical if a restore predates it.
 
+**Automated, unattended backups**: `scripts/backup.sh` wraps both engines'
+safe backup mechanism below behind one command that auto-detects which one
+you're running from `DRONE_DATABASE_URL`, writes a timestamped file into
+`BACKUP_DIR` (default `./backups`), and prunes down to the last
+`BACKUP_KEEP_COUNT` (default 14) so it's safe to run on a schedule without
+slowly filling the disk:
+
+```bash
+BACKUP_DIR=/mnt/backups BACKUP_KEEP_COUNT=30 scripts/backup.sh
+```
+
+`scripts/restore.sh <backup-file>` reverses it (stop the app first -- a
+restore while it's running races live writes); it refuses to restore a
+SQLite backup over a PostgreSQL `DATABASE_URL` or vice versa, and saves a
+`.pre-restore-<timestamp>` safety copy of the SQLite file it's about to
+overwrite. For bare-metal/VM deployments,
+`deploy/drone-multi-sensor-backup.service` + `.timer` run `scripts/backup.sh`
+on a daily systemd timer -- see that file's header for install steps. For
+Docker Compose, run it from the host against the same `DRONE_DATABASE_URL`
+(or `docker compose exec app scripts/backup.sh` with `BACKUP_DIR` pointed
+at a mounted volume) on a cron schedule -- there's no built-in scheduler
+inside the `app`/`db` containers themselves.
+
 **SQLite** (the default, `data/drone_sensor.db`): a plain file, but don't
 `cp` it while the app is running -- SQLite's WAL/journal files can leave a
-naive file copy in an inconsistent state. Use SQLite's own online backup
-instead, which is safe against a live writer:
+naive file copy in an inconsistent state. `scripts/backup.sh` above uses
+Python's `sqlite3.Connection.backup()` API for this reason (not a file
+copy, and not a dependency on the separate `sqlite3` CLI package, which
+isn't installed in this app's own Docker image); the equivalent by hand,
+if you have the CLI installed:
 
 ```bash
 sqlite3 data/drone_sensor.db ".backup data/drone_sensor.backup.db"
@@ -1075,16 +1101,30 @@ can't set it to fake a position out of the signature's scope.
   historical backfill/replay of old recordings -- for that, load directly
   into the database or use a separate archival path, not `POST
   /api/detections`.
-- **Retention**: set `DRONE_DETECTION_RETENTION_DAYS` to periodically purge
-  detections older than that many days (a background task sweeps every
-  `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS`, disabled by default -- keeps
-  everything forever, the previous behavior).
+- **Retention**: the same periodic background sweep
+  (`DRONE_RETENTION_SWEEP_INTERVAL_SECONDS`, default every hour) can purge
+  three independent things, each off by default (0 days -- keeps
+  everything forever, the previous behavior) so you opt into only what you
+  need:
+  - `DRONE_DETECTION_RETENTION_DAYS` -- raw detections older than this many
+    days.
+  - `DRONE_TRACK_RETENTION_DAYS` -- finished (closed/lost) tracks whose
+    `last_seen` is older than this many days. An active track is never
+    purged regardless of age. Purging a track detaches (sets `track_id` to
+    `NULL` on) any detections and incidents that still reference it rather
+    than deleting them -- detection retention above is a separate knob, and
+    an incident's own record of what happened shouldn't disappear just
+    because the track it pointed at aged out.
+  - `DRONE_AUDIT_LOG_RETENTION_DAYS` -- audit log entries older than this
+    many days. Kept independent because audit-trail compliance windows
+    commonly outlive both raw sensor data and track history.
 - **Track history/replay**: `GET /api/tracks/{track_id}/history` returns
   every detection that fed a track, oldest first -- a full replay of where
   it actually was over time, for post-incident review. Works the same for
   a closed/lost track as an active one: detection rows aren't deleted when
   a track closes, only purged by age via `DRONE_DETECTION_RETENTION_DAYS`
-  above, so there's no separate "archive" to look in -- if retention hasn't
+  (and the track row itself only by `DRONE_TRACK_RETENTION_DAYS`) above,
+  so there's no separate "archive" to look in -- if retention hasn't
   purged it, the history is still there. The dashboard draws it as a dashed
   trail on the map when you select a track, and the Selected Track panel's
   **Playback** scrubber lets you step (or auto-play) through that history --
@@ -1107,9 +1147,20 @@ can't set it to fake a position out of the signature's scope.
   API/dashboard.
 - **Structured logging**: `DRONE_LOG_FORMAT=json` emits one JSON object per
   log line instead of human-readable text, for log aggregators.
-- **Metrics**: `GET /api/metrics` in Prometheus exposition format --
-  detections ingested (by sensor type), incidents opened (by type/severity),
-  rate-limit rejections, and live gauges for active tracks / open incidents.
+- **Metrics**: `GET /api/metrics` in Prometheus exposition format -- two
+  layers. Domain-specific: detections ingested (by sensor type), incidents
+  opened (by type/severity), rate-limit rejections, clock-skew rejections,
+  and live gauges for active tracks / open incidents. Generic HTTP-layer
+  (`_RequestMetricsMiddleware`, `app/main.py`): `drone_http_requests_total`
+  (by method/route template/status) and `drone_http_request_duration_seconds`
+  (a latency histogram, same labels minus status) for every request, plus
+  `drone_http_exceptions_total` specifically for requests that raised an
+  unhandled exception rather than returning a normal (even error) response
+  -- the signal to alert on for "something is actually broken", as opposed
+  to a route's ordinary 4xx traffic. Labeled by route *template*
+  (`/tracks/{track_id}`, not `/tracks/8412`) so this can't be turned into
+  an unbounded-cardinality metrics blowup by however many distinct ids get
+  requested, or by whatever a port scanner probes on a 404.
 - **Outbound alerting**: set `DRONE_WEBHOOK_URLS` (comma-separated) to POST
   each incident's JSON to one or more generic webhooks when it opens.
   On top of that, `app/alerting.py` adds severity-routed integrations for
@@ -1224,6 +1275,8 @@ needs to be set to run locally.
 | `DRONE_MAX_BATCH_SIZE` | `500` | Max detections per `POST /api/detections/batch` request |
 | `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS` | `300` | Reject a detection whose timestamp is further than this from the server's clock |
 | `DRONE_DETECTION_RETENTION_DAYS` | `0` (disabled) | Purge detections older than this many days |
+| `DRONE_TRACK_RETENTION_DAYS` | `0` (disabled) | Purge finished (closed/lost) tracks whose `last_seen` is older than this many days; active tracks are never purged |
+| `DRONE_AUDIT_LOG_RETENTION_DAYS` | `0` (disabled) | Purge audit log entries older than this many days |
 | `DRONE_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | How often the retention purge runs |
 | `DRONE_WEBHOOK_URLS` | *(unset)* | Comma-separated URLs POSTed with each incident's JSON when it opens |
 | `DRONE_WEBHOOK_TIMEOUT_SECONDS` | `5` | Per-webhook request timeout |

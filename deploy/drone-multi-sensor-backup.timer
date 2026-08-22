@@ -1,0 +1,17 @@
+# Daily at 03:00 local time, plus up to a 10-minute random delay
+# (RandomizedDelaySec) so a fleet of hosts backing up to the same shared
+# storage target doesn't all hit it at the exact same instant.
+# Persistent=true means a backup that was due while the host was off
+# (asleep, rebooting, ...) runs once it's back up, instead of silently
+# waiting for the next scheduled time.
+
+[Unit]
+Description=Run drone-multi-sensor-backup.service daily
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

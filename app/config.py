@@ -107,6 +107,18 @@ RETENTION_SWEEP_INTERVAL_SECONDS = float(
     os.getenv("DRONE_RETENTION_SWEEP_INTERVAL_SECONDS", "3600")
 )
 
+# Finished (non-active) tracks older than this are purged alongside
+# detections -- 0 (default) disables it. A separate knob from detection
+# retention: a deployment might want to keep track summaries much longer
+# than raw per-detection data, or vice versa.
+TRACK_RETENTION_DAYS = float(os.getenv("DRONE_TRACK_RETENTION_DAYS", "0"))
+
+# Audit log entries older than this are purged -- 0 (default) disables it,
+# keeping the audit trail forever. Deliberately independent of the other
+# two: compliance requirements for "who did what" commonly outlive both
+# raw sensor data and track history.
+AUDIT_LOG_RETENTION_DAYS = float(os.getenv("DRONE_AUDIT_LOG_RETENTION_DAYS", "0"))
+
 # Comma-separated URLs to POST a JSON payload to whenever an incident opens.
 # Empty (default) disables outbound alerting entirely.
 WEBHOOK_URLS = [u.strip() for u in os.getenv("DRONE_WEBHOOK_URLS", "").split(",") if u.strip()]

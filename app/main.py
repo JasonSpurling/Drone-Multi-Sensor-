@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
@@ -8,6 +9,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from app.api import (
     audit_log,
@@ -26,15 +30,25 @@ from app.api import keys as keys_api
 from app.api import live as live_api
 from app.api import zones as zones_api
 from app.config import (
+    AUDIT_LOG_RETENTION_DAYS,
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
     CORS_ORIGINS,
     DETECTION_RETENTION_DAYS,
     RETENTION_SWEEP_INTERVAL_SECONDS,
+    TRACK_RETENTION_DAYS,
 )
-from app.db import init_db, list_sites, list_tracks, purge_old_detections
+from app.db import (
+    init_db,
+    list_sites,
+    list_tracks,
+    purge_old_audit_log,
+    purge_old_detections,
+    purge_old_tracks,
+)
 from app.incidents import check_formation_incidents, check_shadowing_incidents
 from app.live import set_event_loop
 from app.logging_config import configure_logging
+from app.metrics import http_exceptions_total, http_request_duration_seconds, http_requests_total
 from app.models import TrackStatus
 from app.sites import ensure_default_site
 from app.util import utcnow
@@ -47,14 +61,26 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 async def _retention_sweep_loop() -> None:
-    if DETECTION_RETENTION_DAYS <= 0:
+    if DETECTION_RETENTION_DAYS <= 0 and TRACK_RETENTION_DAYS <= 0 and AUDIT_LOG_RETENTION_DAYS <= 0:
         return
     while True:
         await asyncio.sleep(RETENTION_SWEEP_INTERVAL_SECONDS)
-        cutoff = utcnow() - timedelta(days=DETECTION_RETENTION_DAYS)
-        removed = await asyncio.to_thread(purge_old_detections, cutoff)
-        if removed:
-            logger.info("Retention sweep purged %d detection(s) older than %s", removed, cutoff)
+        now = utcnow()
+        if DETECTION_RETENTION_DAYS > 0:
+            cutoff = now - timedelta(days=DETECTION_RETENTION_DAYS)
+            removed = await asyncio.to_thread(purge_old_detections, cutoff)
+            if removed:
+                logger.info("Retention sweep purged %d detection(s) older than %s", removed, cutoff)
+        if TRACK_RETENTION_DAYS > 0:
+            cutoff = now - timedelta(days=TRACK_RETENTION_DAYS)
+            removed = await asyncio.to_thread(purge_old_tracks, cutoff)
+            if removed:
+                logger.info("Retention sweep purged %d track(s) older than %s", removed, cutoff)
+        if AUDIT_LOG_RETENTION_DAYS > 0:
+            cutoff = now - timedelta(days=AUDIT_LOG_RETENTION_DAYS)
+            removed = await asyncio.to_thread(purge_old_audit_log, cutoff)
+            if removed:
+                logger.info("Retention sweep purged %d audit log entries older than %s", removed, cutoff)
 
 
 def _run_behavior_sweep() -> None:
@@ -105,7 +131,42 @@ async def lifespan(app: FastAPI):
                 await task
 
 
+class _RequestMetricsMiddleware(BaseHTTPMiddleware):
+    """Generic HTTP-layer observability (request count/latency by route,
+    and a count of requests that raised an unhandled exception) --
+    independent of the domain-specific counters in app/metrics.py, which
+    only cover the detection-ingest path. See that module's docstring on
+    http_requests_total for why this labels by route *template*, not raw
+    path.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Starlette's routing has already set request.scope["route"]
+            # by the time an endpoint's own exception propagates back up
+            # through call_next, even though the response itself never got
+            # built -- so the path template is still available here.
+            route = request.scope.get("route")
+            path = route.path if route is not None else "unmatched"
+            http_exceptions_total.labels(method=request.method, path=path).inc()
+            http_request_duration_seconds.labels(method=request.method, path=path).observe(
+                time.perf_counter() - start
+            )
+            raise
+        route = request.scope.get("route")
+        path = route.path if route is not None else "unmatched"
+        http_requests_total.labels(method=request.method, path=path, status=str(response.status_code)).inc()
+        http_request_duration_seconds.labels(method=request.method, path=path).observe(
+            time.perf_counter() - start
+        )
+        return response
+
+
 app = FastAPI(title="Drone Multi-Sensor", lifespan=lifespan)
+app.add_middleware(_RequestMetricsMiddleware)
 
 if CORS_ORIGINS:
     # Off by default (empty list -- CORSMiddleware isn't even added), so a
