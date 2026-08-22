@@ -13,7 +13,12 @@ from __future__ import annotations
 import threading
 import time
 
-from app.config import RATE_LIMIT_BURST, RATE_LIMIT_PER_SECOND
+from app.config import (
+    GLOBAL_RATE_LIMIT_BURST,
+    GLOBAL_RATE_LIMIT_PER_SECOND,
+    RATE_LIMIT_BURST,
+    RATE_LIMIT_PER_SECOND,
+)
 
 
 class _TokenBucket:
@@ -68,3 +73,8 @@ class RateLimiter:
 
 
 detection_rate_limiter = RateLimiter(RATE_LIMIT_PER_SECOND, RATE_LIMIT_BURST)
+
+# Keyed by str(site_id) rather than sensor_id -- see app/config.py's
+# GLOBAL_RATE_LIMIT_PER_SECOND docstring for why this exists alongside
+# (not instead of) the per-sensor limiter above.
+site_detection_rate_limiter = RateLimiter(GLOBAL_RATE_LIMIT_PER_SECOND, GLOBAL_RATE_LIMIT_BURST)

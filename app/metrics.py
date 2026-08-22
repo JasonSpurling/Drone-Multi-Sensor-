@@ -15,7 +15,13 @@ incidents_opened_total = Counter(
     "drone_incidents_opened_total", "Total incidents opened", ["incident_type", "severity"]
 )
 rate_limited_total = Counter(
-    "drone_rate_limited_total", "Total detections rejected by the rate limiter", ["sensor_id"]
+    "drone_rate_limited_total", "Total detections rejected by the per-sensor rate limiter", ["sensor_id"]
+)
+site_rate_limited_total = Counter(
+    "drone_site_rate_limited_total",
+    "Total detections rejected by the site-wide rate limiter (many sensors collectively over budget, "
+    "each individually within its own per-sensor limit)",
+    ["site_id"],
 )
 clock_skew_rejected_total = Counter(
     "drone_clock_skew_rejected_total",

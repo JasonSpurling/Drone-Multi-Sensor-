@@ -7,6 +7,24 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _read_secret(env_var: str, default: str = "") -> str:
+    """Reads a secret from `{env_var}_FILE` (that file's content,
+    whitespace-stripped) if set, else from the plain `{env_var}` env var,
+    else `default` -- the same `_FILE`-suffix convention Docker/Kubernetes
+    secrets use (e.g. `POSTGRES_PASSWORD_FILE` in the official postgres
+    image), safer than a raw env var: an env var is visible to any process
+    that can read `/proc/<pid>/environ` or run `docker inspect` on the
+    container, while a secret mounted from a real secret store as a file
+    can be permissioned/audited independently of the process's own
+    environment.
+    """
+    file_path = os.getenv(f"{env_var}_FILE")
+    if file_path:
+        return Path(file_path).read_text().strip()
+    return os.getenv(env_var, default)
+
+
 HOST = os.getenv("DRONE_HOST", "127.0.0.1")
 PORT = int(os.getenv("DRONE_PORT", "8000"))
 
@@ -56,6 +74,12 @@ LOG_FORMAT = os.getenv("DRONE_LOG_FORMAT", "text")
 # Roles: "ingest" (POST detections only), "viewer" (read-only GETs),
 # "operator" (viewer + acknowledge incidents), "admin" (everything,
 # including managing sensor registrations and authorized operators).
+#
+# Kept as plain module-level assignments (like everything else here, and
+# still what the test suite's `monkeypatch.setattr("app.config.API_KEY",
+# ...)` throughout patches) -- get_api_key()/get_api_keys_json() below are
+# the file-aware, rotation-capable accessors app.auth.configured_keys()
+# actually calls; these two stay as the plain-env-var fallback they read.
 API_KEY = os.getenv("DRONE_API_KEY", "")
 API_KEYS_JSON = os.getenv("DRONE_API_KEYS", "")
 
@@ -76,6 +100,19 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("DRONE_CORS_ORIGINS", "").split(","
 # limit.
 RATE_LIMIT_PER_SECOND = float(os.getenv("DRONE_RATE_LIMIT_PER_SECOND", "50"))
 RATE_LIMIT_BURST = float(os.getenv("DRONE_RATE_LIMIT_BURST", "100"))
+
+# A second, site-wide backstop on top of the per-sensor one above: many
+# distinct sensor_ids (real ones, or an attacker minting new ones to dodge
+# the per-sensor bucket -- nothing currently stops an ingest-role key from
+# claiming any sensor_id) can each stay individually within
+# RATE_LIMIT_PER_SECOND while collectively overwhelming this site's share
+# of the server. Scoped per-site (not one deployment-wide bucket) so one
+# site's load can't starve another's -- consistent with every other
+# resource in this app being site-scoped. Generous default relative to the
+# per-sensor limit -- sized for "many well-behaved sensors at once", not a
+# normal single-sensor load.
+GLOBAL_RATE_LIMIT_PER_SECOND = float(os.getenv("DRONE_GLOBAL_RATE_LIMIT_PER_SECOND", "500"))
+GLOBAL_RATE_LIMIT_BURST = float(os.getenv("DRONE_GLOBAL_RATE_LIMIT_BURST", "1000"))
 
 # POST /api/detections/batch's cost isn't linear in the number of plots: its
 # Hungarian assignment builds an n x active-tracks cost matrix and solves it
@@ -132,15 +169,15 @@ WEBHOOK_TIMEOUT_SECONDS = float(os.getenv("DRONE_WEBHOOK_TIMEOUT_SECONDS", "5"))
 # PagerDuty only pages for high+ and SMS is reserved for critical.
 ALERT_TIMEOUT_SECONDS = float(os.getenv("DRONE_ALERT_TIMEOUT_SECONDS", "5"))
 
-SLACK_WEBHOOK_URL = os.getenv("DRONE_SLACK_WEBHOOK_URL", "")
+SLACK_WEBHOOK_URL = _read_secret("DRONE_SLACK_WEBHOOK_URL")
 SLACK_MIN_SEVERITY = os.getenv("DRONE_SLACK_MIN_SEVERITY", "low")
 
-PAGERDUTY_ROUTING_KEY = os.getenv("DRONE_PAGERDUTY_ROUTING_KEY", "")
+PAGERDUTY_ROUTING_KEY = _read_secret("DRONE_PAGERDUTY_ROUTING_KEY")
 PAGERDUTY_MIN_SEVERITY = os.getenv("DRONE_PAGERDUTY_MIN_SEVERITY", "high")
 
 # SMS via Twilio's REST API.
-TWILIO_ACCOUNT_SID = os.getenv("DRONE_TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("DRONE_TWILIO_AUTH_TOKEN", "")
+TWILIO_ACCOUNT_SID = _read_secret("DRONE_TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = _read_secret("DRONE_TWILIO_AUTH_TOKEN")
 TWILIO_FROM_NUMBER = os.getenv("DRONE_TWILIO_FROM_NUMBER", "")
 SMS_TO_NUMBERS = [n.strip() for n in os.getenv("DRONE_SMS_TO_NUMBERS", "").split(",") if n.strip()]
 SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
@@ -155,7 +192,7 @@ SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
 # Slack) since an automated mitigation action has real-world consequences
 # a chat notification doesn't -- a deployment should opt into a lower
 # threshold deliberately, not by inheriting a permissive default.
-MITIGATION_WEBHOOK_URL = os.getenv("DRONE_MITIGATION_WEBHOOK_URL", "")
+MITIGATION_WEBHOOK_URL = _read_secret("DRONE_MITIGATION_WEBHOOK_URL")
 MITIGATION_MIN_SEVERITY = os.getenv("DRONE_MITIGATION_MIN_SEVERITY", "high")
 
 # Optional message-queue fan-out (app/queue_publisher.py): best-effort NATS
@@ -185,7 +222,7 @@ COT_STALE_SECONDS = float(os.getenv("DRONE_COT_STALE_SECONDS", "60"))
 # them passed explicitly instead. See that module's docstring for the
 # caveat that this client wasn't validated against a live account.
 FAA_NOTAM_CLIENT_ID = os.getenv("DRONE_FAA_NOTAM_CLIENT_ID", "")
-FAA_NOTAM_CLIENT_SECRET = os.getenv("DRONE_FAA_NOTAM_CLIENT_SECRET", "")
+FAA_NOTAM_CLIENT_SECRET = _read_secret("DRONE_FAA_NOTAM_CLIENT_SECRET")
 
 # Track association gates: a detection may only join a track if it arrives
 # within TRACK_TIME_GATE_SECONDS of the track's last update and within
@@ -256,3 +293,34 @@ BEHAVIOR_SWEEP_INTERVAL_SECONDS = float(os.getenv("DRONE_BEHAVIOR_SWEEP_INTERVAL
 # (app/fusion.py). Bounds the cost of fusing a long-lived track's history
 # on every new detection.
 FUSION_HISTORY_LIMIT = int(os.getenv("DRONE_FUSION_HISTORY_LIMIT", "50"))
+
+
+def get_api_key() -> str:
+    """The file-aware, rotation-capable accessor for the legacy single
+    admin key -- app.auth.configured_keys() calls this (not the plain
+    API_KEY attribute above) so a key rotation takes effect on the very
+    next request, no restart needed.
+
+    A plain module attribute can't do this: an earlier version of this
+    file tried making API_KEY itself dynamic via a module __getattr__
+    (PEP 562), but that broke the moment any test did
+    `monkeypatch.setattr("app.config.API_KEY", ...)` -- monkeypatch saves
+    the "old value" by calling getattr() *before* patching (which, for an
+    attribute that only existed via __getattr__, resolves and caches a
+    concrete string), then restores that concrete value via a real
+    setattr() at teardown instead of deleting it -- permanently shadowing
+    __getattr__ for every test that ran afterward in the same process.
+    Two separate names (a plain attribute tests can keep monkeypatching,
+    and this function for the dynamic/file-aware path) avoids that
+    entirely.
+
+    Falls back to the plain API_KEY attribute (so a test's monkeypatch of
+    it still works, since that's an ordinary module-global lookup at call
+    time) when DRONE_API_KEY_FILE isn't set.
+    """
+    return _read_secret("DRONE_API_KEY", default=API_KEY)
+
+
+def get_api_keys_json() -> str:
+    """Same as get_api_key(), for DRONE_API_KEYS/DRONE_API_KEYS_FILE."""
+    return _read_secret("DRONE_API_KEYS", default=API_KEYS_JSON)

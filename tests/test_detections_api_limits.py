@@ -59,3 +59,57 @@ def test_rate_limited_response_carries_retry_after_header(monkeypatch):
         assert second.status_code == 429
         assert "Retry-After" in second.headers
         assert int(second.headers["Retry-After"]) >= 1
+
+
+def test_site_wide_limit_rejects_many_sensors_each_within_their_own_limit(monkeypatch):
+    # Every sensor_id here is individually well within the (generous,
+    # untouched) per-sensor limit -- only the site-wide budget is tight
+    # enough to trip. Proves the two limiters are independent checks, not
+    # that one subsumes the other.
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setattr("app.api.detections.site_detection_rate_limiter", RateLimiter(1.0, 3.0))
+
+    with TestClient(app) as client:
+        statuses = []
+        for i in range(5):
+            body = {**DETECTION_BODY, "sensor_id": f"radar-{i}"}
+            statuses.append(client.post("/api/detections", json=body).status_code)
+
+        assert statuses[:3] == [201, 201, 201]
+        assert 429 in statuses[3:]
+
+
+def test_site_wide_limit_response_carries_retry_after_header(monkeypatch):
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setattr("app.api.detections.site_detection_rate_limiter", RateLimiter(1.0, 1.0))
+
+    with TestClient(app) as client:
+        first = client.post("/api/detections", json={**DETECTION_BODY, "sensor_id": "radar-a"})
+        assert first.status_code == 201
+
+        second = client.post("/api/detections", json={**DETECTION_BODY, "sensor_id": "radar-b"})
+        assert second.status_code == 429
+        assert "site-wide" in second.json()["detail"].lower()
+        assert "Retry-After" in second.headers
+
+
+def test_per_sensor_limit_is_still_enforced_independently_of_the_site_wide_one(monkeypatch):
+    # The site-wide limiter alone shouldn't mask the per-sensor one --
+    # a single misbehaving sensor is still caught even with plenty of
+    # site-wide budget left.
+    monkeypatch.setattr("app.config.RATE_LIMIT_PER_SECOND", 1.0)
+    monkeypatch.setattr("app.config.RATE_LIMIT_BURST", 1.0)
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setattr("app.api.detections.detection_rate_limiter", RateLimiter(1.0, 1.0))
+    monkeypatch.setattr("app.api.detections.site_detection_rate_limiter", RateLimiter(1000.0, 1000.0))
+
+    with TestClient(app) as client:
+        first = client.post("/api/detections", json=DETECTION_BODY)
+        assert first.status_code == 201
+
+        second = client.post("/api/detections", json=DETECTION_BODY)
+        assert second.status_code == 429
+        assert "radar-1" in second.json()["detail"]

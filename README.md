@@ -1109,10 +1109,19 @@ can't set it to fake a position out of the signature's scope.
 
 ## Operations
 
-- **Rate limiting**: `POST /api/detections` is limited per `sensor_id` by
-  an in-memory token bucket (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) --
-  a backstop against a malfunctioning or malicious sensor, not a normal-load
-  limit. Returns 429 when exceeded.
+- **Rate limiting**: two independent in-memory token buckets, both
+  returning 429 when exceeded. `POST /api/detections` is limited per
+  `sensor_id` (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) -- a backstop
+  against one malfunctioning or malicious sensor, not a normal-load limit.
+  On top of that, a second bucket per *site* (`DRONE_GLOBAL_RATE_LIMIT_PER_SECOND`/
+  `_BURST`, default 500/1000) catches the case the per-sensor limit
+  can't: many distinct `sensor_id`s (real ones, or an attacker minting new
+  ones specifically to dodge the per-sensor bucket -- nothing else stops
+  an `ingest`-role key from claiming any `sensor_id`), each individually
+  within its own limit, collectively overwhelming that site's share of the
+  server. Scoped per-site rather than one deployment-wide bucket so one
+  site's load can't starve another's, the same isolation guarantee every
+  other resource in this app has (see "Multi-site" below).
 - **Clock-skew sanity check**: a detection whose (client-supplied)
   `timestamp` is more than `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS`
   (default 300s) from the server's own clock, in either direction, is
@@ -1324,6 +1333,8 @@ needs to be set to run locally.
 | `DRONE_CORS_ORIGINS` | *(unset)* | Comma-separated origins allowed to make cross-origin browser requests; unset means no CORS headers at all (default, same as before this existed). Only needed for a frontend hosted on a different origin than this API |
 | `DRONE_RATE_LIMIT_PER_SECOND` | `50` | Per-sensor detection ingest rate limit |
 | `DRONE_RATE_LIMIT_BURST` | `100` | Per-sensor token-bucket burst capacity |
+| `DRONE_GLOBAL_RATE_LIMIT_PER_SECOND` | `500` | Site-wide detection ingest rate limit, on top of the per-sensor one |
+| `DRONE_GLOBAL_RATE_LIMIT_BURST` | `1000` | Site-wide token-bucket burst capacity |
 | `DRONE_MAX_BATCH_SIZE` | `500` | Max detections per `POST /api/detections/batch` request |
 | `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS` | `300` | Reject a detection whose timestamp is further than this from the server's clock |
 | `DRONE_DETECTION_RETENTION_DAYS` | `0` (disabled) | Purge detections older than this many days |
@@ -1473,8 +1484,37 @@ audit log (below) and in `GET /api/admin/keys` (admin-only) instead of a
 bare role name — useful once more than one key shares a role. There's no
 separate revocation list or database table for keys themselves: since
 keys already live in `DRONE_API_KEYS`, revoking one is just editing that
-JSON and restarting (or, for `expires_at`, doing nothing and letting the
-clock do it).
+JSON (or, for `expires_at`, doing nothing and letting the clock do it).
+
+**Secrets from files, and key rotation without a restart**: `DRONE_API_KEY`/
+`DRONE_API_KEYS` (and the alerting credentials below —
+`DRONE_SLACK_WEBHOOK_URL`, `DRONE_PAGERDUTY_ROUTING_KEY`,
+`DRONE_TWILIO_ACCOUNT_SID`/`_AUTH_TOKEN`, `DRONE_MITIGATION_WEBHOOK_URL`,
+`DRONE_FAA_NOTAM_CLIENT_SECRET`) each also accept a `_FILE`-suffixed
+variant (e.g. `DRONE_API_KEYS_FILE=/run/secrets/drone_api_keys.json`) that
+reads the secret from that file's content instead — the same convention
+Docker/Kubernetes secrets use (e.g. `POSTGRES_PASSWORD_FILE` in the
+official `postgres` image). Safer than a raw env var, which is visible to
+anything that can read `/proc/<pid>/environ` or run `docker inspect` on
+the container; a file mounted from a real secret store can be
+permissioned/audited independently of the process's own environment.
+
+For `DRONE_API_KEYS_FILE` specifically, this also means a key can be
+**rotated with no restart**: `app.auth.configured_keys()` already
+re-reads its source on every request (that's what makes editing
+`DRONE_API_KEYS` in a test take effect immediately, no reload step), so
+updating the file the app is watching takes effect on the very next
+request. `scripts/rotate_api_key.py` generates a new key and can add/remove
+one from a `DRONE_API_KEYS_FILE`-style JSON file in place:
+
+```bash
+# Add a new key to the file, keeping the old one active too (overlap window):
+python scripts/rotate_api_key.py add /run/secrets/drone_api_keys.json --role ingest --label radar-1
+# ... update whatever used the old key to the new one ...
+# Once nothing authenticates with the old key any more (check
+# GET /api/admin/keys' last_used_at for it), remove it:
+python scripts/rotate_api_key.py remove /run/secrets/drone_api_keys.json --key <old-key>
+```
 
 `GET /api/admin/keys` also reports each key's last-used time and use
 count — useful for spotting a key nobody's used in months (a candidate to

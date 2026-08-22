@@ -141,6 +141,28 @@ def test_unknown_site_name_in_key_config_fails_closed(monkeypatch):
         assert r.status_code == 500
 
 
+def test_site_wide_rate_limit_does_not_leak_across_sites(monkeypatch):
+    # The site-wide detection rate limiter (app/ratelimit.py's
+    # site_detection_rate_limiter, on top of the per-sensor one) is keyed
+    # by site_id specifically so one site's sensors collectively maxing
+    # out their budget can't starve a different site's -- a single
+    # deployment-wide bucket would fail exactly this case.
+    _configure_two_site_keys(monkeypatch)
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setattr("app.api.detections.site_detection_rate_limiter", RateLimiter(1.0, 1.0))
+
+    with TestClient(app) as client:
+        first_a = client.post("/api/detections", json=DETECTION_BODY, headers={"X-API-Key": SITE_A_KEY})
+        assert first_a.status_code == 201
+        second_a = client.post("/api/detections", json=DETECTION_BODY, headers={"X-API-Key": SITE_A_KEY})
+        assert second_a.status_code == 429
+
+        # Site B's own budget is untouched by site A exhausting its own.
+        first_b = client.post("/api/detections", json=DETECTION_BODY, headers={"X-API-Key": SITE_B_KEY})
+        assert first_b.status_code == 201
+
+
 def test_legacy_bare_role_string_key_still_resolves_to_the_default_site(monkeypatch):
     # Backward compatibility: DRONE_API_KEYS' pre-multi-site format was
     # {"key": "role"} (a bare string), not {"key": {"role": ..., "site":

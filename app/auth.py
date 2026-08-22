@@ -76,17 +76,21 @@ def configured_keys() -> dict[str, dict]:
     working, resolves to the default site, unlabeled, never expires) or
     an object {"role": ..., "site": "site-name", "label": "...",
     "expires_at": "2027-01-01T00:00:00", "revoked": true} -- every field
-    but "role" optional. Read fresh each call (cheap; a handful of
-    entries) so config changes -- including in tests -- take effect
-    immediately; there's no separate "reload config" step.
+    but "role" optional. Read fresh each call via config.get_api_key()/
+    get_api_keys_json() (cheap; a handful of entries) so config changes --
+    including in tests, and including a key rotated by updating
+    DRONE_API_KEY_FILE/DRONE_API_KEYS_FILE's target file on disk -- take
+    effect immediately; there's no separate "reload config" step.
     """
     keys: dict[str, dict] = {}
-    if config.API_KEY:
-        keys[config.API_KEY] = {
+    api_key = config.get_api_key()
+    if api_key:
+        keys[api_key] = {
             "role": ROLE_ADMIN, "site": None, "label": None, "revoked": False, "expires_at": None,
         }
-    if config.API_KEYS_JSON:
-        for key, value in json.loads(config.API_KEYS_JSON).items():
+    api_keys_json = config.get_api_keys_json()
+    if api_keys_json:
+        for key, value in json.loads(api_keys_json).items():
             if isinstance(value, str):
                 keys[key] = {
                     "role": value, "site": None, "label": None, "revoked": False, "expires_at": None,
