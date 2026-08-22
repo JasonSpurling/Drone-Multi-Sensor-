@@ -75,6 +75,20 @@
   }
   #status-line { color: var(--muted); font-size: 11px; }
 
+  .skeleton-row {
+    height: 52px; border-radius: 8px; margin-bottom: 4px;
+    background: linear-gradient(90deg, var(--panel-2) 25%, rgba(255,255,255,0.06) 50%, var(--panel-2) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-row { animation: none; background: var(--panel-2); }
+  }
+
   /* --- App shell: icon rail + floating panels over a full-bleed map. --- */
   #app-shell { position: relative; height: calc(100vh - 40px); overflow: hidden; }
   #map { position: absolute; inset: 0; background: #05070a; z-index: 0; }
@@ -305,11 +319,14 @@
   button.secondary.active { background: var(--accent); border-color: var(--accent); }
 
   #view-zones .panel-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); }
-  .zone-item { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .zone-item { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .zone-item:hover { background: var(--panel-2); }
   .zone-item .top-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .zone-item .name { font-weight: 600; }
   .zone-item .name.inactive { color: var(--muted); text-decoration: line-through; }
   .zone-item .actions { display: flex; gap: 6px; margin-top: 6px; }
+  .zone-type-tag { display: flex; align-items: center; gap: 5px; font-size: 11px; white-space: nowrap; }
+  .zone-type-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   #zone-draw-hint {
     padding: 8px 14px; background: var(--panel-2); color: var(--text);
     font-size: 12px; border-bottom: 1px solid var(--border);
@@ -410,23 +427,23 @@
   </div>
 
   <nav id="icon-rail" aria-label="Panel selector">
-    <button class="rail-btn active" data-panel="tracks" title="Tracks" aria-label="Tracks" aria-pressed="true">
+    <button class="rail-btn active" data-panel="tracks" title="Tracks (Alt+1)" aria-label="Tracks" aria-pressed="true">
       &#9635;
     </button>
-    <button class="rail-btn" data-panel="alerts" title="Alerts" aria-label="Alerts" aria-pressed="false">
+    <button class="rail-btn" data-panel="alerts" title="Alerts (Alt+2)" aria-label="Alerts" aria-pressed="false">
       &#9650;<span class="rail-badge" id="alerts-badge" aria-hidden="true"></span>
     </button>
-    <button class="rail-btn" data-panel="sensors" title="Sensor health" aria-label="Sensor health" aria-pressed="false">
+    <button class="rail-btn" data-panel="sensors" title="Sensor Health (Alt+3)" aria-label="Sensor health" aria-pressed="false">
       &#9738;
     </button>
-    <button class="rail-btn" data-panel="zones" title="Zones" aria-label="Zones" aria-pressed="false">
+    <button class="rail-btn" data-panel="zones" title="Zones (Alt+4)" aria-label="Zones" aria-pressed="false">
       &#11040;
     </button>
   </nav>
 
   <aside class="floating-panel" id="left-panel">
     <div class="panel-header">
-      <h2 id="left-panel-title">Tracks <span class="count" id="tracks-count" style="font-weight:400;color:var(--muted);"></span></h2>
+      <h2 id="left-panel-title">Tracks <span class="count" id="panel-count" style="font-weight:400;color:var(--muted);"></span></h2>
     </div>
 
     <div id="left-panel-search">
@@ -435,13 +452,29 @@
     </div>
 
     <div id="left-panel-body">
-      <div class="panel-view visible" id="view-tracks"><div id="tracks-list"></div></div>
+      <div class="panel-view visible" id="view-tracks">
+        <!-- Static markup, not JS-rendered -- this is what's on screen for
+             the brief window before the first refresh() resolves, so it
+             has to exist before any script has run. renderTracks() always
+             replaces #tracks-list's entire innerHTML on its first real
+             call, so this needs no JS to clear it back out either. -->
+        <div id="tracks-list">
+          <!-- aria-hidden on this inner wrapper, not #tracks-list itself
+               -- renderTracks() replaces #tracks-list's innerHTML wholesale
+               on its first real call, taking this (and the aria-hidden
+               with it) out entirely, so real track cards are never stuck
+               inheriting it. -->
+          <div aria-hidden="true">
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+            <div class="skeleton-row"></div>
+          </div>
+        </div>
+      </div>
       <div class="panel-view" id="view-alerts">
-        <div class="group-header" style="color:var(--text);">Active alerts <span class="n" id="alerts-count"></span></div>
         <div id="alerts-list"></div>
       </div>
       <div class="panel-view" id="view-sensors">
-        <div class="group-header" style="color:var(--text);">Sensor health</div>
         <div id="sensors-table"></div>
       </div>
       <div class="panel-view" id="view-zones">
@@ -651,9 +684,30 @@ function showPanel(name) {
     view.classList.toggle("visible", view.id === `view-${name}`);
   });
   document.getElementById("left-panel-search").style.display = name === "tracks" ? "block" : "none";
-  const titles = { tracks: "Tracks", alerts: "Alerts", sensors: "Sensor health", zones: "Zones" };
+  const titles = { tracks: "Tracks", alerts: "Alerts", sensors: "Sensor Health", zones: "Zones" };
   document.getElementById("left-panel-title").firstChild.textContent = titles[name] + " ";
-  document.getElementById("tracks-count").style.display = name === "tracks" ? "inline" : "none";
+  updatePanelHeaderCount();
+}
+
+// The one place that decides what #panel-count shows -- previously each
+// panel rolled its own count display (a differently-styled, partly
+// redundant "ACTIVE ALERTS"/"SENSOR HEALTH" sub-header, in one case
+// duplicating the panel's own <h2> title outright), inconsistent with
+// how the Tracks panel already put its count in the header itself. One
+// function, one shared #panel-count element, always reflecting whichever
+// panel is currently active.
+function updatePanelHeaderCount() {
+  const el = document.getElementById("panel-count");
+  if (state.activePanel === "tracks") {
+    el.textContent = `${visibleTracks().length}/${state.tracks.length}`;
+  } else if (state.activePanel === "alerts") {
+    const active = state.incidents.filter((i) => i.status !== "resolved").length;
+    el.textContent = active ? String(active) : "";
+  } else if (state.activePanel === "sensors") {
+    el.textContent = state.sensors.length ? String(state.sensors.length) : "";
+  } else if (state.activePanel === "zones") {
+    el.textContent = state.allZones.length ? String(state.allZones.length) : "";
+  }
 }
 
 // Clicking the already-active rail icon collapses its panel instead of
@@ -909,7 +963,7 @@ function classIcon(classification) {
 function renderTracks() {
   const el = document.getElementById("tracks-list");
   const tracks = visibleTracks();
-  document.getElementById("tracks-count").textContent = `${tracks.length}/${state.tracks.length}`;
+  updatePanelHeaderCount();
   if (tracks.length === 0) {
     // Two different empty states: nothing has ever come in yet (a fresh
     // deployment or a demo with no sensor/simulator running), vs. real
@@ -971,7 +1025,7 @@ function renderTracks() {
 function renderAlerts() {
   const el = document.getElementById("alerts-list");
   const active = state.incidents.filter((i) => i.status !== "resolved");
-  document.getElementById("alerts-count").textContent = active.length ? String(active.length) : "";
+  updatePanelHeaderCount();
   const badgeEl = document.getElementById("alerts-badge");
   const alertsRailBtn = document.querySelector('.rail-btn[data-panel="alerts"]');
   if (active.length > 0) {
@@ -1135,6 +1189,10 @@ let leafletMap = null;
 let zoneLayer = null;
 let trackLayer = null;
 let zoneDrawLayer = null;
+// zone id -> its Leaflet polygon, so hovering a zone in the management
+// list (see renderZones()) can highlight the matching shape on the map
+// with a single setStyle() call instead of a full re-render.
+const zonePolygonLayers = new Map();
 let mapFitted = false;
 
 function initMap() {
@@ -1167,13 +1225,22 @@ function initMap() {
   );
 
   darkLayer.addTo(leafletMap);
-  L.control
+  const layersControl = L.control
     .layers(
       { Dark: darkLayer, Road: roadLayer, Satellite: satelliteLayer },
       { "Satellite labels": satelliteLabels },
       { position: "topright", collapsed: true }
     )
     .addTo(leafletMap);
+  // Sat alone in the top-right corner with no label of its own (just a
+  // stack-of-squares glyph), unlike the Trails/Vectors/Uncertainty
+  // toggles it's conceptually related to -- a native title tooltip is
+  // the minimal fix that doesn't require moving it next to those (which
+  // would mean fighting Leaflet's own control positioning system for a
+  // control this library renders internally, not a plain DOM element
+  // this app authors directly).
+  const layersToggle = layersControl.getContainer().querySelector(".leaflet-control-layers-toggle");
+  if (layersToggle) layersToggle.title = "Map layers";
 
   // The labels overlay only makes sense on top of Satellite -- drop it
   // automatically when switching to a different base layer, since Leaflet
@@ -1233,19 +1300,18 @@ function renderMap() {
   zoneLayer.clearLayers();
   trackLayer.clearLayers();
 
+  zonePolygonLayers.clear();
   state.zones.forEach((z) => {
-    // Amber, deliberately distinct from any classification color -- a
-    // zone outline reusing the drone-classification red made a restricted
-    // zone visually indistinguishable from an actual drone marker/
-    // uncertainty ring at a glance, especially once the map got bigger.
-    L.polygon(z.polygon, {
-      color: "#f59e0b",
+    const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
+    const layer = L.polygon(z.polygon, {
+      color,
       weight: 1.5,
-      fillColor: "#f59e0b",
+      fillColor: color,
       fillOpacity: 0.08,
     })
-      .bindPopup(escapeHtml(z.name))
+      .bindPopup(`${escapeHtml(z.name)} <span style="color:var(--muted);">(${escapeHtml(z.zone_type)})</span>`)
       .addTo(zoneLayer);
+    zonePolygonLayers.set(z.id, layer);
   });
 
   if (state.showTrail && state.trail.length > 1) {
@@ -1398,6 +1464,7 @@ function recordBreadcrumbs(tracks) {
 
 function renderSensors() {
   const el = document.getElementById("sensors-table");
+  updatePanelHeaderCount();
   if (state.sensors.length === 0) {
     el.innerHTML = `<div class="empty-guidance">
       <div class="empty-title">No sensors connected</div>
@@ -1431,6 +1498,7 @@ function renderSensors() {
 
 function renderZones() {
   const el = document.getElementById("zones-list");
+  updatePanelHeaderCount();
   if (state.allZones.length === 0) {
     el.innerHTML = '<div class="empty">No zones defined yet. Click "+ New zone" above, then click points on the map to draw one.</div>';
     return;
@@ -1438,17 +1506,22 @@ function renderZones() {
   el.innerHTML = state.allZones
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((z) => `
-      <div class="zone-item">
+    .map((z) => {
+      const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
+      return `
+      <div class="zone-item" data-zone-id="${z.id}">
         <div class="top-row">
           <span class="name${z.active ? "" : " inactive"}">${escapeHtml(z.name)}</span>
-          <span style="color:var(--muted); font-size:11px;">${escapeHtml(z.zone_type)}</span>
+          <span class="zone-type-tag" style="color:${color};">
+            <span class="zone-type-dot" style="background:${color};" aria-hidden="true"></span>${escapeHtml(z.zone_type)}
+          </span>
         </div>
         <div class="actions">
           <button class="secondary" data-zone-edit="${z.id}">Edit</button>
           <button class="secondary" data-zone-toggle="${z.id}">${z.active ? "Deactivate" : "Activate"}</button>
         </div>
-      </div>`)
+      </div>`;
+    })
     .join("");
   el.querySelectorAll("[data-zone-edit]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1459,6 +1532,33 @@ function renderZones() {
   el.querySelectorAll("[data-zone-toggle]").forEach((btn) => {
     btn.addEventListener("click", () => toggleZoneActive(Number(btn.dataset.zoneToggle)));
   });
+  // Hovering a zone in this list highlights the matching shape on the
+  // map (if it's active -- an inactive zone isn't drawn there at all,
+  // see renderMap()). Clicking the row (not its buttons) pans/zooms to
+  // it, the same "click to jump there" affordance track cards already
+  // have.
+  el.querySelectorAll(".zone-item").forEach((row) => {
+    const zoneId = Number(row.dataset.zoneId);
+    row.addEventListener("mouseenter", () => highlightZoneOnMap(zoneId, true));
+    row.addEventListener("mouseleave", () => highlightZoneOnMap(zoneId, false));
+    row.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      flyToZone(zoneId);
+    });
+  });
+}
+
+function highlightZoneOnMap(zoneId, on) {
+  const layer = zonePolygonLayers.get(zoneId);
+  if (!layer) return; // an inactive zone isn't drawn on the map at all
+  layer.setStyle(on ? { weight: 4, fillOpacity: 0.3 } : { weight: 1.5, fillOpacity: 0.08 });
+  if (on) layer.bringToFront();
+}
+
+function flyToZone(zoneId) {
+  const layer = zonePolygonLayers.get(zoneId);
+  if (!layer || !leafletMap) return;
+  leafletMap.flyToBounds(layer.getBounds(), { padding: [40, 40], duration: 0.6 });
 }
 
 async function toggleZoneActive(zoneId) {
@@ -1535,6 +1635,16 @@ function cancelZoneDraw() {
 }
 
 const ZONE_TYPES = ["restricted", "no_fly", "monitoring", "safe"];
+// Distinct per zone_type so a restricted area and a merely-monitored one
+// don't read as the same amber outline at a glance -- deliberately none
+// of these reuse a classification color (see CLASS_COLOR_HEX) so a zone
+// boundary is never confusable with an actual drone/aircraft marker.
+const ZONE_TYPE_COLOR = {
+  restricted: "#f97316", // orange
+  no_fly: "#ef4444", // red -- the most severe category
+  monitoring: "#f59e0b", // amber -- "watch," not prohibited
+  safe: "#22c55e", // green
+};
 
 function showZoneForm(existingZone) {
   const form = document.getElementById("zone-form");
@@ -1688,6 +1798,20 @@ document.addEventListener("keydown", (e) => {
   if (n >= 1 && n <= 9) {
     const tracks = visibleTracks().slice().sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
     if (tracks[n - 1]) selectTrack(tracks[n - 1].id);
+  }
+});
+
+// Alt+1..4 to switch panels -- plain 1-9 (above) already means "select
+// the Nth visible track," so this needs a modifier of its own rather
+// than colliding with that. See each rail button's title attribute for
+// the same hint a mouse user gets on hover.
+const PANEL_SHORTCUT_KEYS = { "1": "tracks", "2": "alerts", "3": "sensors", "4": "zones" };
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || !e.altKey || e.ctrlKey || e.metaKey) return;
+  const panel = PANEL_SHORTCUT_KEYS[e.key];
+  if (panel) {
+    e.preventDefault(); // Alt+digit is a menu-bar accelerator in some browsers
+    toggleOrShowPanel(panel);
   }
 });
 
