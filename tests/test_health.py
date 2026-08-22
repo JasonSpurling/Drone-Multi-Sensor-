@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
+from app import __version__
 from app.main import app
 
 
@@ -8,7 +9,7 @@ def test_health_reports_ok_when_database_is_reachable(isolated_db):
     with TestClient(app) as client:
         r = client.get("/api/health")
         assert r.status_code == 200
-        assert r.json() == {"status": "ok", "database": "ok"}
+        assert r.json() == {"status": "ok", "database": "ok", "version": __version__}
 
 
 def test_health_reports_503_when_database_is_unreachable(isolated_db, monkeypatch):
@@ -25,3 +26,4 @@ def test_health_reports_503_when_database_is_unreachable(isolated_db, monkeypatc
         r = client.get("/api/health")
         assert r.status_code == 503
         assert r.json()["status"] == "unhealthy"
+        assert r.json()["version"] == __version__

@@ -1277,6 +1277,22 @@ Reproduce these (or measure your own deployment's real numbers, which will
 differ by hardware): create a fresh scratch database, start the app against
 it, then run both `--mode single` and `--mode batch` above.
 
+## Versioning
+
+`app.__version__` (`app/__init__.py`) is the single source of truth for
+the running version -- surfaced in `GET /api/health`'s `version` field and
+the OpenAPI schema (`/docs`, `/openapi.json`), so "what's actually
+deployed" is answerable by asking the running process rather than
+comparing it against git history. `CHANGELOG.md` follows [Keep a
+Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic
+Versioning](https://semver.org/); when a change is worth calling out to
+someone upgrading a running deployment, add it under that file's
+`[Unreleased]` heading. Cutting a release means bumping `__version__`,
+retitling `[Unreleased]` with the version and date, and starting a fresh
+`[Unreleased]` section above it -- no separate release-automation tooling,
+by design: this is a self-hosted service deployed from a git checkout or
+a Docker image tag, not a package published anywhere that would need one.
+
 ## Configuration
 
 All settings are environment variables with working defaults — nothing

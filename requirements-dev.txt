@@ -5,6 +5,12 @@ httpx==0.28.1
 ruff==0.16.3
 mypy==2.3.1
 bandit==1.9.4
+# Only for tests/test_load_test_script.py, which imports scripts/
+# load_test.py (a load-generation script, not part of the app itself) to
+# unit-test its error-classification logic -- that script needs `requests`
+# to make HTTP calls when actually run, same version pinned in
+# requirements-e2e.txt.
+requests==2.33.1
 # Only for tests/test_alembic_migrations.py's schema-drift guard (compares
 # app/schema.py against what init_db() actually creates) -- not needed to
 # run the app itself; see requirements-migrations.txt/migrations/README.md

@@ -61,9 +61,20 @@ jobs:
       # purpose -- enough concurrency to exercise app.tracking's
       # _association_lock, short enough to stay a fast CI job.
       - run: |
+          set -e
+          # data/ isn't in git (SQLite's default DRONE_DATABASE_URL points
+          # there, but an empty directory has nothing to check in) -- a
+          # fresh checkout doesn't have it, and SQLite won't create a
+          # missing parent directory for you, so without this the app
+          # fails at startup with "unable to open database file".
+          mkdir -p data
           python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:8000/api/health && break
+            if [ "$i" -eq 30 ]; then
+              echo "App never became healthy" >&2
+              exit 1
+            fi
             sleep 1
           done
           python scripts/load_test.py --url http://127.0.0.1:8000 \

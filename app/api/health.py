@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Response
 from sqlalchemy import text
 
+from app import __version__
 from app import db as db_module
 
 logger = logging.getLogger(__name__)
@@ -35,5 +36,5 @@ def health(response: Response) -> dict:
         # driver error defeats its own purpose.
         logger.warning("Health check failed: database unreachable: %s", exc)
         response.status_code = 503
-        return {"status": "unhealthy", "database": "unreachable"}
-    return {"status": "ok", "database": "ok"}
+        return {"status": "unhealthy", "database": "unreachable", "version": __version__}
+    return {"status": "ok", "database": "ok", "version": __version__}

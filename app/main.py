@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app import __version__
 from app.api import (
     audit_log,
     authorized_operators,
@@ -204,7 +205,7 @@ class _RequestMetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app = FastAPI(title="Drone Multi-Sensor", lifespan=lifespan)
+app = FastAPI(title="Drone Multi-Sensor", version=__version__, lifespan=lifespan)
 app.add_middleware(_RequestMetricsMiddleware)
 
 if CORS_ORIGINS:
