@@ -179,7 +179,11 @@ docker run -p 8000:8000 -v drone-data:/app/data drone-multi-sensor
 The image binds to `0.0.0.0:8000` inside the container (so `docker run -p`
 can reach it) and stores the SQLite database in `/app/data` — the `-v` above
 keeps it across container restarts. Set `-e DRONE_API_KEY=<key>` if the
-container's port will be reachable beyond your own machine. The image
+container's port will be reachable beyond your own machine -- if you don't,
+a startup log line warns loudly (`DRONE_HOST=0.0.0.0` with no key
+configured is treated as a mistake, not a supported deployment shape) and
+the app still starts, since refusing to start would break plain local
+development, where that combination is fine. The image
 installs `requirements-postgres.txt` (not just `requirements.txt`), runs as
 an unprivileged user, and declares a `HEALTHCHECK` against `/api/health`
 (below) -- Docker/Kubernetes can use it to detect and restart/route around
@@ -220,6 +224,18 @@ reachable (a real `SELECT 1`, not just "the process is up"), returning 503
 if it isn't -- point a load balancer's or orchestrator's health check at
 this, not just a raw TCP/process check, or a container can look healthy
 while every real request would fail.
+
+**Graceful shutdown**: in-flight HTTP requests are drained by uvicorn
+itself on SIGTERM before the process exits -- nothing app-specific needed
+there. WebSocket connections (`GET /ws/live`) are different: they have no
+natural end the way a request does, so a client that never disconnects on
+its own would otherwise leave uvicorn waiting indefinitely for it during a
+graceful stop, getting cut off by Docker/systemd's own SIGKILL timeout
+instead of closing cleanly. `app.live.close_all()` (called from the
+app's own shutdown handler, before the retention/behavior background
+tasks are cancelled) explicitly signals every connected client to close
+the moment shutdown starts, so this doesn't depend on the client's own
+behavior.
 
 None of this replaces the "what's missing to run this on real hardware"
 gaps (sensor/RF front-end integration, TLS being opt-in rather than
@@ -1208,6 +1224,17 @@ reproducible way to generate them:
 python scripts/load_test.py --url http://127.0.0.1:8000 --mode single --sensors 20 --duration 15
 python scripts/load_test.py --url http://127.0.0.1:8000 --mode batch --batch-size 30 --requests 100
 ```
+
+**CI's `load-smoke` job** runs this script too, but for a different reason
+than the benchmarking below: not to measure throughput (meaningless as a
+CI gate for the reason above), but to catch a bug that only shows up under
+concurrent load -- a deadlock, an unhandled exception, a race in detection
+association -- that the single-request-at-a-time pytest suite can't
+exercise. `--fail-on-errors` gates on *hard* errors (5xx responses or a
+request that never completed) only, not on an ordinary 429 -- the rate
+limiter correctly rejecting excess load under this script's intentionally
+saturating traffic is expected, not a regression, and would otherwise make
+this job flaky for a reason that has nothing to do with correctness.
 
 **Last recorded results** (this container's CPU, single instance, rate
 limiting raised via `DRONE_RATE_LIMIT_PER_SECOND`/`_BURST` to measure the

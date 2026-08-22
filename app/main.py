@@ -46,7 +46,7 @@ from app.db import (
     purge_old_tracks,
 )
 from app.incidents import check_formation_incidents, check_shadowing_incidents
-from app.live import set_event_loop
+from app.live import close_all, set_event_loop
 from app.logging_config import configure_logging
 from app.metrics import http_exceptions_total, http_request_duration_seconds, http_requests_total
 from app.models import TrackStatus
@@ -110,8 +110,42 @@ async def _behavior_sweep_loop() -> None:
             logger.exception("Behavior sweep failed")
 
 
+def _warn_if_insecure_startup() -> None:
+    """This app never terminates TLS itself -- it's always meant to sit
+    behind a reverse proxy (Caddy/nginx/a cloud load balancer) for
+    anything beyond a private network, exactly like docker-compose.yml's
+    commented-out Caddy service and the README's Deployment section
+    describe. That's a legitimate, common, and correct architecture, so
+    this can't (and shouldn't) refuse to start over it -- but the specific
+    combination of "bound to a non-loopback interface" (DRONE_HOST, so
+    something outside this machine could reach it) *and* "no API keys
+    configured" (so it accepts every request from whoever does) has no
+    legitimate reason to occur outside of local development, and is the
+    exact state a deployment ends up in if someone skips reading the
+    Deployment section. Read live from app.config (not imported directly
+    at module load) so this reflects whatever a test or the real
+    environment actually set, not whatever was true at import time.
+    """
+    import app.config as config
+
+    if config.HOST in ("127.0.0.1", "localhost", "::1"):
+        return
+    if config.API_KEY or config.API_KEYS_JSON:
+        return
+    logger.warning(
+        "Starting with DRONE_HOST=%s (reachable beyond this machine) and no "
+        "DRONE_API_KEY/DRONE_API_KEYS configured -- every request will be "
+        "accepted from anyone who can reach this host, over plain HTTP (this "
+        "app never terminates TLS itself). Set DRONE_API_KEYS and put a "
+        "reverse proxy with HTTPS in front before exposing this beyond a "
+        "trusted private network -- see the README's Deployment section.",
+        config.HOST,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _warn_if_insecure_startup()
     init_db()
     load_zones_from_file(site_id=ensure_default_site())
     # app.live.publish() is called from sync endpoint code (a worker
@@ -124,6 +158,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Signals every connected dashboard's WebSocket to close promptly
+        # instead of a graceful shutdown (SIGTERM) waiting indefinitely
+        # for each client to disconnect on its own -- see close_all()'s
+        # docstring.
+        close_all()
         for task in (retention_task, behavior_task):
             task.cancel()
         for task in (retention_task, behavior_task):

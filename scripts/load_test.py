@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import statistics
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -53,18 +54,29 @@ def _detection_payload(sensor_id: str, lat: float, lon: float, confidence: float
 
 
 class _Result:
-    __slots__ = ("errors", "latencies_s", "lock")
+    __slots__ = ("errors", "hard_errors", "latencies_s", "lock")
 
     def __init__(self) -> None:
         self.latencies_s: list[float] = []
         self.errors = 0
+        # A subset of errors: server-side failures (5xx, or the request
+        # never completed at all) -- not a 4xx like 429 (Too Many
+        # Requests), which is the rate limiter correctly doing its job
+        # under intentionally saturating load, not a bug. --fail-on-errors
+        # (see main()) gates on this, not `errors`, for exactly that
+        # reason: a load-smoke CI job should catch a deadlock or an
+        # unhandled exception under concurrency, not flag the rate limiter
+        # working as designed.
+        self.hard_errors = 0
         self.lock = threading.Lock()
 
-    def record(self, latency_s: float, ok: bool) -> None:
+    def record(self, latency_s: float, ok: bool, hard_error: bool = False) -> None:
         with self.lock:
             self.latencies_s.append(latency_s)
             if not ok:
                 self.errors += 1
+            if hard_error:
+                self.hard_errors += 1
 
 
 def _report(label: str, result: _Result, wall_time_s: float) -> None:
@@ -84,7 +96,7 @@ def _report(label: str, result: _Result, wall_time_s: float) -> None:
     print(f"latency mean/max:    {statistics.mean(sorted_lat)*1000:.1f}ms / {sorted_lat[-1]*1000:.1f}ms")
 
 
-def run_single(base_url: str, num_sensors: int, duration_s: float, api_key: str = "") -> None:
+def run_single(base_url: str, num_sensors: int, duration_s: float, api_key: str = "") -> int:
     """Each of num_sensors threads posts single detections back-to-back
     (no think time) for duration_s -- an intentionally saturating load to
     find the ceiling, not a realistic sensor's real-world duty cycle.
@@ -105,9 +117,11 @@ def run_single(base_url: str, num_sensors: int, duration_s: float, api_key: str 
             try:
                 r = session.post(f"{base_url}/api/detections", json=payload, timeout=10)
                 ok = r.status_code == 201
+                hard_error = r.status_code >= 500
             except requests.RequestException:
                 ok = False
-            result.record(time.monotonic() - start, ok)
+                hard_error = True
+            result.record(time.monotonic() - start, ok, hard_error)
 
     start_wall = time.monotonic()
     with ThreadPoolExecutor(max_workers=num_sensors) as pool:
@@ -117,9 +131,10 @@ def run_single(base_url: str, num_sensors: int, duration_s: float, api_key: str 
     wall_time_s = time.monotonic() - start_wall
 
     _report(f"single-detection ingest ({num_sensors} concurrent sensors, {duration_s}s)", result, wall_time_s)
+    return result.hard_errors
 
 
-def run_batch(base_url: str, batch_size: int, num_requests: int, api_key: str = "") -> None:
+def run_batch(base_url: str, batch_size: int, num_requests: int, api_key: str = "") -> int:
     """Repeated POST /api/detections/batch, each with batch_size
     simultaneous plots (one radar sweep's shape) -- sequential, not
     concurrent, since a single sensor's own sweeps arrive one at a time.
@@ -141,15 +156,18 @@ def run_batch(base_url: str, batch_size: int, num_requests: int, api_key: str = 
         try:
             r = session.post(f"{base_url}/api/detections/batch", json=payload, timeout=30)
             ok = r.status_code == 201
+            hard_error = r.status_code >= 500
         except requests.RequestException:
             ok = False
-        result.record(time.monotonic() - start, ok)
+            hard_error = True
+        result.record(time.monotonic() - start, ok, hard_error)
     wall_time_s = time.monotonic() - start_wall
 
     _report(f"batch ingest ({batch_size} plots/request x {num_requests} requests)", result, wall_time_s)
     if result.latencies_s:
         plots_per_s = (batch_size * num_requests) / wall_time_s
         print(f"plots/s (batch_size * requests / wall time): {plots_per_s:.1f}")
+    return result.hard_errors
 
 
 def main() -> None:
@@ -161,12 +179,32 @@ def main() -> None:
     parser.add_argument("--duration", type=float, default=15.0, help="[single] seconds to sustain load")
     parser.add_argument("--batch-size", type=int, default=30, help="[batch] plots per batch request")
     parser.add_argument("--requests", type=int, default=200, help="[batch] number of batch requests")
+    parser.add_argument(
+        "--fail-on-errors",
+        action="store_true",
+        help=(
+            "Exit 1 if any request errored (non-201 or a connection failure). Off by "
+            "default -- this script's normal use is generating throughput/latency "
+            "numbers to read, where an isolated error or two isn't a run failure. "
+            "Set for CI's load-smoke job (see .github/workflows/tests.yml), where the "
+            "point isn't the throughput number (meaningless on a shared runner -- see "
+            "this file's module docstring) but whether concurrent load trips a real "
+            "bug (a deadlock, an unhandled exception, a race in detection "
+            "association) that only shows up under concurrency, not in the single-"
+            "request-at-a-time pytest suite."
+        ),
+    )
     args = parser.parse_args()
 
+    total_hard_errors = 0
     if args.mode in ("single", "both"):
-        run_single(args.url, args.sensors, args.duration, args.api_key)
+        total_hard_errors += run_single(args.url, args.sensors, args.duration, args.api_key)
     if args.mode in ("batch", "both"):
-        run_batch(args.url, args.batch_size, args.requests, args.api_key)
+        total_hard_errors += run_batch(args.url, args.batch_size, args.requests, args.api_key)
+
+    if args.fail_on_errors and total_hard_errors > 0:
+        print(f"\n{total_hard_errors} request(s) hard-errored -- failing (--fail-on-errors set).")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

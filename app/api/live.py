@@ -46,6 +46,10 @@ async def live_updates(websocket: WebSocket, api_key: str | None = None) -> None
     try:
         while True:
             payload = await queue.get()
+            if payload is None:
+                # app.live.close_all()'s shutdown sentinel -- not a real
+                # event, just this connection's turn to end.
+                break
             await websocket.send_text(payload)
     except WebSocketDisconnect:
         pass

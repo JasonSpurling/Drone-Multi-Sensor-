@@ -44,6 +44,11 @@ _subscribers: dict[int, set[asyncio.Queue]] = {}
 # anyway, never lost data.
 _MAX_QUEUED_PER_CLIENT = 100
 
+# Every real event is a JSON string (see publish() below) -- None can't
+# collide with one, so app/api/live.py's handler can tell "a real event"
+# and "time to close" apart just by checking is None.
+_SHUTDOWN_SENTINEL = None
+
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     """Called once from app.main's lifespan startup."""
@@ -66,6 +71,27 @@ def unsubscribe(site_id: int, queue: asyncio.Queue) -> None:
         _subscribers.pop(site_id, None)
 
 
+def close_all() -> None:
+    """Signals every connected WebSocket client to close -- called once
+    from app.main's lifespan shutdown. A WebSocket has no natural end the
+    way an HTTP request does (app/api/live.py's handler just blocks
+    forever on queue.get() until the client disconnects or this fires),
+    so without this a graceful shutdown (SIGTERM) would sit waiting
+    indefinitely for every still-connected client to hang up on its own
+    before uvicorn's stop actually completes -- in practice getting cut
+    off by Docker/systemd's own SIGKILL timeout instead of closing
+    cleanly. Uses the same sentinel-through-the-queue mechanism as a real
+    event (see _put_dropping_oldest) so it can't race a message that's
+    already queued ahead of it.
+    """
+    if _loop is None:
+        return
+    for queues in list(_subscribers.values()):
+        for queue in list(queues):
+            with contextlib.suppress(RuntimeError):  # event loop already closed
+                _loop.call_soon_threadsafe(_put_dropping_oldest, queue, _SHUTDOWN_SENTINEL)
+
+
 def publish(site_id: int, event: dict) -> None:
     """Best-effort, thread-safe, and never raises into the caller --
     detection ingest and the behavior sweep must succeed regardless of
@@ -86,7 +112,7 @@ def publish(site_id: int, event: dict) -> None:
             logger.warning("Live-update publish failed: %s", exc)
 
 
-def _put_dropping_oldest(queue: asyncio.Queue, payload: str) -> None:
+def _put_dropping_oldest(queue: asyncio.Queue, payload: str | None) -> None:
     if queue.full():
         with contextlib.suppress(asyncio.QueueEmpty):
             queue.get_nowait()

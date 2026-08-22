@@ -43,6 +43,33 @@ jobs:
       - run: playwright install --with-deps chromium
       - run: python -m pytest tests_e2e/ -v
 
+  load-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r requirements-e2e.txt
+      # Not a throughput/perf-regression gate -- GitHub-hosted runners'
+      # CPU/noisy-neighbor variance makes an absolute numeric threshold
+      # here meaningless (see scripts/load_test.py's module docstring and
+      # --fail-on-errors' help text). What this actually catches: a
+      # concurrency bug (a deadlock, an unhandled exception, a race in
+      # detection association) that only shows up under concurrent load,
+      # not in the single-request-at-a-time pytest suite. Modest scale on
+      # purpose -- enough concurrency to exercise app.tracking's
+      # _association_lock, short enough to stay a fast CI job.
+      - run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+          python scripts/load_test.py --url http://127.0.0.1:8000 \
+            --mode both --sensors 10 --duration 5 --batch-size 10 --requests 20 \
+            --fail-on-errors
+
   security:
     runs-on: ubuntu-latest
     steps:
