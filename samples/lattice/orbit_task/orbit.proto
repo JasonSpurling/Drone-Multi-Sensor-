@@ -1,0 +1,34 @@
+// Custom task type for the "Task an asset" sample (see this directory's
+// README.md). Registered in Lattice's Schema Registry so the Lattice
+// UI/COP can recognize, display, and let an operator construct this task
+// type against a real Lattice environment -- see
+// https://developer.anduril.com/guides/tasks/overview for the
+// registration step itself (a live-environment action, not something
+// this repo's Python code does).
+//
+// The Python client code in this sample (spec.py) does NOT need this file
+// compiled via protoc: Lattice's REST/JSON transport represents
+// google.protobuf.Any as a plain {"@type": ..., ...fields} JSON object
+// (protobuf's standard JSON mapping for Any), which the installed SDK's
+// GoogleProtobufAny model accepts directly as extra fields alongside
+// `type` -- see spec.py's build_orbit_specification(). This file exists
+// to document the schema precisely (field names/types/numbers) for
+// whoever registers it with the real Schema Registry, and as the
+// eventual source of truth if this sample is extended with a compiled
+// gRPC client instead of the REST-transport SDK.
+
+syntax = "proto3";
+
+package anduril.tasksample.v1;
+
+// Circle around a fixed point at a given radius/altitude for a duration --
+// a "loiter and watch" task, the kind of thing you'd send an asset to do
+// after a sensor point-of-interest is published nearby (see
+// publish_poi.py and auto_tasker.py in this directory).
+message Orbit {
+  double latitude_degrees = 1;
+  double longitude_degrees = 2;
+  double radius_meters = 3;
+  double altitude_meters = 4;
+  double duration_seconds = 5;
+}

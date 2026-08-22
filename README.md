@@ -729,7 +729,16 @@ one. Bolting on a fake "Orbit" call with no real asset behind it would be
 scope creep dressed up as a feature, not a real integration -- if you need
 Lattice-driven tasking, that logic belongs in whatever system actually
 operates your assets, consuming this tracker's published Entities as one of
-its own inputs.
+its own inputs. `samples/lattice/orbit_task/` demonstrates that pattern
+as an explicitly-standalone, explicitly-a-simulation sample instead --
+see `samples/lattice/README.md`.
+
+**Other Lattice sample apps** (`samples/lattice/`, matching [Anduril's own
+sample apps](https://developer.anduril.com)): an Objects API CLI, an
+entity visualizer (a map of everything in a Lattice environment, not just
+this tracker's own tracks), and a maritime AIS-to-Lattice publisher --
+each independent of this repo's own tracking pipeline. See that
+directory's own README for details.
 
 ## Acoustic direction finding
 

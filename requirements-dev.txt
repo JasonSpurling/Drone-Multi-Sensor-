@@ -16,3 +16,11 @@ requests==2.33.1
 # run the app itself; see requirements-migrations.txt/migrations/README.md
 # for actually authoring/running a migration.
 alembic==1.19.1
+# Only for the samples/lattice/ tests (test_lattice_objects_cli.py,
+# test_orbit_asset.py, test_auto_tasker.py) -- pytest.importorskip("anduril")
+# lets them degrade to a skip without this, but installing it here means CI
+# actually exercises real SDK model construction/validation (which caught
+# two real mismatches between this sample code and the SDK's actual field
+# names/types during development) instead of silently never running them.
+# Same version pinned in requirements-lattice.txt.
+anduril-lattice-sdk==4.27.0

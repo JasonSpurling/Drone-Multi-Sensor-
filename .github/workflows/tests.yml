@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
-      - run: ruff check app/ tests/ tests_e2e/ migrations/
+      - run: ruff check app/ tests/ tests_e2e/ migrations/ scripts/ samples/
       # --ignore-missing-imports: several adapters import optional,
       # hardware/protocol-specific packages (numpy, cryptography excepted --
       # those are core deps) not installed here by design (see
@@ -95,4 +95,4 @@ jobs:
       # which only checks third-party CVEs). Findings config is in
       # pyproject.toml's [tool.bandit] -- every skipped check ID there is
       # individually justified against this codebase's actual usage.
-      - run: bandit -r app/ -c pyproject.toml
+      - run: bandit -r app/ scripts/ samples/ -c pyproject.toml
