@@ -80,6 +80,28 @@ def test_remove_deletes_only_the_named_key(tmp_path):
     assert keys == {"key-b": "viewer"}
 
 
+def test_add_writes_the_keys_file_with_owner_only_permissions(tmp_path):
+    # The file holds live API keys -- shouldn't be left world/group
+    # readable regardless of the process's umask.
+    keys_file = tmp_path / "keys.json"
+    result = _run("add", str(keys_file), "--role", "ingest")
+    assert result.returncode == 0
+
+    mode = keys_file.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_add_leaves_no_stray_temp_file_behind(tmp_path):
+    # isolated_db (autouse) also puts a test.db of its own in tmp_path --
+    # use a subdirectory so this test only sees what `add` itself wrote.
+    keys_dir = tmp_path / "secrets"
+    keys_dir.mkdir()
+    result = _run("add", str(keys_dir / "keys.json"), "--role", "viewer")
+    assert result.returncode == 0
+
+    assert [p.name for p in keys_dir.iterdir()] == ["keys.json"]
+
+
 def test_remove_is_a_no_op_for_a_key_not_in_the_file(tmp_path):
     keys_file = tmp_path / "keys.json"
     keys_file.write_text(json.dumps({"key-a": "admin"}))

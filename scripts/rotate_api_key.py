@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import sys
+import tempfile
 from pathlib import Path
 
 # 32 bytes -> 43 url-safe base64 characters, the same order of magnitude
@@ -52,6 +54,27 @@ _KEY_BYTES = 32
 
 def generate_key() -> str:
     return secrets.token_urlsafe(_KEY_BYTES)
+
+
+def _write_keys_file(path: Path, keys: dict) -> None:
+    """Writes `keys` to `path` via a temp-file-then-rename swap (atomic on
+    the same filesystem, unlike Path.write_text()'s truncate-then-write) so
+    a request reading `path` concurrently -- app.config.get_api_keys_json()
+    re-reads it on every authenticated request, precisely so rotation needs
+    no restart -- never observes a truncated or partially-written file and
+    hits a JSON parse error. Written with 0600 permissions from the start
+    (not chmod'd after the fact, which would leave a window at the
+    original, more permissive mode) since this file holds live API keys.
+    """
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(keys, indent=2) + "\n")
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
 
 
 def _build_entry(role: str, site: str | None, label: str | None) -> dict | str:
@@ -84,7 +107,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     key = generate_key()
     keys[key] = _build_entry(args.role, args.site, args.label)
-    path.write_text(json.dumps(keys, indent=2) + "\n")
+    _write_keys_file(path, keys)
 
     print(f"New key: {key}")
     print(f"Added to {path} ({len(keys)} key(s) now in the file).")
@@ -105,7 +128,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
         print(f"Key not found in {path} (nothing to do).")
         return 0
     del keys[args.key]
-    path.write_text(json.dumps(keys, indent=2) + "\n")
+    _write_keys_file(path, keys)
     print(f"Removed. {len(keys)} key(s) remain in {path}.")
     return 0
 

@@ -90,7 +90,17 @@ def configured_keys() -> dict[str, dict]:
         }
     api_keys_json = config.get_api_keys_json()
     if api_keys_json:
-        for key, value in json.loads(api_keys_json).items():
+        try:
+            parsed = json.loads(api_keys_json)
+        except json.JSONDecodeError as exc:
+            # Most likely a DRONE_API_KEYS_FILE caught mid-write by a
+            # concurrent rotation, or simply malformed -- fail closed with
+            # a clear 500 rather than crash on a raw JSONDecodeError, since
+            # this runs on every authenticated request/WebSocket connect.
+            raise HTTPException(
+                status_code=500, detail=f"DRONE_API_KEYS is not valid JSON: {exc}"
+            ) from exc
+        for key, value in parsed.items():
             if isinstance(value, str):
                 keys[key] = {
                     "role": value, "site": None, "label": None, "revoked": False, "expires_at": None,

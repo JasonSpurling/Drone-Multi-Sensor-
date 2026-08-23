@@ -1484,7 +1484,10 @@ audit log (below) and in `GET /api/admin/keys` (admin-only) instead of a
 bare role name — useful once more than one key shares a role. There's no
 separate revocation list or database table for keys themselves: since
 keys already live in `DRONE_API_KEYS`, revoking one is just editing that
-JSON (or, for `expires_at`, doing nothing and letting the clock do it).
+JSON (or, for `expires_at`, doing nothing and letting the clock do it) —
+**and restarting the process**, since the plain `DRONE_API_KEYS` env var
+is only read once at startup. For a revocation that takes effect
+immediately with no restart, use `DRONE_API_KEYS_FILE` instead (below).
 
 **Secrets from files, and key rotation without a restart**: `DRONE_API_KEY`/
 `DRONE_API_KEYS` (and the alerting credentials below —

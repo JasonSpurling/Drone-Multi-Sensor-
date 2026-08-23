@@ -10,6 +10,10 @@ for why that broke the moment any test in the (large) rest of the suite
 did `monkeypatch.setattr("app.config.API_KEY", ...)`.
 """
 
+from pathlib import Path
+
+import pytest
+
 import app.config as config
 
 
@@ -78,6 +82,63 @@ def test_get_api_keys_json_reads_from_its_file(monkeypatch, tmp_path):
     monkeypatch.setenv("DRONE_API_KEYS_FILE", str(keys_file))
 
     assert config.get_api_keys_json() == '{"radar-key": "ingest"}'
+
+
+def test_read_secret_raises_a_clear_error_when_the_file_env_var_points_nowhere(monkeypatch, tmp_path):
+    # Not FileNotFoundError leaking straight out of Path.read_text() --
+    # a clear message pointing at the misconfiguration (e.g. a secret
+    # volume that hasn't mounted yet, or a typo'd path).
+    monkeypatch.setenv("SOME_SECRET_FILE", str(tmp_path / "does-not-exist.txt"))
+
+    with pytest.raises(RuntimeError, match="SOME_SECRET_FILE"):
+        config._read_secret("SOME_SECRET")
+
+
+def test_read_secret_caches_by_mtime_and_does_not_reread_an_unchanged_file(monkeypatch, tmp_path):
+    # get_api_key()/get_api_keys_json() are called on every authenticated
+    # request via app.auth.configured_keys() -- this is the perf guard
+    # that keeps that from re-reading the file from disk every time,
+    # while still picking up a real rotation immediately (the sibling
+    # test above already proves that half).
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("v1")
+    monkeypatch.setenv("SOME_SECRET_FILE", str(secret_file))
+
+    assert config._read_secret("SOME_SECRET") == "v1"
+
+    real_read_text = Path.read_text
+    calls = []
+
+    def _counting_read_text(self, *a, **kw):
+        calls.append(self)
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+    assert config._read_secret("SOME_SECRET") == "v1"
+    assert calls == []  # cache hit, no disk read
+
+    secret_file.write_text("v2")
+    assert config._read_secret("SOME_SECRET") == "v2"
+    assert len(calls) == 1  # mtime changed -> exactly one fresh read
+
+
+def test_configured_keys_fails_closed_with_a_clear_500_on_malformed_json(monkeypatch, tmp_path, isolated_db):
+    # A DRONE_API_KEYS_FILE caught mid-write (or just plain malformed)
+    # shouldn't crash every authenticated request with a raw
+    # JSONDecodeError -- fail closed with a clear 500 instead.
+    from fastapi import HTTPException
+
+    from app.auth import configured_keys
+
+    keys_file = tmp_path / "api_keys.json"
+    keys_file.write_text('{"key": "admin"')  # truncated JSON
+    monkeypatch.setenv("DRONE_API_KEYS_FILE", str(keys_file))
+    monkeypatch.setattr(config, "API_KEYS_JSON", "")
+    monkeypatch.setattr(config, "API_KEY", "")
+
+    with pytest.raises(HTTPException) as exc_info:
+        configured_keys()
+    assert exc_info.value.status_code == 500
 
 
 def test_monkeypatching_api_key_directly_still_works_for_code_reading_the_attribute(monkeypatch):

@@ -7,6 +7,15 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# file_path -> (mtime_ns at last read, stripped content). _read_secret() is
+# called from get_api_key()/get_api_keys_json(), which app.auth.
+# configured_keys() calls on every authenticated request and WebSocket
+# connect -- an os.stat() per call is far cheaper than a full read()+strip()
+# of the file every time, while still picking up a rotation on the very
+# next request after the file's mtime actually changes (no restart, no
+# polling interval to wait out).
+_secret_file_cache: dict[str, tuple[int, str]] = {}
+
 
 def _read_secret(env_var: str, default: str = "") -> str:
     """Reads a secret from `{env_var}_FILE` (that file's content,
@@ -21,7 +30,19 @@ def _read_secret(env_var: str, default: str = "") -> str:
     """
     file_path = os.getenv(f"{env_var}_FILE")
     if file_path:
-        return Path(file_path).read_text().strip()
+        try:
+            mtime_ns = os.stat(file_path).st_mtime_ns
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"{env_var}_FILE={file_path!r} is set but that file doesn't "
+                "exist (secret volume not mounted yet? typo'd path?)"
+            ) from exc
+        cached = _secret_file_cache.get(file_path)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+        content = Path(file_path).read_text().strip()
+        _secret_file_cache[file_path] = (mtime_ns, content)
+        return content
     return os.getenv(env_var, default)
 
 
