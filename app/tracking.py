@@ -144,6 +144,25 @@ def expire_stale_tracks(site_id: int, now: datetime | None = None) -> None:
             logger.info("Track %s -> closed (last seen %s)", track.track_uid, track.last_seen)
 
 
+def _coarse_distance_gate_m(track: Track, elapsed_s: float) -> float:
+    """TRACK_DISTANCE_GATE_M widened by however far the track's last known
+    ground speed could have carried it since track.last_seen. Without this,
+    the coarse prefilter compares against the track's raw last-known
+    position (not the IMM-predicted one, which needs a DB round-trip this
+    prefilter exists to avoid for the common far-away case) using a fixed
+    threshold -- so a fast-moving or infrequently-updated track can drift
+    outside a fixed 500m gate well before the Mahalanobis/IMM math (which
+    does account for that via prediction) ever gets to see it, silently
+    spawning a duplicate track instead of matching the real one. Bounding
+    by speed * elapsed time is a safe upper bound regardless of heading
+    change in between (a turn's arc length can't exceed straight-line
+    speed * time, so this never over-widens enough to let a genuinely
+    distant/different object slip past the coarse filter).
+    """
+    speed_mps = track.speed_mps or 0.0
+    return TRACK_DISTANCE_GATE_M + speed_mps * max(elapsed_s, 0.0)
+
+
 class _Match:
     def __init__(self, track: Track, imm: IMMFilter, ref_lat: float, ref_lon: float) -> None:
         self.track = track
@@ -168,14 +187,15 @@ def _find_matching_track(detection: Detection, measurement_variance: float) -> _
     for track in list_tracks(site_id=detection.site_id, status=TrackStatus.ACTIVE.value):
         if track.id is None or track.latitude is None or track.longitude is None:
             continue
-        if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
+        elapsed_s = (detection.timestamp - track.last_seen).total_seconds()
+        if abs(elapsed_s) > TRACK_TIME_GATE_SECONDS:
             continue
 
         # Cheap coarse prefilter before the more expensive Mahalanobis math.
         coarse_distance = haversine_distance_m(
             detection.latitude, detection.longitude, track.latitude, track.longitude
         )
-        if coarse_distance > TRACK_DISTANCE_GATE_M:
+        if coarse_distance > _coarse_distance_gate_m(track, elapsed_s):
             continue
 
         state = get_kalman_state(track.id)
@@ -391,12 +411,13 @@ def associate_detections_batch(detections: list[Detection]) -> list[Detection]:
             if detection.latitude is not None and detection.longitude is not None:
                 for j, track in enumerate(active_tracks):
                     assert track.id is not None and track.latitude is not None and track.longitude is not None
-                    if abs(detection.timestamp - track.last_seen) > timedelta(seconds=TRACK_TIME_GATE_SECONDS):
+                    elapsed_s = (detection.timestamp - track.last_seen).total_seconds()
+                    if abs(elapsed_s) > TRACK_TIME_GATE_SECONDS:
                         continue
                     coarse_distance = haversine_distance_m(
                         detection.latitude, detection.longitude, track.latitude, track.longitude
                     )
-                    if coarse_distance > TRACK_DISTANCE_GATE_M:
+                    if coarse_distance > _coarse_distance_gate_m(track, elapsed_s):
                         continue
 
                     state = track_states[track.id]

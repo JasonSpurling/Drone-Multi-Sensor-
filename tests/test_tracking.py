@@ -163,6 +163,48 @@ def test_fast_mover_still_gates_onto_predicted_position(site_id):
     assert third.track_id == list_tracks(site_id=site_id)[0].id
 
 
+def test_fast_mover_with_a_multi_second_gap_still_gates_when_raw_distance_exceeds_the_static_gate(site_id):
+    # Regression test: the coarse pre-Mahalanobis prefilter used to compare
+    # against the track's raw last-known lat/lon with a fixed
+    # TRACK_DISTANCE_GATE_M (500m default), so a fast mover that goes quiet
+    # for a few seconds could end up further than 500m from its stale last
+    # fix even though the IMM-predicted position (using its known
+    # velocity) is right where the next detection lands -- rejected before
+    # the Mahalanobis/IMM math (which does account for this) ever ran,
+    # spawning a spurious duplicate track. ~150 m/s over a 4s gap covers
+    # ~600m, past the static 500m gate but well within what a
+    # velocity-aware gate should still accept.
+    lat, lon = 51.5, -0.3
+    heading_deg, speed_mps = 90.0, 150.0
+
+    def _step(lat, lon, dt_s):
+        distance_m = speed_mps * dt_s
+        d_lat = (distance_m * math.cos(math.radians(heading_deg))) / 111_320.0
+        meters_per_degree_lon = 111_320.0 * math.cos(math.radians(lat))
+        d_lon = (distance_m * math.sin(math.radians(heading_deg))) / meters_per_degree_lon
+        return lat + d_lat, lon + d_lon
+
+    # Two close-together fixes to establish a real velocity estimate.
+    first = associate_detection(make_detection(site_id, sensor_id="radar-1", latitude=lat, longitude=lon))
+    lat, lon = _step(lat, lon, 1.0)
+    second = associate_detection(
+        make_detection(
+            site_id, sensor_id="radar-1", timestamp=BASE_TIME + timedelta(seconds=1), latitude=lat, longitude=lon
+        )
+    )
+    assert second.track_id == first.track_id
+
+    # Then a 4s gap -- ~600m of travel, past the static 500m gate.
+    lat, lon = _step(lat, lon, 4.0)
+    third = associate_detection(
+        make_detection(
+            site_id, sensor_id="radar-1", timestamp=BASE_TIME + timedelta(seconds=5), latitude=lat, longitude=lon
+        )
+    )
+    assert third.track_id == first.track_id
+    assert len(list_tracks(site_id=site_id)) == 1
+
+
 def test_fast_aircraft_at_one_hertz_stays_on_one_track(site_id):
     # Regression test: a ~210 m/s aircraft (typical ADS-B ground speed)
     # reporting once per second must stay associated to a single track.

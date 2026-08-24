@@ -150,6 +150,13 @@ class Incident(BaseModel):
     status: IncidentStatus = IncidentStatus.OPEN
     track_id: int | None = None
     zone_id: int | None = None
+    related_track_id: int | None = Field(
+        default=None,
+        description="For a SHADOWING incident, the other track being shadowed -- lets "
+        "track_id shadowing two different tracks at once open a separate incident for "
+        "each pair instead of the second shadow relationship being silently dropped as "
+        "a duplicate of the first. Unused (always None) for every other incident type.",
+    )
     opened_at: datetime = Field(default_factory=utcnow)
     closed_at: datetime | None = None
     description: str | None = None

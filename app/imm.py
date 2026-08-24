@@ -93,10 +93,19 @@ class IMMFilter:
         # call -- used as the prior when update() computes the Bayesian
         # mode-probability update from each model's measurement likelihood.
         self._predicted_mode_probabilities: Vector = list(self.mode_probabilities)
+        # Memoized _combined() result -- invalidated by predict()/update()
+        # (the only two things that change model state/covariance or
+        # mode_probabilities). A single detection update reads x/vx/vy/
+        # covariance/maneuver_probability in sequence (see app.tracking's
+        # _apply_filter_to_track), each of which would otherwise recompute
+        # the same probability-weighted mixture from scratch.
+        self._combined_cache: tuple[Vector, Matrix] | None = None
 
     # --- combined (reported) state, from a probability-weighted mixture ---
 
     def _combined(self) -> tuple[Vector, Matrix]:
+        if self._combined_cache is not None:
+            return self._combined_cache
         probs = self.mode_probabilities
         state = [0.0, 0.0, 0.0, 0.0]
         for j, model in enumerate(self.models):
@@ -106,7 +115,8 @@ class IMMFilter:
             diff = [model.state[i] - state[i] for i in range(4)]
             spread = _mat_add(model.covariance, _outer(diff))
             covariance = _mat_add(covariance, _mat_scale(spread, probs[j]))
-        return state, covariance
+        self._combined_cache = (state, covariance)
+        return self._combined_cache
 
     @property
     def x(self) -> float:
@@ -179,25 +189,29 @@ class IMMFilter:
             model.covariance = mixed_covariances[j]
         self.models[CRUISE].predict(dt_s, self.cruise_process_noise)
         self.models[MANEUVER].predict(dt_s, self.maneuver_process_noise)
+        self._combined_cache = None
 
     def mahalanobis_sq(self, zx: float, zy: float, measurement_variance: float) -> float:
         """Gate against the combined (mixture) predicted state, using
-        whichever model's innovation covariance is larger (more
-        conservative -- a true mixture-of-Gaussians Mahalanobis distance
-        has no closed form, so this trades a little precision for a gate
-        that never gets tighter than either individual model would allow).
+        whichever model's innovation covariance yields the smallest
+        distance (most permissive -- a true mixture-of-Gaussians
+        Mahalanobis distance has no closed form, so this trades a little
+        precision for a gate that never gets tighter than either
+        individual model would allow: a detection MANEUVER would accept,
+        e.g. right after a real turn, must not be rejected just because
+        CRUISE's tighter covariance alone would reject it).
         """
         state, _ = self._combined()
         y_innovation = [zx - state[0], zy - state[1]]
-        worst = 0.0
+        best = math.inf
         for model in self.models:
             _, s_innovation_cov = model.innovation(zx, zy, measurement_variance)
             s_inv = _inv2x2(s_innovation_cov)
             distance_sq = sum(
                 y_innovation[i] * s_inv[i][j] * y_innovation[j] for i in range(2) for j in range(2)
             )
-            worst = max(worst, distance_sq)
-        return worst
+            best = min(best, distance_sq)
+        return best
 
     def update(self, zx: float, zy: float, measurement_variance: float) -> None:
         likelihoods = []
@@ -214,6 +228,7 @@ class IMMFilter:
         unnormalized = [self._predicted_mode_probabilities[j] * likelihoods[j] for j in range(len(self.models))]
         total = sum(unnormalized) or 1e-12
         self.mode_probabilities = [u / total for u in unnormalized]
+        self._combined_cache = None
 
 
 def _inv2x2(m: Matrix) -> Matrix:

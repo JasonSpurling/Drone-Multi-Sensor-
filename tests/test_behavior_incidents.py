@@ -93,6 +93,37 @@ def test_shadowing_incident_opened_for_two_tracks_staying_close(site_id):
     assert all(i.incident_type == IncidentType.SHADOWING for i in incidents)
 
 
+def test_shadowing_two_different_tracks_at_once_opens_a_separate_incident_for_each_pair(site_id):
+    # Regression test: track A shadowing B (already an open incident) must
+    # still get its own incident when it also starts shadowing an
+    # unrelated track C -- the old dedup key was (track_id, incident_type,
+    # site_id) with no reference to *which* other track, so the open A-vs-B
+    # incident alone made get_open_behavioral_incident short-circuit and
+    # silently drop the A-vs-C relationship entirely.
+    # B sits ~22m north of A, C sits ~22m south of A -- each within
+    # SHADOWING_MAX_DISTANCE_M (30m default) of A, but ~44m from each
+    # other (past the gate), so this is genuinely two separate pairs
+    # (A-B, A-C), not one three-way cluster.
+    track_a = make_track(site_id, "shadow-a")
+    track_b = make_track(site_id, "shadow-b")
+    track_c = make_track(site_id, "shadow-c")
+    seed_history(site_id, track_a.id, [(t, 51.5, -0.1) for t in range(0, 90, 5)])
+    seed_history(site_id, track_b.id, [(t, 51.5002, -0.1) for t in range(0, 90, 5)])
+
+    first_round = check_shadowing_incidents([track_a, track_b])
+    assert {i.track_id for i in first_round} == {track_a.id, track_b.id}
+
+    # Now track A also starts shadowing track C (a different pair).
+    seed_history(site_id, track_c.id, [(t, 51.4998, -0.1) for t in range(0, 90, 5)])
+    second_round = check_shadowing_incidents([track_a, track_b, track_c])
+
+    assert {i.track_id for i in second_round} == {track_a.id, track_c.id}
+    all_shadowing = [i for i in list_incidents(site_id=site_id) if i.incident_type == IncidentType.SHADOWING]
+    assert len(all_shadowing) == 4  # A-vs-B (x2) and A-vs-C (x2), not deduped against each other
+    a_incidents = [i for i in all_shadowing if i.track_id == track_a.id]
+    assert {i.related_track_id for i in a_incidents} == {track_b.id, track_c.id}
+
+
 def test_no_shadowing_incident_for_distant_tracks(site_id):
     track_a = make_track(site_id, "far-a")
     track_b = make_track(site_id, "far-b")

@@ -67,7 +67,7 @@ _TABLE_MIGRATION_COLUMNS = {
         "site_id": "INTEGER",
     },
     "zone": {"site_id": "INTEGER"},
-    "incident": {"site_id": "INTEGER"},
+    "incident": {"site_id": "INTEGER", "related_track_id": "INTEGER"},
     "sensor_registry": {"site_id": "INTEGER"},
 }
 
@@ -113,6 +113,12 @@ def _migrate_indexes() -> None:
     with engine.begin() as conn:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_track_status_last_seen ON track (status, last_seen)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_incident_related_track_id "
+                "ON incident (related_track_id)"
+            )
         )
 
 
@@ -673,9 +679,9 @@ def create_incident(incident: Incident) -> Incident:
                 """
                 INSERT INTO incident
                     (site_id, incident_uid, incident_type, severity, status, track_id, zone_id,
-                     opened_at, closed_at, description, acknowledged_by)
+                     related_track_id, opened_at, closed_at, description, acknowledged_by)
                 VALUES (:site_id, :incident_uid, :incident_type, :severity, :status, :track_id, :zone_id,
-                        :opened_at, :closed_at, :description, :acknowledged_by)
+                        :related_track_id, :opened_at, :closed_at, :description, :acknowledged_by)
                 RETURNING id
                 """
             ),
@@ -687,6 +693,7 @@ def create_incident(incident: Incident) -> Incident:
                 "status": incident.status.value,
                 "track_id": incident.track_id,
                 "zone_id": incident.zone_id,
+                "related_track_id": incident.related_track_id,
                 "opened_at": incident.opened_at.isoformat(),
                 "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
                 "description": incident.description,
@@ -744,25 +751,37 @@ def get_open_incident(track_id: int, zone_id: int, incident_type: str, site_id: 
     return _row_to_incident(row) if row else None
 
 
-def get_open_behavioral_incident(track_id: int, incident_type: str, site_id: int) -> Incident | None:
+def get_open_behavioral_incident(
+    track_id: int, incident_type: str, site_id: int, related_track_id: int | None = None
+) -> Incident | None:
     """Like get_open_incident, but for a behavioral incident (loitering,
     formation, shadowing -- app/behavior.py) that isn't tied to any zone.
     `zone_id = :zone_id` in the zone-based query would never match a NULL
     zone_id (SQL NULL comparison), so this uses IS NULL instead of
     reusing that query with zone_id=None.
+
+    `related_track_id`, when given (SHADOWING only -- see Incident's
+    docstring for that field), narrows the dedup check to that specific
+    pair: without it, a track already shadowing one other track would
+    never get a second incident for shadowing a *different* track at the
+    same time, since the first open incident alone would satisfy this
+    lookup for either pair.
     """
+    query = """
+        SELECT * FROM incident
+        WHERE track_id = :track_id AND zone_id IS NULL AND incident_type = :incident_type
+            AND site_id = :site_id AND status != 'resolved'
+    """
+    params: dict = {"track_id": track_id, "incident_type": incident_type, "site_id": site_id}
+    if related_track_id is None:
+        query += " AND related_track_id IS NULL"
+    else:
+        query += " AND related_track_id = :related_track_id"
+        params["related_track_id"] = related_track_id
+    query += " ORDER BY opened_at DESC LIMIT 1"
+
     with db_session() as conn:
-        row = conn.execute(
-            text(
-                """
-                SELECT * FROM incident
-                WHERE track_id = :track_id AND zone_id IS NULL AND incident_type = :incident_type
-                    AND site_id = :site_id AND status != 'resolved'
-                ORDER BY opened_at DESC LIMIT 1
-                """
-            ),
-            {"track_id": track_id, "incident_type": incident_type, "site_id": site_id},
-        ).mappings().fetchone()
+        row = conn.execute(text(query), params).mappings().fetchone()
     return _row_to_incident(row) if row else None
 
 
@@ -809,6 +828,7 @@ def _row_to_incident(row) -> Incident:
         status=row["status"],
         track_id=row["track_id"],
         zone_id=row["zone_id"],
+        related_track_id=row["related_track_id"],
         opened_at=datetime.fromisoformat(row["opened_at"]),
         closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
         description=row["description"],

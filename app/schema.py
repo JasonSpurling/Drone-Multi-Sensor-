@@ -127,6 +127,11 @@ incident = Table(
     Column("status", String(20), nullable=False, server_default="open"),
     Column("track_id", Integer, ForeignKey("track.id")),
     Column("zone_id", Integer, ForeignKey("zone.id")),
+    # SHADOWING only -- see Incident.related_track_id's docstring (the
+    # other track in the pair, so a track shadowing two different tracks
+    # at once gets a separate incident per pair instead of the second
+    # relationship being deduped away as if it were the first).
+    Column("related_track_id", Integer, ForeignKey("track.id")),
     Column("opened_at", String(40), nullable=False),
     Column("closed_at", String(40)),
     Column("description", Text),
@@ -134,6 +139,7 @@ incident = Table(
     Index("idx_incident_track_id", "track_id"),
     Index("idx_incident_zone_id", "zone_id"),
     Index("idx_incident_site_id", "site_id"),
+    Index("idx_incident_related_track_id", "related_track_id"),
 )
 
 # A registered sensor's fixed mounting position/orientation, used to

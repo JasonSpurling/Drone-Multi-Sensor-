@@ -123,10 +123,14 @@ _BEHAVIORAL_SEVERITY = {
 }
 
 
-def _open_behavioral_incident(track: Track, incident_type: IncidentType, description: str) -> Incident | None:
+def _open_behavioral_incident(
+    track: Track, incident_type: IncidentType, description: str, *, related_track_id: int | None = None
+) -> Incident | None:
     if track.id is None or track.site_id is None:
         return None
-    if get_open_behavioral_incident(track.id, incident_type.value, track.site_id) is not None:
+    if get_open_behavioral_incident(
+        track.id, incident_type.value, track.site_id, related_track_id=related_track_id
+    ) is not None:
         return None
 
     severity = _BEHAVIORAL_SEVERITY.get(incident_type, IncidentSeverity.MEDIUM)
@@ -139,6 +143,7 @@ def _open_behavioral_incident(track: Track, incident_type: IncidentType, descrip
             status=IncidentStatus.OPEN,
             track_id=track.id,
             zone_id=None,
+            related_track_id=related_track_id,
             opened_at=utcnow(),
             description=description,
         )
@@ -232,9 +237,11 @@ def check_shadowing_incidents(tracks: list[Track]) -> list[Incident]:
                 continue
             for track in (track_a, track_b):
                 other = track_b if track is track_a else track_a
+                assert other.id is not None  # from valid_tracks
                 incident = _open_behavioral_incident(
                     track, IncidentType.SHADOWING,
                     f"Track {track.track_uid} has maintained close proximity to track {other.track_uid}",
+                    related_track_id=other.id,
                 )
                 if incident is not None:
                     opened.append(incident)

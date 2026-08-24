@@ -88,3 +88,56 @@ def test_mahalanobis_sq_grows_with_distance():
     near = imm.mahalanobis_sq(5.0, 0.0, measurement_variance=25.0)
     far = imm.mahalanobis_sq(500.0, 0.0, measurement_variance=25.0)
     assert far > near
+
+
+def test_mahalanobis_sq_uses_the_more_permissive_model_not_the_stricter_one():
+    # The whole point of an IMM gate: right after a real maneuver, a
+    # detection that fits MANEUVER's (wide) covariance but not CRUISE's
+    # (still-tight, hasn't caught up yet) covariance must still gate in --
+    # rejecting it because CRUISE alone would reject it defeats the
+    # feature (see app/imm.py's mahalanobis_sq docstring: "never gets
+    # tighter than either individual model would allow").
+    imm = IMMFilter(x=0.0, y=0.0, position_variance=50.0**2, velocity_variance=40.0**2)
+    for step in range(1, 15):
+        imm.predict(dt_s=1.0)
+        imm.update(zx=10.0 * step, zy=0.0, measurement_variance=9.0)
+    x0, y0 = imm.x, imm.y
+    for step in range(1, 5):
+        imm.predict(dt_s=1.0)
+        imm.update(zx=x0, zy=y0 + 10.0 * step, measurement_variance=9.0)
+
+    imm.predict(dt_s=1.0)
+    # 20m off the combined predicted position -- offset chosen so CRUISE's
+    # own (tight) covariance alone would reject it while MANEUVER's own
+    # (wide) covariance alone would accept it.
+    zx, zy = imm.x + 20.0, imm.y
+    combined = imm.mahalanobis_sq(zx, zy, measurement_variance=9.0)
+
+    # Mirror mahalanobis_sq()'s own math exactly (innovation against the
+    # *combined* state, using each model's own covariance) so this asserts
+    # the fix (min, not max) rather than a slightly different quantity.
+    from app.imm import _inv2x2
+
+    state, _ = imm._combined()
+    y_innovation = [zx - state[0], zy - state[1]]
+
+    def _distance_sq(model):
+        _, s_cov = model.innovation(zx, zy, 9.0)
+        s_inv = _inv2x2(s_cov)
+        return sum(y_innovation[i] * s_inv[i][j] * y_innovation[j] for i in range(2) for j in range(2))
+
+    cruise_distance = _distance_sq(imm.models[CRUISE])
+    maneuver_distance = _distance_sq(imm.models[MANEUVER])
+    assert maneuver_distance < cruise_distance  # sanity: this scenario actually distinguishes the two
+    assert combined == pytest.approx(maneuver_distance)  # the permissive (min) one, not max
+
+
+def test_combined_state_cache_is_invalidated_by_predict_and_update():
+    imm = IMMFilter(x=0.0, y=0.0, vx=5.0, vy=0.0)
+    x_before = imm.x
+    imm.predict(dt_s=1.0)
+    assert imm.x != x_before  # predict() must not return a stale cached x
+
+    x_after_predict = imm.x
+    imm.update(zx=x_after_predict + 50.0, zy=0.0, measurement_variance=25.0)
+    assert imm.x != x_after_predict  # update() must not return a stale cached x
