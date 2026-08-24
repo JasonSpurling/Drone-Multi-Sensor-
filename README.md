@@ -1109,11 +1109,11 @@ can't set it to fake a position out of the signature's scope.
 
 ## Operations
 
-- **Rate limiting**: two independent in-memory token buckets, both
-  returning 429 when exceeded. `POST /api/detections` is limited per
-  `sensor_id` (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) -- a backstop
-  against one malfunctioning or malicious sensor, not a normal-load limit.
-  On top of that, a second bucket per *site* (`DRONE_GLOBAL_RATE_LIMIT_PER_SECOND`/
+- **Rate limiting**: two independent token buckets, both returning 429
+  when exceeded. `POST /api/detections` is limited per `sensor_id`
+  (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) -- a backstop against one
+  malfunctioning or malicious sensor, not a normal-load limit. On top of
+  that, a second bucket per *site* (`DRONE_GLOBAL_RATE_LIMIT_PER_SECOND`/
   `_BURST`, default 500/1000) catches the case the per-sensor limit
   can't: many distinct `sensor_id`s (real ones, or an attacker minting new
   ones specifically to dodge the per-sensor bucket -- nothing else stops
@@ -1122,6 +1122,16 @@ can't set it to fake a position out of the signature's scope.
   server. Scoped per-site rather than one deployment-wide bucket so one
   site's load can't starve another's, the same isolation guarantee every
   other resource in this app has (see "Multi-site" below).
+
+  Bucket state is in-process (and resets on restart) on SQLite, but is
+  transparently shared through a `rate_limit_bucket` table on PostgreSQL
+  -- the same fix `cluster_association_lock` applies to detection
+  association, for the same reason: with in-process buckets, two app
+  replicas behind a load balancer would each independently allow up to
+  the configured rate, so the *effective* limit becomes `replicas x
+  configured limit` instead of the configured limit. Nothing to
+  configure -- `app.ratelimit.RateLimiter` picks the shared path
+  automatically whenever `DRONE_DATABASE_URL` points at PostgreSQL.
 - **Clock-skew sanity check**: a detection whose (client-supplied)
   `timestamp` is more than `DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS`
   (default 300s) from the server's own clock, in either direction, is

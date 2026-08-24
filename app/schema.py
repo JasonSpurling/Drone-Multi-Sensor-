@@ -229,3 +229,18 @@ api_key_usage = Table(
     Column("last_used_at", String(40), nullable=False),
     Column("use_count", Integer, nullable=False, server_default="0"),
 )
+
+# Backing store for app.ratelimit's Postgres-backed token buckets --
+# used only on PostgreSQL (see that module's docstring): a multi-replica
+# deployment needs bucket state shared across replicas, the same problem
+# app.cluster_lock solves for detection association via an advisory
+# lock. `key` is a sensor_id (per-sensor bucket) or str(site_id)
+# (per-site bucket) -- the same key space the in-process RateLimiter
+# already uses, just persisted instead of held in a process-local dict.
+rate_limit_bucket = Table(
+    "rate_limit_bucket",
+    metadata,
+    Column("key", String(150), primary_key=True),
+    Column("tokens", Float, nullable=False),
+    Column("last_refill", Float, nullable=False),
+)
