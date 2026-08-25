@@ -30,3 +30,9 @@ anduril-lattice-sdk==4.27.0
 # Same version pinned in requirements-oidc.txt (itsdangerous is already in
 # requirements.txt -- not optional the way authlib is).
 authlib==1.7.2
+# Only needed if DRONE_ML_MODEL_PATH is set or you're running
+# `python -m app.ml.train` (see app/ml/) -- installed here so CI actually
+# trains and exercises a real scikit-learn model in tests/test_ml_*.py
+# instead of skipping them. Same versions pinned in requirements-ml.txt.
+scikit-learn==1.7.2
+joblib==1.5.3

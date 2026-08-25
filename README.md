@@ -1061,6 +1061,29 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
 
+**ML-based classification (optional, `app/ml/`)**: each detection's label
+is currently decided by `app/classification.py`'s rule (sensor type +
+confidence threshold), not a trained model -- there's no real labeled
+drone/bird/aircraft dataset anywhere in this repo to train one from
+honestly. What exists instead is real training/inference *scaffolding*,
+ready the moment genuine labeled data does exist:
+
+```bash
+pip install -r requirements-ml.txt   # scikit-learn -- not needed otherwise
+python -m app.ml.train --csv your_labeled_detections.csv --out model.joblib
+export DRONE_ML_MODEL_PATH=model.joblib
+```
+
+Once configured, `app/fusion.py` consults the trained model as a first
+opinion for each detection, falling back to the rule-based classifier only
+when unconfigured (the default) or the model has no opinion. `app/ml/train.py`'s
+own docstring documents the expected CSV columns. **Only ever point
+`DRONE_ML_MODEL_PATH` at a model file you trained yourself or otherwise
+fully trust** -- loading a model file deserializes it via `joblib`
+(pickle under the hood), which can execute arbitrary code for a
+maliciously crafted file, the same risk class as unpickling any other
+untrusted data.
+
 A detection votes `friendly` only if its `raw_data` carries an
 `operator_id` matching a registered authorized operator **and** a valid
 Ed25519 signature over that operator/detection pair (`app/remote_id.py`,
@@ -1361,6 +1384,7 @@ needs to be set to run locally.
 | `DRONE_DB_MAX_OVERFLOW` | `10` | PostgreSQL pool overflow above `DRONE_DB_POOL_SIZE` before a connection request waits (ignored for SQLite) |
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
 | `DRONE_RF_SIGNATURES_PATH` | unset | Operator-supplied RF signatures JSON file (see "RF signature fingerprinting" below); no default -- unlike zones, this app ships no bundled file since it has no real per-model data to bundle |
+| `DRONE_ML_MODEL_PATH` | unset | Trained model file (see "ML-based classification" above); no default -- this app ships no trained model |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |
@@ -1673,6 +1697,7 @@ app/
   metrics.py             Prometheus counters
   notifications.py       Outbound webhook alerting on incident open
   classification.py     Single-detection sensor + confidence -> label rule
+  ml/                     Optional ML classification scaffolding (no trained model shipped -- see below)
   fusion.py              Multi-sensor classification fusion across a track's detections
   allowlist.py           Friendly-operator allowlist (authorized_operator table)
   georeference.py         Sensor-relative azimuth/range -> absolute lat/lon

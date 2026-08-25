@@ -1,0 +1,6 @@
+# Only needed if DRONE_ML_MODEL_PATH is set (see app/ml/) or you're
+# running `python -m app.ml.train` -- a deployment that relies purely on
+# the rule-based app.classification.classify() never needs this installed.
+-r requirements.txt
+scikit-learn==1.7.2
+joblib==1.5.3

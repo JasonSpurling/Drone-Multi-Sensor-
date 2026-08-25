@@ -62,6 +62,18 @@ ZONES_SEED_PATH = Path(
 # get real per-model fidelity; this app never fabricates that data itself.
 RF_SIGNATURES_PATH = Path(os.environ["DRONE_RF_SIGNATURES_PATH"]) if os.getenv("DRONE_RF_SIGNATURES_PATH") else None
 
+# Unset by default -- this app ships no trained model, because there is no
+# real labeled drone/bird/aircraft dataset to train one from (same
+# reasoning as RF_SIGNATURES_PATH above). Point this at a model file
+# produced by `python -m app.ml.train` (your own labeled data) to have
+# app.fusion._detection_label consult it as a first opinion, ahead of the
+# rule-based app.classification.classify(); if this is unset, or points at
+# a file that doesn't exist, classification behavior is unchanged from
+# today's rule-based-only behavior. See app/ml/ for the scaffolding this
+# enables (feature extraction, training, inference) -- infrastructure
+# only, not a claim that a trained model exists.
+ML_MODEL_PATH = os.getenv("DRONE_ML_MODEL_PATH", "")
+
 # SQLite by default (zero setup). Point this at a PostgreSQL instance for
 # production deployments that need concurrent-write throughput SQLite can't
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname

@@ -144,3 +144,37 @@ def test_signature_cannot_be_replayed_onto_a_different_detection(site_id):
         raw_data={"operator_id": "OP-12345", "signature": signature},
     )
     assert fuse_classification([replayed]) == Classification.DRONE
+
+
+def test_ml_model_is_consulted_ahead_of_the_rule_based_classifier_when_configured(monkeypatch):
+    # A rule-based confidence of 0.9 would normally classify as DRONE
+    # (see app.classification.classify) -- an ML "opinion" of BIRD here
+    # proves fuse_classification actually asks app.ml.model.predict()
+    # first, rather than ever falling through to the rule for a detection
+    # the model has an opinion on.
+    monkeypatch.setattr("app.fusion.ml_predict", lambda detection: Classification.BIRD)
+    detections = [make_detection(sensor_type=SensorType.RADAR, confidence=0.9)]
+    assert fuse_classification(detections) == Classification.BIRD
+
+
+def test_ml_model_returning_none_falls_back_to_the_rule_based_classifier(monkeypatch):
+    monkeypatch.setattr("app.fusion.ml_predict", lambda detection: None)
+    detections = [make_detection(sensor_type=SensorType.RADAR, confidence=0.9)]
+    assert fuse_classification(detections) == Classification.DRONE  # unchanged rule-based behavior
+
+
+def test_authorized_operator_still_wins_over_an_ml_opinion(site_id, monkeypatch):
+    # FRIENDLY (from a verified signature) is checked before the ML model
+    # is even consulted -- an ML model has no way to know about a
+    # cryptographically verified allowlist entry, so it must never
+    # override one. A configured model opinionated for DRONE proves this
+    # isn't just "no model configured" masking the real precedence.
+    monkeypatch.setattr("app.fusion.ml_predict", lambda detection: Classification.DRONE)
+    private_key, public_key = generate_keypair()
+    upsert_authorized_operator("OP-99999", site_id, name="Test Operator", public_key=public_key)
+    detection = make_detection(site_id=site_id, sensor_type=SensorType.RADAR, confidence=0.9)
+    detection.raw_data = {"operator_id": "OP-99999"}
+    signature = sign_detection("OP-99999", detection, private_key)
+    detection.raw_data["signature"] = signature
+
+    assert fuse_classification([detection]) == Classification.FRIENDLY

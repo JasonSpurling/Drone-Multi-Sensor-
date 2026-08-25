@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from app.allowlist import is_authorized_detection
 from app.classification import classify
+from app.ml.model import predict as ml_predict
 from app.models import Classification, Detection, SensorType
 from app.rf_signatures import match_rf_signature
 
@@ -51,6 +52,13 @@ def _effective_confidence(detection: Detection) -> float:
 def _detection_label(detection: Detection, effective_confidence: float) -> Classification:
     if is_authorized_detection(detection):
         return Classification.FRIENDLY
+    # An optional first opinion (see app/ml/) -- None whenever
+    # DRONE_ML_MODEL_PATH isn't configured (the default), so this is a
+    # no-op falling straight through to the rule-based classifier below
+    # for every deployment that hasn't opted in.
+    ml_label = ml_predict(detection)
+    if ml_label is not None:
+        return ml_label
     return classify(detection.sensor_type, effective_confidence)
 
 
