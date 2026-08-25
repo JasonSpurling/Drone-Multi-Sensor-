@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -31,6 +31,7 @@ from app.api import (
 from app.api import keys as keys_api
 from app.api import live as live_api
 from app.api import zones as zones_api
+from app.api_version import API_VERSION_HEADER, CURRENT_API_VERSION, SUPPORTED_API_VERSIONS, is_supported
 from app.config import (
     AUDIT_LOG_RETENTION_DAYS,
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
@@ -206,8 +207,39 @@ class _RequestMetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class _ApiVersionMiddleware(BaseHTTPMiddleware):
+    """Header-based API versioning (see app/api_version.py) -- an
+    X-API-Version request header pins a client to the version it was
+    written against, rejected with 400 if unrecognized rather than
+    silently served a version it didn't ask for. Every response carries
+    the version actually served, whether or not the request asked.
+
+    Scoped to /api/* only: the dashboard's own routes (/, /static/*) and
+    the WebSocket live feed (/live, a separate protocol this app doesn't
+    version) aren't part of the versioned REST surface.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        if request.url.path.startswith("/api/"):
+            requested = request.headers.get(API_VERSION_HEADER)
+            if requested is not None and not is_supported(requested):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": (
+                            f"Unsupported {API_VERSION_HEADER} '{requested}'. "
+                            f"Supported: {sorted(SUPPORTED_API_VERSIONS)}"
+                        )
+                    },
+                )
+        response = await call_next(request)
+        response.headers[API_VERSION_HEADER] = CURRENT_API_VERSION
+        return response
+
+
 app = FastAPI(title="Drone Multi-Sensor", version=__version__, lifespan=lifespan)
 app.add_middleware(_RequestMetricsMiddleware)
+app.add_middleware(_ApiVersionMiddleware)
 
 if CORS_ORIGINS:
     # Off by default (empty list -- CORSMiddleware isn't even added), so a
@@ -245,15 +277,26 @@ app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
 app.include_router(live_api.router)
 
-# Serves the dashboard's vendored third-party JS/CSS (see app/static/vendor/
-# -- Leaflet, currently) -- kept off the public unpkg.com CDN so loading the
-# dashboard has no external network dependency and no third party in the
-# trust chain, which the kind of security-conscious deployment this app
-# targets (restricted-site monitoring) generally won't accept for a page
-# that renders live track positions.
-app.mount("/static/vendor", StaticFiles(directory=STATIC_DIR / "vendor"), name="vendor")
+# Serves everything under app/static/ -- the dashboard's vendored
+# third-party JS/CSS (app/static/vendor/, currently just Leaflet, kept off
+# the public unpkg.com CDN so loading the dashboard has no external network
+# dependency and no third party in the trust chain, which the kind of
+# security-conscious deployment this app targets generally won't accept for
+# a page that renders live restricted-site track positions) and the favicon
+# below.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
     return FileResponse(STATIC_DIR / "dashboard.html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    # Browsers request /favicon.ico directly (not through dashboard.html's
+    # own <link rel="icon">) as a fallback in some cases regardless of that
+    # link tag being present -- serving it here avoids a 404 console error
+    # on every dashboard load. SVG content at a .ico path is fine; every
+    # browser that would request this path also supports SVG favicons.
+    return FileResponse(STATIC_DIR / "favicon.svg", media_type="image/svg+xml")

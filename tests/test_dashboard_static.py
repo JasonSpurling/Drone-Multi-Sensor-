@@ -39,3 +39,19 @@ def test_vendored_leaflet_marker_images_are_served():
         for name in ("marker-icon.png", "marker-icon-2x.png", "marker-shadow.png"):
             response = client.get(f"/static/vendor/leaflet/images/{name}")
             assert response.status_code == 200, name
+
+
+def test_favicon_is_served_at_the_conventional_path():
+    # Regression test: browsers request /favicon.ico directly (not only
+    # via dashboard.html's <link rel="icon">) -- unserved, this is a 404
+    # console error on every single dashboard load.
+    with TestClient(app) as client:
+        response = client.get("/favicon.ico")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/svg+xml"
+
+
+def test_dashboard_references_a_favicon_link():
+    with TestClient(app) as client:
+        response = client.get("/")
+    assert 'rel="icon"' in response.text

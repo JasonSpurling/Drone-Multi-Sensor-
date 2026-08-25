@@ -1109,6 +1109,15 @@ can't set it to fake a position out of the signature's scope.
 
 ## Operations
 
+- **API versioning**: header-based, not a `/v1/` path prefix -- routes
+  stay at `/api/...` regardless of version. Send `X-API-Version: 1` to
+  pin a request to the version your integration was written against; an
+  unrecognized value gets 400 rather than being silently served whatever
+  the current version happens to be. Every `/api/...` response carries
+  `X-API-Version` naming the version actually served, whether or not the
+  request asked for one. Only one version exists today (`1`) -- this is
+  the mechanism a future breaking change would use, not evidence one has
+  happened yet. See `app/api_version.py`.
 - **Rate limiting**: two independent token buckets, both returning 429
   when exceeded. `POST /api/detections` is limited per `sensor_id`
   (`DRONE_RATE_LIMIT_PER_SECOND`/`_BURST`) -- a backstop against one

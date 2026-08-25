@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import io
 import os
-import re
 import socket
 import subprocess
 import sys
@@ -22,7 +21,6 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Locator, sync_playwright
 
-VENDORED_LEAFLET_DIR = Path(__file__).parent / "vendor" / "leaflet"
 VISUAL_BASELINE_DIR = Path(__file__).parent / "visual_baselines"
 VISUAL_FAILURE_DIR = Path(__file__).parent / ".visual_failures"
 
@@ -106,28 +104,14 @@ def browser():
 
 @pytest.fixture
 def page(browser):
-    """A Playwright page with Leaflet's CDN requests (unpkg.com) redirected
-    to the vendored copy in tests_e2e/vendor/leaflet/ -- a real third-party
-    CDN in CI is exactly the kind of external dependency that makes a test
-    suite flaky/slow/rate-limited for no reason; the dashboard's own
-    behavior doesn't depend on which copy of Leaflet 1.9.4 it loads.
+    """A plain Playwright page against the dashboard -- no CDN routing
+    needed here since app/static/dashboard.html loads Leaflet from
+    app/static/vendor/leaflet/ (served by the live_server subprocess
+    itself), not a third-party CDN. See that vendored copy's own README
+    note for how to update it when the pinned Leaflet version changes.
     """
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     p = ctx.new_page()
-
-    def _route_leaflet(route):
-        match = re.search(r"unpkg\.com/leaflet@[\d.]+/dist/(.*)", route.request.url)
-        if match:
-            local_path = VENDORED_LEAFLET_DIR / match.group(1)
-            if local_path.is_file():
-                content_type = "text/css" if local_path.suffix == ".css" else (
-                    "application/javascript" if local_path.suffix == ".js" else "image/png"
-                )
-                route.fulfill(status=200, body=local_path.read_bytes(), content_type=content_type)
-                return
-        route.continue_()
-
-    p.route("**://unpkg.com/**", _route_leaflet)
     yield p
     ctx.close()
 

@@ -18,12 +18,15 @@ python -m pytest tests_e2e/ -v
 `conftest.py`'s `live_server` fixture starts the real app as a subprocess
 (not `TestClient` -- Playwright needs an actual socket to connect to)
 against a fresh temporary SQLite database per test, and tears it down
-after. Leaflet's CDN requests (`unpkg.com`) are redirected to the copy
-vendored in `tests_e2e/vendor/leaflet/` so the suite doesn't depend on a
-third-party CDN being reachable, fast, or unrate-limited in CI -- the
-dashboard's own behavior doesn't depend on which copy of Leaflet 1.9.4 it
-loads. Map *tiles* (background imagery) still come from the real internet
-and aren't asserted on directly; `test_dashboard_loads_with_no_console_errors`
+after. Leaflet itself loads from `app/static/vendor/leaflet/` (served by
+that same live app subprocess, not a third-party CDN -- see the root
+README's "Rate limiting"/Operations section and `app/main.py`'s
+`StaticFiles` mount), so this suite was never exposed to a third-party
+CDN's reachability/rate limits in the first place; there used to be a
+separate copy vendored just for these tests plus request-routing to
+redirect `unpkg.com` calls to it, both removed once the app stopped using
+a CDN at all. Map *tiles* (background imagery) still come from the real
+internet and aren't asserted on directly; `test_dashboard_loads_with_no_console_errors`
 specifically excludes bare network-failure console messages so a slow/
 rate-limited tile CDN can't make this suite flaky for reasons unrelated to
 whether the dashboard actually works.
@@ -81,13 +84,6 @@ instead of `chromium`).
 
 ## Updating the vendored Leaflet copy
 
-If `app/static/dashboard.html`'s pinned Leaflet version
-(`<link>`/`<script>` tags near the top) ever changes, update
-`tests_e2e/vendor/leaflet/` to match:
-
-```bash
-npm install leaflet@<version> --prefix /tmp/leaflet_install
-cp /tmp/leaflet_install/node_modules/leaflet/dist/leaflet.js tests_e2e/vendor/leaflet/
-cp /tmp/leaflet_install/node_modules/leaflet/dist/leaflet.css tests_e2e/vendor/leaflet/
-cp /tmp/leaflet_install/node_modules/leaflet/dist/images/*.png tests_e2e/vendor/leaflet/images/
-```
+Leaflet is vendored once, for the whole app (not separately for this test
+suite) -- see `app/static/vendor/leaflet/` and the root README's project
+structure section for how to update it when the pinned version changes.
