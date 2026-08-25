@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -11,12 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
 from app import __version__
 from app.api import (
     audit_log,
+    auth_sso,
     authorized_operators,
     detections,
     health,
@@ -37,6 +40,7 @@ from app.config import (
     BEHAVIOR_SWEEP_INTERVAL_SECONDS,
     CORS_ORIGINS,
     DETECTION_RETENTION_DAYS,
+    OIDC_SESSION_SECRET,
     RETENTION_SWEEP_INTERVAL_SECONDS,
     TRACK_RETENTION_DAYS,
 )
@@ -255,6 +259,29 @@ if CORS_ORIGINS:
         allow_headers=["*"],
     )
 
+# Backs authlib's own state/nonce cookie for the OIDC login redirect round
+# trip (a different, short-lived cookie from the actual drone_session one
+# app/api/auth_sso.py issues after a successful login -- see
+# app/sso_session.py). Added unconditionally rather than gated behind
+# oidc_enabled(): FastAPI/Starlette middleware is wired up once, at
+# import time, into the app object every test module shares (imported
+# once, cached by Python) -- gating this on a config value read at import
+# time would make it untestable via monkeypatching DRONE_OIDC_* in a test
+# that imports app.main after some earlier test already has. The routes
+# that actually matter (app/api/auth_sso.py's) each check oidc_enabled()
+# live, per-request, which *does* work with monkeypatching -- this
+# middleware just needs *a* secret to exist, used or not. Falls back to a
+# random per-process secret when DRONE_OIDC_SESSION_SECRET isn't set
+# (i.e. SSO isn't configured): nothing ever reads this cookie in that
+# case (the login route 404s before authlib's OAuth client -- the only
+# thing that touches request.session -- is ever invoked), so a value
+# that doesn't survive a restart is fine.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=OIDC_SESSION_SECRET or secrets.token_urlsafe(32),
+    same_site="lax",
+)
+
 # Left unauthenticated: conventional for liveness/scrape endpoints, and
 # neither exposes anything beyond aggregate operational state.
 app.include_router(health.router, prefix="/api")
@@ -276,6 +303,11 @@ app.include_router(sites.router, prefix="/api")
 app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
 app.include_router(live_api.router)
+# Every route here 404s unless DRONE_OIDC_* is configured (checked live,
+# per-request -- see app/api/auth_sso.py) -- registered unconditionally
+# for the same import-time-vs-request-time testability reason the
+# SessionMiddleware above is.
+app.include_router(auth_sso.router)
 
 # Serves everything under app/static/ -- the dashboard's vendored
 # third-party JS/CSS (app/static/vendor/, currently just Leaflet, kept off

@@ -1442,6 +1442,42 @@ Without any key configured, don't expose the port beyond localhost —
 anyone who can reach it could inject fake detections or acknowledge
 (silence) real alerts.
 
+**SSO login (generic OpenID Connect)**: an alternative to `DRONE_API_KEY(S)`
+for a human operator logging into the dashboard through a browser — not a
+replacement for it (a sensor's own ingest key still authenticates the same
+way). Works with any standards-compliant OIDC provider (Okta, Auth0, Azure
+AD, Google Workspace, a self-hosted Keycloak, ...) via issuer discovery, no
+vendor-specific code:
+
+```bash
+pip install -r requirements-oidc.txt   # authlib -- not needed unless you set these
+export DRONE_OIDC_ISSUER_URL="https://your-idp.example.com"
+export DRONE_OIDC_CLIENT_ID="..."
+export DRONE_OIDC_CLIENT_SECRET="..."
+export DRONE_OIDC_SESSION_SECRET="$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")"
+```
+
+That's the minimum to turn it on — visiting `/auth/login` redirects to your
+IdP, and a successful login sets a session cookie good for
+`DRONE_OIDC_SESSION_MAX_AGE_SECONDS` (default 8h; `/auth/logout` clears it
+early). Every route under `/auth/` 404s until all three of
+`ISSUER_URL`/`CLIENT_ID`/`CLIENT_SECRET` are set, so a deployment that
+never opts in gets no new attack surface. `DRONE_OIDC_SESSION_SECRET` has
+no default — unlike every other secret in this app, a blank/predictable
+session-signing key would let anyone forge an admin session, so the app
+fails closed (won't create or verify a session) rather than falling back to
+something guessable.
+
+An ID token's claims map to this app's own role/site model via two
+configurable claim names (every IdP names things differently, so this
+doesn't assume one): `DRONE_OIDC_ROLE_CLAIM` (default `"role"` — must
+resolve to `ingest`/`viewer`/`operator`/`admin` or it falls back to
+`DRONE_OIDC_DEFAULT_ROLE`, default `viewer`) and `DRONE_OIDC_SITE_CLAIM`
+(default `"site"`, a site *name* — same as `DRONE_API_KEYS`' own `"site"`
+field — or the default site if absent/unset). An `X-API-Key` header still
+takes priority over a session cookie when both are present, so existing
+sensor/automation integrations are entirely unaffected by turning this on.
+
 **Multi-site**: every record (tracks, detections, incidents, zones,
 sensor/operator registrations) belongs to exactly one *site* (a physical
 site/campus this deployment monitors — `app/sites.py`, `app/db.py`), and
@@ -1604,6 +1640,9 @@ app/
   config.py             Environment-variable settings
   logging_config.py     Logging setup (text or JSON)
   auth.py               API key + role-based access control (RBAC) + per-key site scoping
+  api_version.py         Header-based API versioning (X-API-Version)
+  oidc.py                 Generic OpenID Connect login (optional -- requirements-oidc.txt)
+  sso_session.py          The session cookie app/oidc.py issues (verifiable with zero OIDC deps)
   sites.py               Default-site bootstrap for the multi-site migration (see app/db.py)
   ratelimit.py          Per-sensor token-bucket rate limiter
   metrics.py             Prometheus counters

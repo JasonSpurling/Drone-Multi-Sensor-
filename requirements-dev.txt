@@ -24,3 +24,9 @@ alembic==1.19.1
 # names/types during development) instead of silently never running them.
 # Same version pinned in requirements-lattice.txt.
 anduril-lattice-sdk==4.27.0
+# Only needed if DRONE_OIDC_* is set (see app/oidc.py) -- installed here so
+# CI actually exercises the real OIDC login flow (tests/test_oidc_*.py run
+# it end-to-end against a local stub OIDC provider) instead of skipping it.
+# Same version pinned in requirements-oidc.txt (itsdangerous is already in
+# requirements.txt -- not optional the way authlib is).
+authlib==1.7.2

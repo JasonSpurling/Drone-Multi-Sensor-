@@ -5,3 +5,14 @@ sqlalchemy==2.0.52
 prometheus-client==0.26.0
 cryptography==50.0.0
 numpy==2.4.6
+# Backs Starlette's SessionMiddleware (app/main.py), needed unconditionally
+# even though it's only meaningfully used by the optional OIDC login flow
+# (app/oidc.py) -- SessionMiddleware itself hard-imports this at module
+# level, and app.main adds it unconditionally rather than gated behind
+# DRONE_OIDC_* (see that add_middleware call's own comment for why: a
+# config-gated import at module-import time can't be toggled by a test's
+# monkeypatch once app.main has already been imported once in the
+# process). Tiny and dependency-free, unlike authlib (requirements-oidc.txt),
+# which stays genuinely optional -- only imported inside functions gated
+# by oidc_enabled(), never at module import time.
+itsdangerous==2.2.0

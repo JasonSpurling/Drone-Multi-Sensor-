@@ -1,10 +1,14 @@
 """API key authentication with per-key roles (RBAC) and per-key site
-scoping.
+scoping, plus (when DRONE_OIDC_* is configured -- see app/oidc.py) an
+SSO session cookie as an alternative to X-API-Key for a human operator
+logging into the dashboard through a browser.
 
 Active only when at least one key is configured (DRONE_API_KEY or
 DRONE_API_KEYS); with neither set, every request is allowed through
 unauthenticated -- fine as long as the app is only bound to 127.0.0.1 (see
-README "Security").
+README "Security"). This still applies even with SSO configured: a
+request with no X-API-Key header and no valid session cookie falls
+through to that same open-access default, not to a 401.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import threading
 import time
 from datetime import datetime
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app import config
 from app.util import utcnow
@@ -169,6 +173,36 @@ def _resolve_site_id(site_name: str | None) -> int:
     return site.id
 
 
+def _try_session_cookie(request: Request, required: set[str]) -> Principal | None:
+    """None (not a 401) for anything that isn't a valid, sufficiently-
+    privileged SSO session -- no cookie sent, OIDC not configured, or a
+    tampered/expired token -- so the caller falls through to the normal
+    X-API-Key path exactly as if this never ran. A cookie that *is* valid
+    but for a role that doesn't satisfy `required` still 403s here rather
+    than falling through, the same as authenticate_key does for a
+    too-weak API key -- silently trying the (likely also-missing) API key
+    path after that would just produce a less informative 401.
+    """
+    from app.oidc import oidc_enabled
+
+    if not oidc_enabled():
+        return None
+
+    from app.sso_session import SESSION_COOKIE_NAME, verify_session_token
+
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if token is None:
+        return None
+    claims = verify_session_token(token)
+    if claims is None:
+        return None
+
+    role = claims["role"]
+    if not (_ROLE_IMPLIES.get(role, {role}) & required):
+        raise HTTPException(status_code=403, detail=f"Role '{role}' cannot access this endpoint")
+    return Principal(role=role, site_id=_resolve_site_id(claims.get("site")), label=claims.get("label"))
+
+
 def authenticate_key(raw_key: str | None, required: set[str], *, missing_key_detail: str) -> Principal:
     """The actual authentication/authorization logic behind require_role()
     below, factored out so a context that can't use FastAPI's
@@ -210,11 +244,19 @@ def authenticate_key(raw_key: str | None, required: set[str], *, missing_key_det
 
 def require_role(*roles: str):
     """FastAPI dependency factory: the caller's key must map to a role that
-    satisfies at least one of `roles`.
+    satisfies at least one of `roles`. An X-API-Key header takes priority
+    (unchanged behavior for every existing integration); only when it's
+    absent does this check for an SSO session cookie (see
+    _try_session_cookie) before falling back to the plain "no
+    credentials" path.
     """
     required = set(roles)
 
-    def dependency(x_api_key: str | None = Header(default=None)) -> Principal:
+    def dependency(request: Request, x_api_key: str | None = Header(default=None)) -> Principal:
+        if x_api_key is None:
+            session_principal = _try_session_cookie(request, required)
+            if session_principal is not None:
+                return session_principal
         return authenticate_key(x_api_key, required, missing_key_detail="Missing X-API-Key header")
 
     return dependency

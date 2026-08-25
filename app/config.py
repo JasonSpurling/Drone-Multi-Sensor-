@@ -245,6 +245,49 @@ COT_STALE_SECONDS = float(os.getenv("DRONE_COT_STALE_SECONDS", "60"))
 FAA_NOTAM_CLIENT_ID = os.getenv("DRONE_FAA_NOTAM_CLIENT_ID", "")
 FAA_NOTAM_CLIENT_SECRET = _read_secret("DRONE_FAA_NOTAM_CLIENT_SECRET")
 
+# Generic OpenID Connect SSO login (app/oidc.py, app/api/auth_sso.py) --
+# an alternative to DRONE_API_KEY(S) for a human operator logging into the
+# dashboard through a browser, not a replacement for it (a sensor's own
+# ingest key still authenticates the same way). Works with any standards-
+# compliant OIDC provider (Okta, Auth0, Azure AD, Google Workspace, a
+# self-hosted Keycloak, ...) via issuer discovery -- no vendor-specific
+# code. The feature is only active once all three of ISSUER_URL/CLIENT_ID/
+# CLIENT_SECRET are set; see app.oidc.oidc_enabled().
+OIDC_ISSUER_URL = os.getenv("DRONE_OIDC_ISSUER_URL", "")
+OIDC_CLIENT_ID = os.getenv("DRONE_OIDC_CLIENT_ID", "")
+OIDC_CLIENT_SECRET = _read_secret("DRONE_OIDC_CLIENT_SECRET")
+# Where the IdP redirects back to after login -- defaults to this app's
+# own /auth/callback route computed from the incoming request, which is
+# fine for a single-hostname deployment; set explicitly if this app sits
+# behind a reverse proxy/load balancer that rewrites the host the app
+# itself sees (so the IdP-registered redirect URI matches what's actually
+# public).
+OIDC_REDIRECT_URL = os.getenv("DRONE_OIDC_REDIRECT_URL", "")
+
+# Which ID token claims map to this app's own role/site model (see
+# app/auth.py's Principal) -- configurable since every IdP's claim
+# naming differs (a custom claim, a group name, ...); this app doesn't
+# assume one. A claim value that isn't one of ingest/viewer/operator/admin
+# falls back to OIDC_DEFAULT_ROLE (logged as a warning, never silently
+# escalated to something more privileged than that default).
+OIDC_ROLE_CLAIM = os.getenv("DRONE_OIDC_ROLE_CLAIM", "role")
+OIDC_SITE_CLAIM = os.getenv("DRONE_OIDC_SITE_CLAIM", "site")
+OIDC_DEFAULT_ROLE = os.getenv("DRONE_OIDC_DEFAULT_ROLE", "viewer")
+
+# Symmetric key sealing the session cookie app/oidc.py's callback route
+# issues after a successful login (see app/sso_session.py) -- also reused
+# as Starlette SessionMiddleware's own signing secret for the short-lived
+# state/nonce cookie the OIDC flow needs mid-redirect (a different,
+# transient cookie, never carries role/site data). Must be a Fernet key:
+# generate one with
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# No default -- unlike every other secret in this file, a blank/predictable
+# session-signing key would let anyone forge an admin session, so this
+# fails closed (app.main refuses to start with OIDC enabled but this
+# unset) rather than falling back to something guessable.
+OIDC_SESSION_SECRET = _read_secret("DRONE_OIDC_SESSION_SECRET")
+OIDC_SESSION_MAX_AGE_SECONDS = float(os.getenv("DRONE_OIDC_SESSION_MAX_AGE_SECONDS", "28800"))  # 8h
+
 # Track association gates: a detection may only join a track if it arrives
 # within TRACK_TIME_GATE_SECONDS of the track's last update and within
 # TRACK_DISTANCE_GATE_M of its last known position.

@@ -1,0 +1,13 @@
+# Only needed if DRONE_OIDC_ISSUER_URL/_CLIENT_ID/_CLIENT_SECRET are set
+# (see app/oidc.py) -- a deployment that authenticates purely via
+# DRONE_API_KEY(S) never needs this installed. authlib handles OIDC
+# discovery, the authorization-code flow, and ID token/JWKS signature
+# verification -- security-critical logic this app deliberately doesn't
+# hand-roll (unlike, say, app/queue_publisher.py's minimal raw-socket NATS
+# client, hand-rolling JWT/JWKS verification is exactly the kind of thing
+# that's easy to get subtly wrong, e.g. algorithm-confusion attacks).
+# itsdangerous (SessionMiddleware's own dependency) is already in
+# requirements.txt -- see that file for why it isn't optional the way
+# authlib is.
+-r requirements.txt
+authlib==1.7.2
