@@ -219,13 +219,34 @@ MITIGATION_MIN_SEVERITY = os.getenv("DRONE_MITIGATION_MIN_SEVERITY", "high")
 # Optional message-queue fan-out (app/queue_publisher.py): best-effort NATS
 # core PUB of every ingested detection and opened incident, alongside (not
 # instead of) the normal synchronous single-process path. Empty (default)
-# disables it entirely -- this is scaffolding for a future multi-site/
-# high-throughput deployment to build a consumer on top of, not a redesign
-# of ingest/fusion itself, which stays synchronous and in-process either way.
+# disables it entirely. POST /api/detections's own synchronous behavior
+# (including its response contract -- a persisted, already-associated
+# Detection returned immediately) never changes regardless of this setting.
 NATS_URL = os.getenv("DRONE_NATS_URL", "")
 NATS_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DRONE_NATS_CONNECT_TIMEOUT_SECONDS", "2"))
 NATS_DETECTION_SUBJECT = os.getenv("DRONE_NATS_DETECTION_SUBJECT", "drone.detections")
 NATS_INCIDENT_SUBJECT = os.getenv("DRONE_NATS_INCIDENT_SUBJECT", "drone.incidents")
+
+# app/consumer.py: an additional, opt-in queue-based ingest path alongside
+# (never instead of) POST /api/detections -- a deployment that wants
+# ingest processing to scale independently of the API process (run on a
+# different host, run several worker processes) can publish raw detection
+# JSON to this subject instead of calling the HTTP endpoint. Deliberately
+# a *different* subject from NATS_DETECTION_SUBJECT above: that one
+# carries already-processed detections (fan-out for downstream
+# analytics/consumers), this one carries raw, not-yet-associated ones (the
+# consumer's own input). CONSUMER_QUEUE_GROUP lets multiple consumer
+# processes share one NATS queue group so each raw detection is processed
+# by exactly one of them (load-balanced), not duplicated to every
+# consumer, which is what a real horizontally-scaled worker pool needs.
+# CONSUMER_SITE_NAME scopes every detection this consumer processes to one
+# site (the default site if unset) -- there's no per-message credential to
+# derive a site from the way an API key's "site" field provides one for
+# the HTTP path, so this is a per-consumer-process setting instead; run a
+# separate consumer (pointed at a separate subject, if needed) per site.
+NATS_RAW_DETECTION_SUBJECT = os.getenv("DRONE_NATS_RAW_DETECTION_SUBJECT", "drone.detections.raw")
+CONSUMER_QUEUE_GROUP = os.getenv("DRONE_CONSUMER_QUEUE_GROUP", "drone-consumers")
+CONSUMER_SITE_NAME = os.getenv("DRONE_CONSUMER_SITE_NAME", "")
 
 # Optional Cursor on Target (CoT) fan-out (app/cot_publisher.py): sends a
 # CoT event over UDP for every track update to a TAK Server or any

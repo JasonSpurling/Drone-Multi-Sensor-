@@ -1238,17 +1238,33 @@ can't set it to fake a position out of the signature's scope.
   core subject (`DRONE_NATS_DETECTION_SUBJECT`/`_INCIDENT_SUBJECT`,
   defaulting to `drone.detections`/`drone.incidents`) alongside the normal
   in-process handling -- unset (the default) disables it entirely, with no
-  behavior change. This is scaffolding for a future multi-site or
-  high-throughput deployment to build on: a consumer process (or several,
-  elsewhere) can subscribe to these subjects for fan-in aggregation,
-  cross-site correlation, or a separate analytics pipeline, without
-  touching the ingest API or the tracker. It does **not** make
-  ingest/association/fusion itself queue-based -- that stays exactly the
-  synchronous single-process design described above, which is the right
-  call for a single site's real-time load; only publishing this
-  supplementary copy is new. Implemented as a minimal NATS core PUB client
-  over a raw socket rather than a full client library, so it adds no new
-  dependency.
+  behavior change. A consumer process (or several, elsewhere) can subscribe
+  to these subjects for fan-in aggregation, cross-site correlation, or a
+  separate analytics pipeline, without touching the ingest API or the
+  tracker. It does **not** make ingest/association/fusion itself
+  queue-based -- `POST /api/detections` stays exactly the synchronous
+  single-process design described above, unaffected either way. Implemented
+  as a minimal NATS core PUB/SUB client over a raw socket rather than a
+  full client library, so it adds no new dependency.
+- **Queue-based ingest** (`app/consumer.py`, optional, opt-in): a second,
+  additional front door into the same tracking pipeline `POST
+  /api/detections` uses -- for a deployment that wants ingest processing
+  decoupled from (and independently scalable from) the API process, run
+  `python -m app.consumer` and publish raw detection JSON onto
+  `DRONE_NATS_RAW_DETECTION_SUBJECT` (default `drone.detections.raw`,
+  deliberately a different subject from the fan-out one above, which
+  carries *already-processed* detections) instead of calling the HTTP
+  endpoint. `DRONE_CONSUMER_QUEUE_GROUP` (default `drone-consumers`) lets
+  several consumer processes share one NATS queue group so each raw
+  detection is load-balanced to exactly one of them, the actual mechanism
+  a horizontally-scaled worker pool needs -- not a copy fanned out to
+  every consumer. `DRONE_CONSUMER_SITE_NAME` scopes everything this
+  consumer processes to one site (the default site if unset); there's no
+  per-message credential to derive a site from the way an API key's
+  `"site"` field does for the HTTP path, so run a separate consumer
+  (against a separate subject, if needed) per site. This is purely
+  additive -- `POST /api/detections`'s behavior, including its response
+  contract, never changes regardless of whether any consumer is running.
 
 ## Load testing
 
@@ -1374,6 +1390,15 @@ needs to be set to run locally.
 | `DRONE_NATS_DETECTION_SUBJECT` | `drone.detections` | NATS subject each ingested detection is published to |
 | `DRONE_NATS_INCIDENT_SUBJECT` | `drone.incidents` | NATS subject each opened incident is published to |
 | `DRONE_NATS_CONNECT_TIMEOUT_SECONDS` | `2` | Connect/send timeout for the NATS publisher |
+| `DRONE_NATS_RAW_DETECTION_SUBJECT` | `drone.detections.raw` | NATS subject `app/consumer.py` subscribes to for queue-based ingest |
+| `DRONE_CONSUMER_QUEUE_GROUP` | `drone-consumers` | NATS queue group -- shared by multiple consumer processes to load-balance ingest across them |
+| `DRONE_CONSUMER_SITE_NAME` | *(unset -- default site)* | Which site `app/consumer.py` scopes every detection it processes to |
+| `DRONE_OIDC_ISSUER_URL` / `_CLIENT_ID` / `_CLIENT_SECRET` | *(unset)* | Generic OIDC SSO login (see "SSO login" above) -- all three required to enable it |
+| `DRONE_OIDC_REDIRECT_URL` | *(unset -- computed from the request)* | Explicit OIDC redirect URI, for a deployment behind a proxy that rewrites the host |
+| `DRONE_OIDC_ROLE_CLAIM` / `_SITE_CLAIM` | `role` / `site` | Which ID token claims map to this app's role/site model |
+| `DRONE_OIDC_DEFAULT_ROLE` | `viewer` | Role granted when the role claim is missing/unrecognized |
+| `DRONE_OIDC_SESSION_SECRET` | *(unset -- required to enable SSO)* | Fernet key sealing the SSO session cookie |
+| `DRONE_OIDC_SESSION_MAX_AGE_SECONDS` | `28800` (8h) | How long an SSO session cookie stays valid |
 | `DRONE_FAA_NOTAM_CLIENT_ID` / `_CLIENT_SECRET` | *(unset)* | api.faa.gov developer credentials for `app/adapters/faa_notam_check.py` |
 | `DRONE_LOITERING_RADIUS_M` | `75` | Max spread for a track to count as loitering |
 | `DRONE_LOITERING_MIN_DURATION_S` | `120` | Min sustained duration to flag loitering |
