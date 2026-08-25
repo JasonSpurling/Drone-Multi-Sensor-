@@ -1615,7 +1615,10 @@ app/
   zones.seed.json        Sample restricted zone
   adapters/               Real-sensor bridges (SBS-1/dump1090 ADS-B, OpenCV camera motion cueing)
   api/                    Route handlers, one module per resource
-  static/dashboard.html   Dashboard (no build step; loads Leaflet + map tiles from a CDN, so it needs internet access)
+  static/dashboard.html   Dashboard (no build step; Leaflet is vendored locally -- see static/vendor/ --
+                          only map tile imagery itself still comes over the network)
+  static/vendor/leaflet/  Leaflet, vendored (not loaded from a CDN) so the dashboard has no third party
+                          in its trust chain; `npm pack leaflet@<version>` to update
 tests/                     Pytest suite (runs against SQLite by default, PostgreSQL optionally)
 tests_e2e/                 Browser-driven dashboard tests (Playwright, separate CI job -- see its README.md)
 simulator.py               Posts realistic detections against a running server

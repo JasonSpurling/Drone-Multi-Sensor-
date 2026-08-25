@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -243,6 +244,14 @@ app.include_router(sites.router, prefix="/api")
 app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
 app.include_router(live_api.router)
+
+# Serves the dashboard's vendored third-party JS/CSS (see app/static/vendor/
+# -- Leaflet, currently) -- kept off the public unpkg.com CDN so loading the
+# dashboard has no external network dependency and no third party in the
+# trust chain, which the kind of security-conscious deployment this app
+# targets (restricted-site monitoring) generally won't accept for a page
+# that renders live track positions.
+app.mount("/static/vendor", StaticFiles(directory=STATIC_DIR / "vendor"), name="vendor")
 
 
 @app.get("/", include_in_schema=False)
