@@ -25,7 +25,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.config import ML_MODEL_PATH
+from app.config import ML_CONFIDENCE_THRESHOLD, ML_MODEL_PATH
 from app.ml.features import extract_features
 from app.models import Classification, Detection
 
@@ -67,8 +67,10 @@ def _load_model() -> Any | None:
 
 def predict(detection: Detection) -> Classification | None:
     """None means "no opinion" -- not configured, the model file is
-    missing, or the model produced a label this app doesn't recognize --
-    in every one of those cases the caller (app.fusion._detection_label)
+    missing, the model produced a label this app doesn't recognize, or
+    (see ML_CONFIDENCE_THRESHOLD) the model's own top-class probability
+    wasn't high enough to trust over the rule-based classifier -- in
+    every one of those cases the caller (app.fusion._detection_label)
     falls back to the rule-based classifier; this never raises out into
     the detection-ingest path.
     """
@@ -77,9 +79,19 @@ def predict(detection: Detection) -> Classification | None:
         return None
     features = extract_features(detection)
     try:
-        raw_label = model.predict([features])[0]
+        # predict_proba (not the bare predict()) so a genuinely uncertain
+        # prediction -- e.g. 0.3 for the winning class in a 4-class
+        # problem, barely better than a coin flip -- doesn't silently
+        # override well-tested rule-based logic just because *some* model
+        # file happens to be configured.
+        probabilities = model.predict_proba([features])[0]
+        best_index = probabilities.argmax()
+        confidence = probabilities[best_index]
+        if confidence < ML_CONFIDENCE_THRESHOLD:
+            return None
+        raw_label = model.classes_[best_index]
         return Classification(raw_label)
-    except (ValueError, IndexError, KeyError) as exc:
+    except (ValueError, IndexError, KeyError, AttributeError) as exc:
         logger.warning("ML model produced an unusable prediction (%s) -- falling back to rule-based", exc)
         return None
 

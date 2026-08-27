@@ -74,6 +74,16 @@ RF_SIGNATURES_PATH = Path(os.environ["DRONE_RF_SIGNATURES_PATH"]) if os.getenv("
 # only, not a claim that a trained model exists.
 ML_MODEL_PATH = os.getenv("DRONE_ML_MODEL_PATH", "")
 
+# A configured model's own predict_proba() top-class probability must meet
+# this bar before app.ml.model.predict() trusts it enough to override the
+# rule-based classifier at all -- otherwise a barely-better-than-random
+# opinion (e.g. 0.3 on a 4-class problem) would unconditionally win over
+# well-tested rule-based logic just because *some* model file is
+# configured. Below this, predict() returns None, the same "no opinion"
+# result as an unconfigured model, falling through to the rule-based
+# classifier exactly as if ML weren't involved at all.
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_ML_CONFIDENCE_THRESHOLD", "0.6"))
+
 # SQLite by default (zero setup). Point this at a PostgreSQL instance for
 # production deployments that need concurrent-write throughput SQLite can't
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname

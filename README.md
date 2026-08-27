@@ -1176,14 +1176,35 @@ export DRONE_ML_MODEL_PATH=model.joblib
 ```
 
 Once configured, `app/fusion.py` consults the trained model as a first
-opinion for each detection, falling back to the rule-based classifier only
-when unconfigured (the default) or the model has no opinion. `app/ml/train.py`'s
-own docstring documents the expected CSV columns. **Only ever point
-`DRONE_ML_MODEL_PATH` at a model file you trained yourself or otherwise
-fully trust** -- loading a model file deserializes it via `joblib`
-(pickle under the hood), which can execute arbitrary code for a
-maliciously crafted file, the same risk class as unpickling any other
-untrusted data.
+opinion for each detection, falling back to the rule-based classifier when
+unconfigured (the default), the model has no opinion, **or the model's own
+top-class probability is below `DRONE_ML_CONFIDENCE_THRESHOLD`** (default
+`0.6`) -- a genuinely uncertain prediction (e.g. 0.3 for the winning class
+in a 4-class problem, barely better than a coin flip) doesn't get to
+silently override well-tested rule-based logic just because *some* model
+file happens to be configured. `app/ml/train.py`'s own docstring documents
+the expected CSV columns. **Only ever point `DRONE_ML_MODEL_PATH` at a
+model file you trained yourself or otherwise fully trust** -- loading a
+model file deserializes it via `joblib` (pickle under the hood), which can
+execute arbitrary code for a maliciously crafted file, the same risk class
+as unpickling any other untrusted data.
+
+Training itself (`python -m app.ml.train`) does more than fit-and-save:
+it reports `k`-fold cross-validation accuracy alongside the single
+held-out split (a single split's accuracy is noisy, especially on the
+small datasets a first real labeled set is likely to be), prints feature
+importances so you can see what the model actually learned, trains with
+`class_weight="balanced"` (real labeled detections won't arrive evenly
+split across drone/bird/aircraft/unknown -- without this a classifier can
+score deceptively well on accuracy alone by mostly predicting whichever
+class is most common), and rejects any label with fewer than 2 rows with
+a clear error up front rather than crashing deep inside scikit-learn.
+Feature extraction (`app/ml/features.py`) also derives an
+`rf_signature_match_confidence` feature from the same known-drone-
+control-link RF envelope matching (`app/rf_signatures.py`) that
+`app/fusion.py` already uses to boost confidence for a rule-based RF
+classification -- real, already-computed domain signal, not anything
+fabricated, given to the model as an additional feature to learn from.
 
 A detection votes `friendly` only if its `raw_data` carries an
 `operator_id` matching a registered authorized operator **and** a valid
@@ -1486,6 +1507,7 @@ needs to be set to run locally.
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
 | `DRONE_RF_SIGNATURES_PATH` | unset | Operator-supplied RF signatures JSON file (see "RF signature fingerprinting" below); no default -- unlike zones, this app ships no bundled file since it has no real per-model data to bundle |
 | `DRONE_ML_MODEL_PATH` | unset | Trained model file (see "ML-based classification" above); no default -- this app ships no trained model |
+| `DRONE_ML_CONFIDENCE_THRESHOLD` | `0.6` | Minimum top-class probability before a configured model's prediction is trusted over the rule-based classifier |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |

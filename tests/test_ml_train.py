@@ -67,9 +67,13 @@ def test_load_csv_parses_optional_rf_and_altitude_columns(tmp_path):
         ],
     )
     features_list, _ = load_csv(str(csv_path))
+    # 5800 MHz / 10 MHz bandwidth / hopping matches a real built-in
+    # signature (see app/rf_signatures.py) -- rf_signature_match_confidence
+    # is derived automatically, not something the CSV itself provides.
     assert features_list[0] == {
         "sensor_type": "rf", "confidence": 0.8, "altitude_m": 50.0,
         "rf_center_frequency_mhz": 5800.0, "rf_bandwidth_mhz": 10.0, "rf_frequency_hopping": 1.0,
+        "rf_signature_match_confidence": 0.9,
     }
 
 
@@ -106,3 +110,51 @@ def test_train_produces_a_loadable_model_that_predicts_sensibly(tmp_path, capsys
     # confidence -> drone.
     assert model.predict([{"sensor_type": "camera", "confidence": 0.97}])[0] == "drone"
     assert model.predict([{"sensor_type": "camera", "confidence": 0.02}])[0] == "bird"
+
+
+def test_train_prints_cross_validation_accuracy(tmp_path, capsys):
+    csv_path = tmp_path / "labeled.csv"
+    _write_csv(csv_path, _ROWS)  # 6 drone / 6 bird rows -- enough for 5-fold CV
+    model_path = tmp_path / "model.joblib"
+
+    train(str(csv_path), str(model_path), test_size=0.3, random_state=0)
+
+    output = capsys.readouterr().out
+    assert "5-fold cross-validation accuracy" in output
+
+
+def test_train_rejects_a_label_with_too_few_rows_to_split(tmp_path):
+    csv_path = tmp_path / "labeled.csv"
+    # 9 drone rows + 1 bird row -- the stratified train/test split (and
+    # cross-validation) both need every label represented at least twice.
+    rows = [{"sensor_type": "camera", "confidence": "0.9", "label": "drone"} for _ in range(9)]
+    rows.append({"sensor_type": "camera", "confidence": "0.1", "label": "bird"})
+    _write_csv(csv_path, rows)
+
+    with pytest.raises(SystemExit, match="bird"):
+        train(str(csv_path), str(tmp_path / "model.joblib"), test_size=0.3, random_state=0)
+
+
+def test_train_prints_feature_importances(tmp_path, capsys):
+    csv_path = tmp_path / "labeled.csv"
+    _write_csv(csv_path, _ROWS)
+    model_path = tmp_path / "model.joblib"
+
+    train(str(csv_path), str(model_path), test_size=0.3, random_state=0)
+
+    output = capsys.readouterr().out
+    assert "Feature importances" in output
+    assert "confidence" in output
+
+
+def test_train_uses_balanced_class_weight(tmp_path):
+    csv_path = tmp_path / "labeled.csv"
+    _write_csv(csv_path, _ROWS)
+    model_path = tmp_path / "model.joblib"
+
+    train(str(csv_path), str(model_path), test_size=0.3, random_state=0)
+
+    import joblib
+
+    model = joblib.load(model_path)
+    assert model.named_steps["classifier"].class_weight == "balanced"

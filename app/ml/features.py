@@ -9,6 +9,7 @@ sharing this one function is what rules it out here.
 from __future__ import annotations
 
 from app.models import Detection, SensorType
+from app.rf_signatures import match_rf_signature
 
 
 def extract_features(detection: Detection) -> dict[str, float | str]:
@@ -37,5 +38,17 @@ def extract_features(detection: Detection) -> dict[str, float | str]:
             features["rf_bandwidth_mhz"] = float(raw["bandwidth_mhz"])
         if raw.get("frequency_hopping"):
             features["rf_frequency_hopping"] = 1.0
+        # Same known-drone-control-link envelope matching app.fusion
+        # already uses to boost effective_confidence (app/rf_signatures.py)
+        # -- exposing it as a feature too means a trained model gets to
+        # learn from this real domain-specific signal directly, not just
+        # the raw frequency/bandwidth numbers it's derived from.
+        match = match_rf_signature(
+            center_frequency_mhz=raw.get("center_frequency_mhz"),
+            bandwidth_mhz=raw.get("bandwidth_mhz"),
+            frequency_hopping=raw.get("frequency_hopping"),
+        )
+        if match.confidence > 0.0:
+            features["rf_signature_match_confidence"] = match.confidence
 
     return features
