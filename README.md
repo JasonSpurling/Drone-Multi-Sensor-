@@ -36,8 +36,9 @@ macOS / Linux:
 
 This starts the API + dashboard at **http://127.0.0.1:8000** (auto-reload
 enabled) and creates a SQLite database at `data/drone_sensor.db` on first
-run. Open the URL in a browser for the dashboard, or `/docs` for interactive
-API docs.
+run -- including the `data/` directory itself if it doesn't exist yet
+(it's gitignored, so a fresh clone/download never has it). Open the URL
+in a browser for the dashboard, or `/docs` for interactive API docs.
 
 > **Windows note:** `--reload` spawns a separate child process to actually
 > serve requests. If you stop the app with Ctrl+C and a later run seems to

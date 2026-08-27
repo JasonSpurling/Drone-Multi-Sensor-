@@ -11,6 +11,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import bindparam, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
@@ -30,6 +31,22 @@ if not DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["pool_size"] = DB_POOL_SIZE
     _engine_kwargs["max_overflow"] = DB_MAX_OVERFLOW
 
+def ensure_sqlite_directory_exists(database_url: str) -> None:
+    """SQLite opens the database file itself but never creates a missing
+    *parent* directory (unlike most "just works" expectations) -- on a
+    completely fresh checkout, the default data/ directory doesn't exist
+    yet (it's gitignored, and git doesn't track empty directories even if
+    it weren't), so the very first connection attempt fails with "unable
+    to open database file" before init_db() ever gets a chance to run.
+    A no-op for a non-sqlite URL (nothing to create) or an in-memory
+    database (":memory:", used by the test suite -- no file/directory at
+    all).
+    """
+    if database_url.startswith("sqlite:///") and ":memory:" not in database_url:
+        Path(database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+
+
+ensure_sqlite_directory_exists(DATABASE_URL)
 engine: Engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
