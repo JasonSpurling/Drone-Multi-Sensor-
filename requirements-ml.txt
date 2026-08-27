@@ -2,5 +2,5 @@
 # running `python -m app.ml.train` -- a deployment that relies purely on
 # the rule-based app.classification.classify() never needs this installed.
 -r requirements.txt
-scikit-learn==1.7.2
+scikit-learn==1.9.0
 joblib==1.5.3
