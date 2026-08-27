@@ -575,6 +575,46 @@ you.
 
 ## Sensor realism
 
+**Getting your first real sensor talking to this**: before wiring any
+adapter below into the API, verify the sensor hardware itself works in
+isolation -- it isolates hardware/driver problems from application-layer
+ones. For the cheapest and most common starting point, an RTL-SDR dongle
+doing ADS-B reception:
+
+1. If running on WSL2 rather than native Linux, the dongle needs USB
+   passthrough first (WSL2 has no native USB access):
+   ```powershell
+   # Windows side (PowerShell, as Administrator):
+   usbipd list                      # find the RTL-SDR's BUSID
+   usbipd bind --busid <BUSID>
+   usbipd attach --wsl --busid <BUSID>
+   ```
+   ```bash
+   # WSL side -- confirm it's visible before going further:
+   lsusb   # expect "Realtek Semiconductor Corp. RTL2838 DVB-T"
+   ```
+   On a Raspberry Pi or other native Linux host, the dongle is already a
+   normal USB device -- skip straight to step 2.
+2. Install and run a real ADS-B decoder -- this project's own
+   `dump1090_bridge.py` (below) is a *bridge*, not a decoder; it consumes
+   dump1090's SBS-1 output rather than talking to the SDR directly:
+   ```bash
+   sudo apt install -y dump1090-fa   # FlightAware's maintained fork
+   dump1090-fa --device-index 0 --net --net-sbs-port 30003
+   ```
+3. Check `http://<host>:8080` (dump1090-fa's own built-in map). If
+   aircraft are within range, blips should appear within a minute or two.
+   This step alone confirms the dongle, antenna, and placement are working
+   correctly, before this tracker enters the picture at all.
+4. Only once step 3 shows real traffic, point this app's bridge at
+   dump1090 as described below.
+
+The same "confirm the raw sensor/decoder output first, then bridge it in"
+order applies to every adapter in this section -- a radar's ASTERIX feed,
+a camera's RTSP stream, a Bluetooth Remote ID scan -- since a bridge
+script can't distinguish "no detections because the sky is empty" from
+"no detections because the upstream feed is misconfigured."
+
 **Georeferencing** (`app/georeference.py`): a detection that reports
 `azimuth_deg`/`range_m` (typical of a fixed radar or RF direction-finder)
 instead of `latitude`/`longitude` is converted to an absolute position

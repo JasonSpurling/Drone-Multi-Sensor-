@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 DEFAULT_URL = "http://127.0.0.1:8000/api/detections"
 _METERS_PER_DEGREE_LAT = 111_320.0
@@ -52,7 +52,7 @@ class SimulatedEntity:
         return {
             "sensor_id": self.sensor_id,
             "sensor_type": self.sensor_type,
-            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat(),
             "latitude": round(self.lat, 6),
             "longitude": round(self.lon, 6),
             "altitude_m": round(self.alt_m, 1),
