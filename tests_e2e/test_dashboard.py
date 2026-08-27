@@ -376,3 +376,56 @@ def test_icon_only_buttons_have_accessible_names(live_server, page):
 
     assert page.locator("#details-back").get_attribute("aria-label")
     assert page.locator("#details-close").get_attribute("aria-label")
+
+
+INSIDE_RESTRICTED_ZONE = {
+    "sensor_id": "radar-1", "sensor_type": "radar",
+    "latitude": 51.50, "longitude": -0.10, "confidence": 0.9,
+}
+
+
+def test_theme_toggle_switches_and_persists_across_reload(live_server, page):
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#theme-toggle")
+
+    assert page.evaluate("document.documentElement.dataset.theme") in (None, "")
+    page.click("#theme-toggle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+
+    page.reload(wait_until="networkidle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+
+    page.click("#theme-toggle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+
+def test_incident_reports_panel_shows_a_rollup_for_a_seeded_incident(live_server, page):
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="reports"]')
+    page.wait_for_selector(".report-stat-tile")
+
+    assert "1" in page.locator(".report-stat-tile .value").first.inner_text()
+    assert "zone incursion" in page.locator("#report-body").inner_text().lower()
+
+
+def test_after_action_report_button_populates_a_printable_summary(live_server, page):
+    # window.print() would otherwise pop a real print dialog under a real
+    # browser -- stub it before the page's own scripts run so clicking
+    # Report still runs openIncidentReport() but doesn't try to print.
+    page.add_init_script("window.print = () => {};")
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector("button[data-report-id]")
+    page.click("button[data-report-id]")
+    page.wait_for_function("document.getElementById('print-report').innerHTML.length > 0")
+
+    report_text = page.locator("#print-report").inner_text()
+    assert "After-Action Report" in report_text
+    assert "zone incursion" in report_text.lower()
+    assert "radar-1" in report_text

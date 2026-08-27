@@ -331,8 +331,22 @@ replica so the product still fits.
 | `GET /api/authorized-operators` | List authorized ("friendly") drone operators (admin) |
 | `PUT /api/authorized-operators/{operator_id}` | Register/update an authorized operator (admin) |
 | `GET /api/audit-log` | Who did what admin action, when (admin) |
+| `GET /api/reports/incidents` | Aggregate rollup (counts by type/severity/status, resolution-time stats, daily trend) over `?start=`/`?end=` |
+| `GET /api/reports/incidents/export` | The same date range's incidents as a downloadable CSV |
+| `GET /api/incidents/{id}/report` | One incident's full after-action story -- what was seen, when, by which sensors, how classified, how responded to (see "Incident reporting" below) |
 | `GET /api/admin/keys` | Every configured key's label/role/site/expiry plus last-used time and use count, never the raw key (admin) |
 | `GET /ws/live` | WebSocket: pushes `track_update`/`incident_opened` events in near-real-time (`?api_key=` for a key-authenticated deployment; see "Live updates" below) |
+
+### Theme
+
+The dashboard defaults to dark (unchanged regardless of OS/browser theme
+preference -- a deliberate choice for a monitoring UI meant to be watched
+for long stretches). The sun/moon toggle in the top bar switches to a
+light theme instead, remembered per-browser via `localStorage` so it
+persists across reloads. The map/track-visualization layer itself always
+stays dark in either theme, matching how most mapping dashboards keep
+plotted symbology legible against a fixed dark base rather than flipping
+it with the surrounding chrome.
 
 ### Live updates
 
@@ -357,6 +371,28 @@ behind a load balancer" above), a detection processed by replica B never
 pushes to a dashboard client connected to replica A; that client still
 gets it, just at the next poll rather than instantly. Single-replica
 deployments (the common case) don't have this gap at all.
+
+### Incident reporting
+
+Two different questions, two different endpoints. "How are we doing over
+this period" is `GET /api/reports/incidents` -- a rollup (counts by type/
+severity/status, resolution-time stats, a per-day trend) over a date
+range, aggregated in `app/reporting.py`'s `build_incident_report`, with a
+CSV of the underlying incidents at `GET /api/reports/incidents/export`
+for a compliance officer who needs the list an aggregate count
+summarizes. The dashboard's **Incident Reports** panel (rail icon, or
+Alt+5) surfaces this: pick a date range, see the breakdown, or click
+"Export CSV".
+
+"What actually happened on this one incident" is
+`GET /api/incidents/{id}/report` -- a single incident's full story
+(`build_after_action_report`): what was seen, when, by which sensors, the
+track's fused classification and final position/speed, and how it was
+responded to (acknowledged by whom, resolution time). Every incident in
+the dashboard's **Alerts** panel (including resolved ones, not just
+active alerts) has a **Report** button that fetches this and renders it
+as a printable page (`window.print()`) -- useful for after-action review
+or an incident record you want on paper/PDF rather than just on screen.
 
 ## Tracking core
 

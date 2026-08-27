@@ -115,3 +115,42 @@ def test_no_predicted_incursion_for_near_stationary_track(site_id):
     create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
     track = make_track(site_id, latitude=50.99, longitude=0.0, heading_deg=0.0, speed_mps=0.1)
     assert check_predicted_incursions(track) == []
+
+
+def test_after_action_report_endpoint_returns_full_incident_story(site_id):
+    from fastapi.testclient import TestClient
+
+    from app.db import create_detection
+    from app.main import app
+    from app.models import Detection, SensorType
+
+    with TestClient(app) as client:
+        create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+        track = make_track(site_id)
+        create_detection(
+            Detection(
+                site_id=site_id, sensor_id="radar-1", sensor_type=SensorType.RADAR,
+                timestamp=track.first_seen, track_id=track.id, latitude=51.1, longitude=0.0, confidence=0.9,
+            )
+        )
+        incidents = check_zone_incidents(track)
+        incident_id = incidents[0].id
+
+        r = client.get(f"/api/incidents/{incident_id}/report")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["incident"]["incident_type"] == "zone_incursion"
+        assert body["track"]["classification"] == "drone"
+        assert body["zone"]["name"] == "rz"
+        assert body["detection_count"] == 1
+        assert body["sensors_involved"] == ["radar-1"]
+
+
+def test_after_action_report_404s_for_unknown_incident(site_id):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        r = client.get("/api/incidents/999999/report")
+        assert r.status_code == 404

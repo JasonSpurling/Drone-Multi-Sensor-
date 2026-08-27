@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from app.models import Incident, IncidentSeverity, IncidentStatus, IncidentType
+from app.models import Detection, Incident, IncidentSeverity, IncidentStatus, IncidentType, Track
 from app.reporting import build_incident_report
 
 START = datetime(2026, 1, 1)
@@ -86,3 +86,77 @@ def test_range_is_echoed_in_report():
     report = build_incident_report([], START, END)
     assert report["range"]["start"] == START.isoformat()
     assert report["range"]["end"] == END.isoformat()
+
+
+def test_after_action_report_includes_incident_details():
+    from app.reporting import build_after_action_report
+
+    incident = make_incident(
+        status=IncidentStatus.RESOLVED,
+        opened_at=START,
+        closed_at=START + timedelta(minutes=5),
+        acknowledged_by="operator-1",
+    )
+    report = build_after_action_report(incident, track=None, zone=None, detections=[])
+    assert report["incident"]["incident_uid"] == "uid"
+    assert report["incident"]["status"] == "resolved"
+    assert report["incident"]["response_time_seconds"] == 300.0
+    assert report["incident"]["acknowledged_by"] == "operator-1"
+
+
+def test_after_action_report_response_time_is_none_while_open():
+    from app.reporting import build_after_action_report
+
+    incident = make_incident(status=IncidentStatus.OPEN, closed_at=None)
+    report = build_after_action_report(incident, track=None, zone=None, detections=[])
+    assert report["incident"]["response_time_seconds"] is None
+
+
+def test_after_action_report_omits_track_and_zone_when_unresolvable():
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    report = build_after_action_report(incident, track=None, zone=None, detections=[])
+    assert report["track"] is None
+    assert report["zone"] is None
+    assert report["detections"] == []
+    assert report["sensors_involved"] == []
+
+
+def test_after_action_report_includes_track_and_zone_summary():
+    from app.models import Classification, TrackStatus, Zone, ZoneType
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    track = Track(
+        track_uid="t-1", first_seen=START, last_seen=START + timedelta(minutes=2),
+        status=TrackStatus.ACTIVE, classification=Classification.DRONE,
+        latitude=51.1, longitude=0.0, altitude_m=120.0, speed_mps=12.0, heading_deg=90.0,
+    )
+    zone = Zone(name="Central RZ", zone_type=ZoneType.RESTRICTED, polygon=[(0, 0), (0, 1), (1, 0)])
+    report = build_after_action_report(incident, track=track, zone=zone, detections=[])
+    assert report["track"]["classification"] == "drone"
+    assert report["track"]["final_position"] == {"latitude": 51.1, "longitude": 0.0, "altitude_m": 120.0}
+    assert report["zone"] == {"name": "Central RZ", "zone_type": "restricted"}
+
+
+def test_after_action_report_lists_detections_and_sensors_involved():
+    from app.models import SensorType
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    detections = [
+        Detection(
+            sensor_id="radar-1", sensor_type=SensorType.RADAR, timestamp=START,
+            latitude=51.0, longitude=0.0, confidence=0.9,
+        ),
+        Detection(
+            sensor_id="camera-1", sensor_type=SensorType.CAMERA, timestamp=START + timedelta(seconds=5),
+            latitude=51.0, longitude=0.0, confidence=0.4,
+        ),
+    ]
+    report = build_after_action_report(incident, track=None, zone=None, detections=detections)
+    assert report["detection_count"] == 2
+    assert report["sensors_involved"] == ["camera-1", "radar-1"]
+    assert report["detections"][0]["sensor_id"] == "radar-1"
+    assert report["detections"][0]["confidence"] == 0.9
