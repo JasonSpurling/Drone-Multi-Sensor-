@@ -65,6 +65,7 @@ _TABLE_MIGRATION_COLUMNS = {
     "detection": {
         "georeferenced": "INTEGER DEFAULT 0",
         "site_id": "INTEGER",
+        "human_label": "VARCHAR(20)",
     },
     "zone": {"site_id": "INTEGER"},
     "incident": {"site_id": "INTEGER", "related_track_id": "INTEGER"},
@@ -359,6 +360,39 @@ def get_detection(detection_id: int, site_id: int) -> Detection | None:
     return _row_to_detection(row) if row else None
 
 
+def set_detection_human_label(detection_id: int, site_id: int, label: str | None) -> Detection | None:
+    """Sets (or, with label=None, clears) an operator's ground-truth label
+    for one detection -- see app.models.Detection.human_label. Returns
+    None (no-op) if the detection doesn't exist in this site, the same
+    "not found" contract as get_detection.
+    """
+    with db_session() as conn:
+        row = conn.execute(
+            text(
+                "UPDATE detection SET human_label = :label WHERE id = :id AND site_id = :site_id "
+                "RETURNING *"
+            ),
+            {"label": label, "id": detection_id, "site_id": site_id},
+        ).mappings().fetchone()
+    return _row_to_detection(row) if row else None
+
+
+def list_labeled_detections(site_id: int) -> list[Detection]:
+    """Every detection an operator has assigned a human_label to, for
+    GET /api/ml/training-data/export -- the CSV app.ml.train actually
+    trains from is built out of these.
+    """
+    with db_session() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT * FROM detection WHERE site_id = :site_id AND human_label IS NOT NULL "
+                "ORDER BY timestamp"
+            ),
+            {"site_id": site_id},
+        ).mappings().all()
+    return [_row_to_detection(row) for row in rows]
+
+
 def list_detections(
     site_id: int, track_id: int | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Detection]:
@@ -483,6 +517,7 @@ def _row_to_detection(row) -> Detection:
         confidence=row["confidence"],
         raw_data=json.loads(row["raw_data"]) if row["raw_data"] else None,
         georeferenced=bool(row["georeferenced"]),
+        human_label=row["human_label"],
     )
 
 

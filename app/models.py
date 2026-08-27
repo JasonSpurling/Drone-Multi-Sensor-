@@ -39,6 +39,21 @@ class Classification(StrEnum):
     FRIENDLY = "friendly"
 
 
+class TrainableLabel(StrEnum):
+    """The subset of Classification an operator can assign as ground truth
+    for ML training (app/ml/train.py) -- deliberately excludes FRIENDLY,
+    same reasoning as app.ml.train's own docstring: FRIENDLY comes from a
+    cryptographically verified authorized-operator signature
+    (app/allowlist.py), not a feature to train a classifier on, so it's
+    not a label a human ever assigns here either.
+    """
+
+    UNKNOWN = "unknown"
+    DRONE = "drone"
+    BIRD = "bird"
+    AIRCRAFT = "aircraft"
+
+
 class IncidentType(StrEnum):
     ZONE_INCURSION = "zone_incursion"
     PREDICTED_INCURSION = "predicted_incursion"
@@ -110,6 +125,23 @@ class Detection(BaseModel):
         "value is discarded on ingest (see app/api/detections.py) -- a signed detection's signature "
         "must verify against what the sensor actually signed, not a claim the client controls.",
     )
+    human_label: TrainableLabel | None = Field(
+        default=None,
+        description="An operator's ground-truth label for this detection (PUT "
+        "/api/detections/{id}/label), independent of and never overwritten by track.classification "
+        "(the system's own fused/ML-assisted best guess). Building up a set of these is what turns "
+        "GET /api/ml/training-data/export from empty into something app.ml.train can actually learn "
+        "from -- see app/ml/__init__.py for why this repo ships no such data itself.",
+    )
+
+
+class DetectionLabelInput(BaseModel):
+    """Body for PUT /api/detections/{id}/label. label=None clears a
+    previously-set human_label (e.g. correcting a mis-click) rather than
+    only ever being able to set one.
+    """
+
+    label: TrainableLabel | None = None
 
 
 class Track(BaseModel):

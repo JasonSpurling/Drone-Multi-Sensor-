@@ -333,6 +333,8 @@ replica so the product still fits.
 | `GET /api/audit-log` | Who did what admin action, when (admin) |
 | `GET /api/reports/incidents` | Aggregate rollup (counts by type/severity/status, resolution-time stats, daily trend) over `?start=`/`?end=` |
 | `GET /api/reports/incidents/export` | The same date range's incidents as a downloadable CSV |
+| `PUT /api/detections/{id}/label` | Set (or, with `{"label":null}`, clear) an operator's ground-truth label for one detection (operator/admin) |
+| `GET /api/ml/training-data/export` | Every labeled detection in this site as a CSV, in the exact shape `app/ml/train.py --csv` expects |
 | `GET /api/incidents/{id}/report` | One incident's full after-action story -- what was seen, when, by which sensors, how classified, how responded to (see "Incident reporting" below) |
 | `GET /api/admin/keys` | Every configured key's label/role/site/expiry plus last-used time and use count, never the raw key (admin) |
 | `GET /ws/live` | WebSocket: pushes `track_update`/`incident_opened` events in near-real-time (`?api_key=` for a key-authenticated deployment; see "Live updates" below) |
@@ -1161,6 +1163,25 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 `drone` from a lower-confidence label (never silently downgraded away from
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
+
+**Labeling real detections for training**: the missing piece between "no
+labeled dataset" and being able to train a real model is real labeled
+data -- this doesn't create any, but gives you a way to build it up as
+real sensor traffic arrives, rather than hand-editing a CSV. In the
+dashboard, select any track and its **Label training data** section shows
+its most recent detections with four quick-label buttons (drone/bird/
+aircraft/unknown); clicking one calls `PUT /api/detections/{id}/label`,
+and clicking the same one again clears it (undoing a mis-click). This is
+a human's ground-truth label, stored independently of and never
+overwriting the track's own system-derived `classification` -- see
+`app/models.py`'s `Detection.human_label` docstring. Once you've labeled
+enough real detections, `GET /api/ml/training-data/export` returns them
+as a CSV in exactly the shape `app/ml/train.py --csv` expects:
+
+```bash
+curl -o labeled.csv http://127.0.0.1:8000/api/ml/training-data/export
+python -m app.ml.train --csv labeled.csv --out model.joblib
+```
 
 **ML-based classification (optional, `app/ml/`)**: each detection's label
 is currently decided by `app/classification.py`'s rule (sensor type +

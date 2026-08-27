@@ -111,6 +111,12 @@ detection = Table(
     # for an azimuth/range-only sensor) rather than the position
     # georeferencing later filled in -- see canonical_message().
     Column("georeferenced", Integer, nullable=False, server_default="0"),
+    # An operator's ground-truth label (PUT /api/detections/{id}/label),
+    # feeding GET /api/ml/training-data/export -- see app.models.Detection
+    # .human_label's docstring. Independent of this detection's *track*'s
+    # classification (the system's own best guess), and nullable/unset for
+    # the overwhelming majority of detections that are never labeled.
+    Column("human_label", String(20)),
     Index("idx_detection_track_id", "track_id"),
     Index("idx_detection_timestamp", "timestamp"),
     Index("idx_detection_site_id", "site_id"),

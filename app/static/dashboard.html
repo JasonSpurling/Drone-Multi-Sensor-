@@ -444,6 +444,20 @@
   .playback-row { display: flex; align-items: center; gap: 8px; }
   .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .playback-time { font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; white-space: nowrap; }
+  .label-row {
+    display: flex; align-items: center; gap: 6px; padding: 4px 0; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+  }
+  .label-row:last-child { border-bottom: none; }
+  .label-row .label-meta { flex: 1 1 100%; min-width: 0; font-size: 11px; color: var(--muted); }
+  .label-row .label-meta .sensor { color: var(--text); }
+  .label-chip {
+    font-size: 10px; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); cursor: pointer; line-height: 1.6;
+  }
+  .label-chip:hover { border-color: var(--accent); color: var(--text); }
+  .label-chip.active { color: var(--map-fg); font-weight: 600; }
+  .label-more { font-size: 11px; color: var(--muted); padding: 6px 0 0; text-align: center; }
 
   /* --- Narrow viewport: the desktop layout's two side-by-side floating
      panels (each 340-360px) plus the icon rail don't fit next to each
@@ -656,7 +670,7 @@ const POLL_MS = 15000;
 
 const state = {
   tracks: [], incidents: [], zones: [], sensors: [], allZones: [],
-  selectedTrackId: null, trail: [], classFilter: "all", search: "",
+  selectedTrackId: null, trail: [], trailDetections: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true,
   activePanel: "tracks",
   // null == showing each track's live position; otherwise an index into
@@ -872,6 +886,7 @@ function showDetailsPanel(show) {
 async function selectTrack(id) {
   state.selectedTrackId = id;
   state.trail = [];
+  state.trailDetections = [];
   state.scrubIndex = null;
   stopPlayback();
   showDetailsPanel(true);
@@ -886,6 +901,10 @@ async function selectTrack(id) {
     state.trail = history
       .filter((d) => d.latitude != null && d.longitude != null)
       .map((d) => ({ lat: d.latitude, lon: d.longitude, t: d.timestamp }));
+    // Kept separately from the lightweight trail above (which only the
+    // map/sparkline need) -- the labeling UI in renderDetails() needs each
+    // detection's own id/sensor/confidence/human_label, not just a point.
+    state.trailDetections = history;
     renderMap();
     renderDetails();
   } catch (e) {
@@ -1309,6 +1328,12 @@ function renderDetails() {
       </div>
     </div>
 
+    ${state.trailDetections.length > 0 ? `
+    <div class="kv-section">
+      <div class="kv-section-title">Label training data</div>
+      ${renderLabelRows()}
+    </div>` : ""}
+
     ${state.trail.length > 1 ? `
     <div class="kv-section" style="padding-bottom:14px;">
       <div class="kv-section-title">Playback</div>
@@ -1334,6 +1359,65 @@ function renderDetails() {
   if (playBtn) playBtn.addEventListener("click", togglePlayback);
   const liveBtn = document.getElementById("live-btn");
   if (liveBtn) liveBtn.addEventListener("click", goLive);
+  el.querySelectorAll(".label-chip").forEach((btn) => {
+    btn.addEventListener("click", () => labelDetection(Number(btn.dataset.detectionId), btn.dataset.label));
+  });
+}
+
+// The most recent handful of the selected track's detections, each with
+// four quick-label buttons (drone/bird/aircraft/unknown) -- what turns
+// real accumulated sensor traffic into the labeled CSV app.ml.train needs
+// (GET /api/ml/training-data/export), without which app/ml/ stays
+// scaffolding forever. Capped rather than listing the whole history (which
+// can run into the hundreds/thousands) -- labeling a representative sample
+// as data comes in is the realistic workflow, not hand-labeling everything.
+const LABEL_ROWS_SHOWN = 8;
+const TRAINABLE_LABELS = ["drone", "bird", "aircraft", "unknown"];
+
+function renderLabelRows() {
+  const detections = state.trailDetections.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+  const shown = detections.slice(0, LABEL_ROWS_SHOWN);
+  const rows = shown
+    .map((d) => {
+      const chips = TRAINABLE_LABELS.map((label) => {
+        const active = d.human_label === label;
+        const style = active ? `style="background:${CLASS_COLOR[label]};border-color:${CLASS_COLOR[label]};"` : "";
+        return `<button class="label-chip${active ? " active" : ""}" ${style} data-detection-id="${d.id}" data-label="${label}" aria-pressed="${active}">${label}</button>`;
+      }).join("");
+      return `
+        <div class="label-row">
+          <div class="label-meta"><span class="sensor">${escapeHtml(d.sensor_id)}</span> · ${fmtRelative(d.timestamp)}</div>
+          ${chips}
+        </div>`;
+    })
+    .join("");
+  const more = detections.length > LABEL_ROWS_SHOWN
+    ? `<div class="label-more">+${detections.length - LABEL_ROWS_SHOWN} more -- use GET /api/ml/training-data/export for the full labeled set</div>`
+    : "";
+  return rows + more;
+}
+
+async function labelDetection(detectionId, label) {
+  const detection = state.trailDetections.find((d) => d.id === detectionId);
+  if (!detection) return;
+  // Clicking the already-active label clears it (a quick way to undo a
+  // mis-click) instead of only ever being able to set one.
+  const nextLabel = detection.human_label === label ? null : label;
+  try {
+    const updated = await fetchJSON(`/api/detections/${detectionId}/label`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: nextLabel }),
+    });
+    detection.human_label = updated.human_label;
+    renderDetails();
+  } catch (e) {
+    if (e instanceof AuthError) {
+      showAuthBar(true);
+    } else {
+      console.error(e);
+    }
+  }
 }
 
 let leafletMap = null;

@@ -362,6 +362,9 @@ def test_icon_only_buttons_have_accessible_names(live_server, page):
         '.rail-btn[data-panel="tracks"]',
         '.rail-btn[data-panel="alerts"]',
         '.rail-btn[data-panel="sensors"]',
+        '.rail-btn[data-panel="zones"]',
+        '.rail-btn[data-panel="reports"]',
+        "#theme-toggle",
     ):
         label = page.locator(selector).get_attribute("aria-label")
         assert label, f"{selector} has no accessible name"
@@ -467,3 +470,41 @@ def test_map_offline_banner_appears_after_repeated_tile_failures_and_clears_on_r
     assert result["shownAfterTwo"] is False  # below the 3-failure threshold
     assert result["shownAfterThree"] is True
     assert result["hiddenAfterLoad"] is True
+
+
+def test_labeling_a_detection_from_the_track_details_panel(live_server, page):
+    """Real browser click-through of the labeling workflow (see
+    app/api/ml_training.py, app/models.py's Detection.human_label) -- turns
+    real accumulated sensor traffic into training data for app/ml/train.py
+    without hand-editing a CSV.
+    """
+    requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".label-row")
+
+    assert page.locator(".label-chip").count() == 4  # drone/bird/aircraft/unknown
+    row = page.locator(".label-row").first
+    row.locator('.label-chip[data-label="drone"]').click()
+    page.wait_for_selector('.label-row .label-chip[data-label="drone"].active')
+
+    # Clicking the same chip again clears it (undo a mis-click).
+    row.locator('.label-chip[data-label="drone"]').click()
+    page.wait_for_function(
+        "!document.querySelector('.label-row .label-chip.active')"
+    )
+
+
+def test_labeled_detection_appears_in_the_ml_training_export(live_server, page):
+    r = requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5)
+    r.raise_for_status()
+    detection_id = r.json()["id"]
+
+    requests.put(
+        f"{live_server}/api/detections/{detection_id}/label", json={"label": "drone"}, timeout=5
+    ).raise_for_status()
+
+    export = requests.get(f"{live_server}/api/ml/training-data/export", timeout=5)
+    assert export.status_code == 200
+    assert "drone" in export.text

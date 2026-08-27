@@ -25,6 +25,7 @@ from app.api import (
     health,
     incidents,
     metrics,
+    ml_training,
     reports,
     sensor_registry,
     sensors,
@@ -299,6 +300,7 @@ app.include_router(sensors.router, prefix="/api")
 app.include_router(sensor_registry.router, prefix="/api")
 app.include_router(authorized_operators.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
+app.include_router(ml_training.router, prefix="/api")
 app.include_router(sites.router, prefix="/api")
 app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
