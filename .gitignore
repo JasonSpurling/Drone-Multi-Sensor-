@@ -13,3 +13,14 @@ venv/
 # Local SQLite data
 /data/
 *.db
+
+# Deployment secrets (see .env.example / deploy/*.env.example instead)
+.env
+*.env
+!*.env.example
+
+# Actual/diff screenshots from a failed visual regression test
+# (tests_e2e/conftest.py's assert_matches_visual_baseline) -- for local
+# review only, never committed; the baselines themselves (tests_e2e/
+# visual_baselines/) are real fixtures and are tracked normally.
+tests_e2e/.visual_failures/

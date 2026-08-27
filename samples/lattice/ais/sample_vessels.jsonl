@@ -1,0 +1,6 @@
+{"mmsi": "366990001", "vessel_name": "MV SAMPLE CARGO", "ship_type": "cargo", "latitude": 37.8080, "longitude": -122.4177, "sog_knots": 11.2, "cog_degrees": 265.0, "timestamp": "2026-08-22T06:00:00"}
+{"mmsi": "366990002", "vessel_name": "SAMPLE FERRY", "ship_type": "passenger", "latitude": 37.7955, "longitude": -122.3937, "sog_knots": 14.5, "cog_degrees": 310.0, "timestamp": "2026-08-22T06:00:00"}
+{"mmsi": "366990003", "vessel_name": "SAMPLE TUG 1", "ship_type": "tug", "latitude": 37.8272, "longitude": -122.3736, "sog_knots": 4.8, "cog_degrees": 90.0, "timestamp": "2026-08-22T06:00:00"}
+{"mmsi": "366990001", "vessel_name": "MV SAMPLE CARGO", "ship_type": "cargo", "latitude": 37.8095, "longitude": -122.4225, "sog_knots": 11.4, "cog_degrees": 266.0, "timestamp": "2026-08-22T06:01:00"}
+{"mmsi": "366990002", "vessel_name": "SAMPLE FERRY", "ship_type": "passenger", "latitude": 37.7981, "longitude": -122.3980, "sog_knots": 14.3, "cog_degrees": 308.0, "timestamp": "2026-08-22T06:01:00"}
+{"mmsi": "366990003", "vessel_name": "SAMPLE TUG 1", "ship_type": "tug", "latitude": 37.8271, "longitude": -122.3702, "sog_knots": 5.1, "cog_degrees": 88.0, "timestamp": "2026-08-22T06:01:00"}

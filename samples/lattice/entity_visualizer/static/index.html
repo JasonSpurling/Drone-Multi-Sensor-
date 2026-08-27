@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lattice Entity Visualizer</title>
+<!-- Loaded from a CDN, not vendored: this is a standalone local sample
+     app run by a developer with normal internet access, not part of the
+     main app's CI-tested dashboard (see app/static/dashboard.html, whose
+     e2e tests vendor Leaflet specifically to avoid a CDN dependency in
+     CI). -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  body { font-family: system-ui, sans-serif; }
+  #status {
+    position: absolute; top: 10px; left: 50px; z-index: 1000;
+    background: rgba(20, 20, 20, 0.85); color: #eee;
+    padding: 6px 12px; border-radius: 6px; font-size: 13px;
+  }
+  .entity-popup dt { font-weight: 600; }
+  .entity-popup dd { margin: 0 0 4px 0; }
+</style>
+</head>
+<body>
+<div id="status">Loading entities…</div>
+<div id="map"></div>
+<script>
+  const map = L.map("map").setView([37.8, -122.4], 10);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
+
+  const DISPOSITION_COLOR = {
+    DISPOSITION_FRIENDLY: "#3b82f6",
+    DISPOSITION_ASSUMED_FRIENDLY: "#3b82f6",
+    DISPOSITION_HOSTILE: "#ef4444",
+    DISPOSITION_SUSPICIOUS: "#f97316",
+    DISPOSITION_NEUTRAL: "#22c55e",
+    DISPOSITION_PENDING: "#a855f7",
+    DISPOSITION_UNKNOWN: "#9ca3af",
+  };
+
+  let markers = {}; // entity_id -> L.CircleMarker
+
+  async function refresh() {
+    let data;
+    try {
+      const response = await fetch("/api/entities");
+      data = await response.json();
+    } catch (err) {
+      document.getElementById("status").textContent = "Error fetching entities: " + err;
+      return;
+    }
+
+    const seenIds = new Set();
+    for (const feature of data.features) {
+      const [lon, lat] = feature.geometry.coordinates;
+      const props = feature.properties;
+      seenIds.add(props.entity_id);
+
+      const color = DISPOSITION_COLOR[props.disposition] || DISPOSITION_COLOR.DISPOSITION_UNKNOWN;
+      let marker = markers[props.entity_id];
+      if (!marker) {
+        marker = L.circleMarker([lat, lon], { radius: 8, weight: 2 }).addTo(map);
+        markers[props.entity_id] = marker;
+      } else {
+        marker.setLatLng([lat, lon]);
+      }
+      marker.setStyle({ color, fillColor: color, fillOpacity: props.is_live ? 0.8 : 0.3 });
+      marker.bindPopup(`
+        <div class="entity-popup">
+          <dl>
+            <dt>Name</dt><dd>${props.name}</dd>
+            <dt>Entity ID</dt><dd>${props.entity_id}</dd>
+            <dt>Disposition</dt><dd>${props.disposition}</dd>
+            <dt>Environment</dt><dd>${props.environment}</dd>
+            <dt>Live</dt><dd>${props.is_live}</dd>
+          </dl>
+        </div>
+      `);
+    }
+
+    // Remove markers for entities no longer present (deleted/expired).
+    for (const id of Object.keys(markers)) {
+      if (!seenIds.has(id)) {
+        map.removeLayer(markers[id]);
+        delete markers[id];
+      }
+    }
+
+    document.getElementById("status").textContent =
+      `${data.features.length} entit${data.features.length === 1 ? "y" : "ies"} — updated ${new Date().toLocaleTimeString()}`;
+  }
+
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

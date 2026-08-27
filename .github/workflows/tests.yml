@@ -1,0 +1,98 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/ -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app/ tests/ tests_e2e/ migrations/ scripts/ samples/
+      # --ignore-missing-imports: several adapters import optional,
+      # hardware/protocol-specific packages (numpy, cryptography excepted --
+      # those are core deps) not installed here by design (see
+      # requirements-*.txt) -- their own stub-less third-party types aren't
+      # what this check is for; app's own code is still fully checked.
+      - run: mypy app/ --ignore-missing-imports
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-e2e.txt
+      - run: playwright install --with-deps chromium
+      - run: python -m pytest tests_e2e/ -v
+
+  load-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r requirements-e2e.txt
+      # Not a throughput/perf-regression gate -- GitHub-hosted runners'
+      # CPU/noisy-neighbor variance makes an absolute numeric threshold
+      # here meaningless (see scripts/load_test.py's module docstring and
+      # --fail-on-errors' help text). What this actually catches: a
+      # concurrency bug (a deadlock, an unhandled exception, a race in
+      # detection association) that only shows up under concurrent load,
+      # not in the single-request-at-a-time pytest suite. Modest scale on
+      # purpose -- enough concurrency to exercise app.tracking's
+      # _association_lock, short enough to stay a fast CI job.
+      - run: |
+          set -e
+          # data/ isn't in git (SQLite's default DRONE_DATABASE_URL points
+          # there, but an empty directory has nothing to check in) -- a
+          # fresh checkout doesn't have it, and SQLite won't create a
+          # missing parent directory for you, so without this the app
+          # fails at startup with "unable to open database file".
+          mkdir -p data
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            if [ "$i" -eq 30 ]; then
+              echo "App never became healthy" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          python scripts/load_test.py --url http://127.0.0.1:8000 \
+            --mode both --sensors 10 --duration 5 --batch-size 10 --requests 20 \
+            --fail-on-errors
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt -r requirements-postgres.txt -r requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      # Static analysis of this app's own code (unlike pip-audit above,
+      # which only checks third-party CVEs). Findings config is in
+      # pyproject.toml's [tool.bandit] -- every skipped check ID there is
+      # individually justified against this codebase's actual usage.
+      - run: bandit -r app/ scripts/ samples/ -c pyproject.toml

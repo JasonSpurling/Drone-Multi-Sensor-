@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def utcnow() -> datetime:
@@ -10,4 +10,4 @@ def utcnow() -> datetime:
     timestamps stored throughout this app. Replaces datetime.utcnow(),
     deprecated since Python 3.12.
     """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)

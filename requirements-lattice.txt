@@ -1,0 +1,2 @@
+-r requirements.txt
+anduril-lattice-sdk==4.27.0

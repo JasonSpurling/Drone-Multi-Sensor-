@@ -1,0 +1,6 @@
+-r requirements.txt
+bleak==3.0.2
+# Published to PyPI under a different name than its importable package
+# (dtpyodid) -- confirmed by installing it directly: pip reports its
+# declared project name as "firmware-pyodid".
+firmware-pyodid @ git+https://github.com/dronetag/python-odid@dronetag

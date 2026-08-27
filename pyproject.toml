@@ -1,0 +1,95 @@
+[tool.ruff]
+target-version = "py311"
+# This codebase's established style (hundreds of lines already, well
+# before this config existed) favors dense, information-carrying lines --
+# a detection/track field list, an inline rationale comment -- over
+# wrapping at 88. 120 accommodates that without rubber-stamping truly
+# excessive lines away: only a handful in the whole codebase exceed it.
+line-length = 120
+
+[tool.ruff.lint]
+# A deliberate select, not ruff's full default set (which as of 0.16 is
+# very broad -- YTT/S/ASYNC/etc. included) -- chosen for the value they
+# add to this specific codebase, not accepted wholesale:
+#   E, F      pycodestyle errors + pyflakes -- baseline correctness/style.
+#   B         flake8-bugbear -- real bug patterns (mutable defaults, loop-
+#             variable closures, etc.), with the FastAPI Depends()/Query()
+#             default-argument idiom explicitly allowed below (B008 as
+#             ruff ships it doesn't know FastAPI's own pattern is safe).
+#   C4        flake8-comprehensions -- unnecessary/inefficient collection
+#             construction.
+#   I         isort -- import ordering.
+#   UP        pyupgrade -- modern Python 3.11 syntax.
+#   SIM       flake8-simplify -- straightforward simplifications.
+#   RUF       ruff's own additional checks.
+#   BLE       flake8-blind-except -- flags bare `except Exception`; kept
+#             selected because most catches in this codebase should be
+#             narrower, but the couple of deliberately-broad ones (a UDP
+#             ingest loop, a liveness check) are marked with an inline
+#             `# noqa: BLE001` and a comment explaining why, rather than
+#             disabled wholesale.
+#   ASYNC     flake8-async -- blocking calls (time.sleep, etc.) inside
+#             `async def` functions, which silently stall the whole event
+#             loop instead of just the calling task.
+#
+# Deliberately NOT selected:
+#   DTZ (flake8-datetimez) -- this app stores and compares naive UTC
+#   datetimes everywhere by design (see app/util.py's utcnow() and
+#   app/schema.py's docstring on why timestamps are naive-UTC ISO-8601
+#   strings, for exact round-trip behavior across SQLite/PostgreSQL).
+#   Requiring tzinfo-aware datetimes would conflict with that design
+#   throughout the codebase, not fix a real bug.
+select = ["E", "F", "B", "C4", "I", "UP", "SIM", "RUF", "BLE", "ASYNC"]
+
+[tool.pytest.ini_options]
+# Default to the unit/API suite only -- tests_e2e/ needs playwright (a
+# separate, heavier install: requirements-e2e.txt, `playwright install
+# chromium`) not part of the base dev setup, and its conftest.py imports
+# playwright at module scope, so an unscoped `pytest`/`python -m pytest`
+# without this would fail to even collect without it installed. Run
+# `pytest tests_e2e/` explicitly for the browser-driven suite.
+testpaths = ["tests"]
+
+[tool.bandit]
+# Every finding bandit raises against app/ (run `bandit -r app/`) falls into
+# one of these four checks, each verified against this codebase's actual
+# usage rather than skipped on the plugin ID alone:
+#   B310  urllib.urlopen "audit". Every call site (app/alerting.py's Slack/
+#         Twilio/webhook senders, app/notifications.py, app/airspace/*, and
+#         the sensor-adapter bridges under app/adapters/) passes a URL
+#         built from an operator-set env var or a hardcoded https:// API
+#         endpoint -- never a value that reaches this code from a request
+#         body, query param, or other attacker-controlled input. B310 exists
+#         to catch attacker-controlled schemes (file://, etc.); there's no
+#         such input path here.
+#   B104  hardcoded_bind_all_interfaces, on asterix_bridge.py's --listen-host
+#         argparse default. That script is a standalone bridge process
+#         listening for sensor UDP traffic, not the main app; 0.0.0.0 is the
+#         deliberate default for a LAN-facing listener, and it's a CLI flag
+#         an operator can override -- not a hardcoded, un-overridable bind.
+#   B405/B406  xml.etree.ElementTree / xml.sax.saxutils.escape "parsing
+#         untrusted XML". Neither is actually used to parse XML here:
+#         app/cot.py only builds outgoing Cursor-on-Target XML (Element/
+#         SubElement/tostring, never fromstring/parse), and app/export.py
+#         uses escape() to safely encode this app's own track data *into*
+#         KML/GPX output -- the safe direction, not the vulnerable one these
+#         checks warn about.
+#   B101  assert_used, all in app/tracking.py and app/incidents.py. Every
+#         instance documents an internal invariant already guaranteed a few
+#         lines above (e.g. "just persisted by create_track above") for
+#         mypy's benefit, not a security or input-validation boundary --
+#         nothing user-facing depends on the assert firing.
+# Verified via `bandit -r app/ -q` producing zero findings outside these
+# four IDs before they were added here.
+skips = ["B310", "B104", "B405", "B406", "B101"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own dependency-injection pattern -- Depends(...)/Query(...) as
+# a parameter default -- is correct and idiomatic, not the "mutable
+# default argument" footgun B008 exists to catch; FastAPI evaluates these
+# per-request, not once at function-definition time like a real mutable
+# default would be.
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
+    "app.auth.require_role",
+]

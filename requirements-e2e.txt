@@ -1,0 +1,8 @@
+# Browser-driven dashboard tests (tests_e2e/) -- separate from
+# requirements-dev.txt's unit/API test deps since this pulls in a real
+# browser via `playwright install chromium`, only needed for this one
+# test class. See tests_e2e/README.md.
+-r requirements-dev.txt
+playwright==1.62.0
+requests==2.33.1
+pillow==12.3.0
