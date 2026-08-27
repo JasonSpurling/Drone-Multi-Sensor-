@@ -547,7 +547,7 @@ def test_map_marker_renders_a_distinct_symbol_per_aircraft_category(live_server,
         }
     """)
     assert "<line" in shapes["rotor"]  # rotor cross, not the triangle
-    assert "<polygon" in shapes["generic"]  # unchanged fallback triangle
+    assert "<path" in shapes["generic"]  # the realistic airplane silhouette fallback
     assert shapes["rotor"] != shapes["generic"]
 
 
@@ -599,3 +599,61 @@ def test_recenter_control_fits_all_tracks_zones_and_sensors(live_server, page):
     page.wait_for_function(
         f"leafletMap.getBounds().contains([{DETECTION_BODY['latitude']}, {DETECTION_BODY['longitude']}])"
     )
+
+
+def test_aircraft_marker_uses_realistic_silhouette_and_altitude_color(live_server, page):
+    """markerIcon() draws the same airplane silhouette classIcon() already
+    uses for the sidebar thumbnail (not the old flat triangle), colored by
+    real altitude data (like most real flight trackers) when known, with
+    an honest fallback to the flat classification color when it isn't.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-low", "sensor_type": "adsb", "latitude": 51.5, "longitude": -0.1,
+            "altitude_m": 200, "confidence": 0.99, "raw_data": {"hex_ident": "111111"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-high", "sensor_type": "adsb", "latitude": 51.6, "longitude": -0.2,
+            "altitude_m": 10000, "confidence": 0.99, "raw_data": {"hex_ident": "222222"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-unknown", "sensor_type": "adsb", "latitude": 51.7, "longitude": -0.3,
+            "confidence": 0.99, "raw_data": {"hex_ident": "333333"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    result = page.evaluate("""
+        () => {
+            const low = state.tracks.find(t => t.altitude_m === 200);
+            const high = state.tracks.find(t => t.altitude_m === 10000);
+            const unknown = state.tracks.find(t => t.altitude_m == null && t.classification === "aircraft");
+            return {
+                low: markerIcon(low, false).options.html,
+                high: markerIcon(high, false).options.html,
+                unknown: markerIcon(unknown, false).options.html,
+            };
+        }
+    """)
+    # A distinctive substring of AIRCRAFT_SILHOUETTE_PATH (dashboard.html)
+    # -- confirms the real airplane silhouette rendered, not the old flat
+    # triangle polygon.
+    for html in result.values():
+        assert "M21 16v-2l-8-5" in html
+
+    assert "hsl(" in result["low"]
+    assert "hsl(" in result["high"]
+    assert result["low"] != result["high"]  # different altitudes, genuinely different colors
+    assert "hsl(" not in result["unknown"]  # no altitude known -> flat classification color, not a guess

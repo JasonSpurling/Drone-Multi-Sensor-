@@ -642,7 +642,11 @@
 
   <div id="map-legend">
     <div class="item"><span class="dot" style="background:var(--drone)"></span>Drone</div>
-    <div class="item"><span class="dot" style="background:var(--aircraft)"></span>Aircraft</div>
+    <div class="item">
+      <span style="display:inline-block;width:28px;height:9px;border-radius:2px;
+        background:linear-gradient(90deg, hsl(25,80%,55%), hsl(89,80%,55%), hsl(153,80%,55%), hsl(216,80%,55%), hsl(280,80%,55%));"></span>
+      Aircraft (by altitude)
+    </div>
     <div class="item"><span class="dot" style="background:var(--bird)"></span>Bird</div>
     <div class="item"><span class="dot" style="background:var(--friendly)"></span>Friendly</div>
     <div class="item"><span class="dot" style="background:var(--unknown)"></span>Unknown</div>
@@ -1606,64 +1610,120 @@ const AIRCRAFT_CATEGORY_LABEL = {
 // distinction the sensor data doesn't actually support: a track with no
 // aircraft_category always gets the plain triangle, not a guess.
 function aircraftShape(category, size, half, color, stroke, strokeWidth) {
+  const sizeViewBox = `0 0 ${size} ${size}`;
   const group = category ? AIRCRAFT_CATEGORY_GROUP[category] : null;
   if (group === "rotorcraft") {
     // Rotor blades: a cross through a small hub -- reads as "helicopter"
     // at a glance, nothing like a fixed-wing silhouette.
-    return `
+    return {
+      viewBox: sizeViewBox,
+      markup: `
       <line x1="${half}" y1="1" x2="${half}" y2="${size - 1}" stroke="${color}" stroke-width="2"/>
       <line x1="1" y1="${half}" x2="${size - 1}" y2="${half}" stroke="${color}" stroke-width="2"/>
-      <circle cx="${half}" cy="${half}" r="2" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+      <circle cx="${half}" cy="${half}" r="2" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+    };
   }
   if (group === "glider") {
     // A bowtie of long, thin wings -- no fuselage-triangle bulk, evoking
     // a sailplane's long unpowered wingspan.
-    return `
+    return {
+      viewBox: sizeViewBox,
+      markup: `
       <polygon points="1,3 ${half},${half} 1,${size - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>
-      <polygon points="${size - 1},3 ${half},${half} ${size - 1},${size - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+      <polygon points="${size - 1},3 ${half},${half} ${size - 1},${size - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+    };
   }
   if (group === "lighter_than_air") {
     // A balloon envelope with a small gondola tail underneath -- distinct
     // from the bird glyph's plain dot and the default circle used for
     // drone/friendly/unknown classifications.
-    return `
+    return {
+      viewBox: sizeViewBox,
+      markup: `
       <circle cx="${half}" cy="${half - 1}" r="${half - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>
-      <polygon points="${half - 1.5},${size - 3} ${half + 1.5},${size - 3} ${half},${size - 1}" fill="${color}"/>`;
+      <polygon points="${half - 1.5},${size - 3} ${half + 1.5},${size - 3} ${half},${size - 1}" fill="${color}"/>`,
+    };
   }
   if (group === "uav") {
     // A diamond -- deliberately not the quadcopter glyph classIcon() uses
     // for this app's own DRONE classification, so an ADS-B-broadcasting
     // UAV (someone else's, category-reporting) never looks like a threat
     // detection this tracker itself flagged as a drone.
-    return `<polygon points="${half},1 ${size - 1},${half} ${half},${size - 1} 1,${half}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    return {
+      viewBox: sizeViewBox,
+      markup: `<polygon points="${half},1 ${size - 1},${half} ${half},${size - 1} 1,${half}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`,
+    };
   }
+  // Same realistic silhouette classIcon() uses for the sidebar/details
+  // thumbnail (not a crude triangle) -- one visual language for "this is
+  // an aircraft" everywhere in the app, not a plain-map-marker version
+  // that looks different from its own list entry. Drawn on a 24x24
+  // viewBox (see AIRCRAFT_SILHOUETTE_PATH below), scaled to fit whatever
+  // size this particular marker needs -- returns {markup, viewBox} since
+  // this is the one shape group that isn't already coordinate-native to
+  // the size x size viewBox every other shape above uses.
   if (group === "light") {
-    // Same triangle, scaled down -- "light/small fixed-wing" is a real
-    // distinction (a Cessna vs. an airliner), just not one that needs its
-    // own silhouette the way rotorcraft/glider/balloon/UAV do.
-    const inset = 2.5;
-    return `<polygon points="${half},${1 + inset} ${size - 1 - inset},${size - 1 - inset} ${half},${size - 5} ${1 + inset},${size - 1 - inset}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    // Same silhouette, shrunk around center -- "light/small fixed-wing"
+    // is a real distinction (a Cessna vs. an airliner), just not one that
+    // needs its own silhouette the way rotorcraft/glider/balloon/UAV do.
+    return {
+      viewBox: "0 0 24 24",
+      markup: `<g transform="translate(12,12) scale(0.68) translate(-12,-12)">
+        <path d="${AIRCRAFT_SILHOUETTE_PATH}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth * 0.5}"/>
+      </g>`,
+    };
   }
-  return `<polygon points="${half},1 ${size - 1},${size - 1} ${half},${size - 5} 1,${size - 1}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  return {
+    viewBox: "0 0 24 24",
+    markup: `<path d="${AIRCRAFT_SILHOUETTE_PATH}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth * 0.5}"/>`,
+  };
+}
+
+// The same path classIcon() draws for an "aircraft" thumbnail -- reused
+// here so the on-map marker and the sidebar/details icon are visibly the
+// same symbol, not two different-looking stand-ins for "aircraft".
+const AIRCRAFT_SILHOUETTE_PATH =
+  "M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2.5 2v1.5L12 21l4.5 1.5V21L14 19v-5.5z";
+
+// Real, already-tracked data (track.altitude_m), not a fabricated signal
+// -- colors an aircraft marker by altitude the way most real flight
+// trackers (FlightRadar24, OpenSky, ...) do, low (warm/orange) to high
+// (cool/purple). Only applied to AIRCRAFT-classified tracks: for every
+// other classification, *what kind of object this is* (drone/bird/
+// friendly/unknown) is the more operationally important signal for a
+// counter-drone system to color by at a glance, which altitude would
+// wash out. Returns null (falls back to the flat classification color)
+// when altitude isn't known, rather than guessing one.
+const ALTITUDE_COLOR_MAX_M = 12000; // ~40,000 ft, a typical airliner cruise ceiling
+function altitudeColor(altitude_m) {
+  if (altitude_m == null) return null;
+  const t = Math.max(0, Math.min(1, altitude_m / ALTITUDE_COLOR_MAX_M));
+  const hue = 25 + t * (280 - 25); // orange (low) -> yellow -> green -> cyan -> blue -> purple (high)
+  return `hsl(${hue}, 80%, 55%)`;
 }
 
 function markerIcon(track, selected) {
-  const color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
+  let color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
+  if (track.classification === "aircraft") {
+    color = altitudeColor(track.altitude_m) || color;
+  }
   const size = selected ? 24 : 16;
   const half = size / 2;
   const stroke = selected ? '#fff' : 'rgba(255,255,255,0.35)';
   const strokeWidth = selected ? 2 : 1;
-  let shape;
+  let shape, viewBox;
   if (track.classification === "aircraft") {
-    shape = aircraftShape(track.aircraft_category, size, half, color, stroke, strokeWidth);
+    ({ markup: shape, viewBox } = aircraftShape(track.aircraft_category, size, half, color, stroke, strokeWidth));
   } else if (track.classification === "bird") {
     shape = `<circle cx="${half}" cy="${half}" r="${half - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    viewBox = `0 0 ${size} ${size}`;
   } else {
     shape = `<circle cx="${half}" cy="${half}" r="${half - 2}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    viewBox = `0 0 ${size} ${size}`;
   }
   const rotation = track.heading_deg != null ? `transform:rotate(${track.heading_deg}deg);` : "";
   const html = `<div style="width:${size}px;height:${size}px;${rotation}">
-    <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${shape}</svg>
+    <svg width="${size}" height="${size}" viewBox="${viewBox}">${shape}</svg>
   </div>`;
   return L.divIcon({ html, className: "", iconSize: [size, size], iconAnchor: [half, half] });
 }

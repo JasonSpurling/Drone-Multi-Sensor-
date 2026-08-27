@@ -739,12 +739,25 @@ to disable) and merges the category into each detection; `app.tracking`
 carries it onto the track (`Track.aircraft_category`), and the dashboard
 map renders a genuinely different symbol per category group -- a rotor
 cross for rotorcraft, a wing bowtie for gliders, a balloon envelope for
-lighter-than-air, a diamond for UAVs -- instead of one generic triangle
-for every aircraft. Falls back to that same generic triangle whenever no
-category is known (most GA aircraft with older transponders never report
-one), never a guess. If `aircraft.json` isn't reachable at all (a minimal
-dump1090 install without its web server running), detections keep flowing
-normally, just without category enrichment.
+lighter-than-air, a diamond for UAVs, a realistic airplane silhouette
+(the same one the sidebar/details thumbnail already uses) for fixed-wing
+aircraft -- instead of one generic shape for every aircraft. Falls back
+to that same silhouette whenever no category is known (most GA aircraft
+with older transponders never report one), never a guess. If
+`aircraft.json` isn't reachable at all (a minimal dump1090 install
+without its web server running), detections keep flowing normally, just
+without category enrichment.
+
+An aircraft-classified marker is also colored by **altitude** (real,
+already-tracked `Track.altitude_m` data), low (orange) to high (purple)
+-- the same convention most real flight trackers (FlightRadar24, OpenSky)
+use, with a gradient swatch in the map legend. Every other classification
+(drone/bird/friendly/unknown) stays colored by *what kind of object it
+is*, not altitude -- for a counter-drone system, that's the more
+operationally important signal to color by at a glance, and altitude
+coloring would wash it out. Falls back to the flat classification color
+when altitude isn't known, same "never guess" rule as the category
+symbols above.
 
 **Radar via ASTERIX CAT048** (`app/adapters/asterix_bridge.py`): the
 protocol most commercial primary/secondary surveillance radars actually
