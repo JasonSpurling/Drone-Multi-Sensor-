@@ -508,3 +508,44 @@ def test_labeled_detection_appears_in_the_ml_training_export(live_server, page):
     export = requests.get(f"{live_server}/api/ml/training-data/export", timeout=5)
     assert export.status_code == 200
     assert "drone" in export.text
+
+
+def test_map_marker_renders_a_distinct_symbol_per_aircraft_category(live_server, page):
+    """The point of Track.aircraft_category (real ICAO ADS-B emitter
+    category, see app/adapters/dump1090_bridge.py): a rotorcraft-category
+    track gets a genuinely different on-map symbol than the generic
+    aircraft triangle, not just a different color.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb", "latitude": 51.5, "longitude": -0.1,
+            "confidence": 0.99, "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-2", "sensor_type": "adsb", "latitude": 51.6, "longitude": -0.2,
+            "confidence": 0.99, "raw_data": {"hex_ident": "aabbcc"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    shapes = page.evaluate("""
+        () => {
+            const rotor = state.tracks.find(t => t.aircraft_category === "A7");
+            const generic = state.tracks.find(t => t.classification === "aircraft" && t.aircraft_category == null);
+            return {
+                rotor: markerIcon(rotor, false).options.html,
+                generic: markerIcon(generic, false).options.html,
+            };
+        }
+    """)
+    assert "<line" in shapes["rotor"]  # rotor cross, not the triangle
+    assert "<polygon" in shapes["generic"]  # unchanged fallback triangle
+    assert shapes["rotor"] != shapes["generic"]

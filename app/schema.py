@@ -57,6 +57,10 @@ track = Table(
     Column("speed_mps", Float),
     Column("position_uncertainty_m", Float),
     Column("maneuver_probability", Float),
+    # The real ICAO ADS-B emitter category (e.g. "A7" rotorcraft, "B1"
+    # glider) most recently reported for this track -- see
+    # app.models.Track.aircraft_category's docstring.
+    Column("aircraft_category", String(2)),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --

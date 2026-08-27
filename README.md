@@ -705,6 +705,24 @@ format. A small bridge script parses that feed and posts it to the API:
 .venv/bin/python -m app.adapters.dump1090_bridge --sbs-host 127.0.0.1 --sbs-port 30003
 ```
 
+**Distinct map symbols per aircraft type**: the SBS-1 text feed above only
+carries position/altitude, not aircraft type -- but dump1090-fa (and
+similar forks) also serve a richer `aircraft.json` on their web UI port
+(default 8080) that includes the real ICAO ADS-B *emitter category*
+(DO-260B Table 2-36: light/heavy fixed-wing, rotorcraft, glider,
+lighter-than-air, UAV, ...). The bridge polls this automatically
+(`--aircraft-json-url` to override its location, `--no-category-lookup`
+to disable) and merges the category into each detection; `app.tracking`
+carries it onto the track (`Track.aircraft_category`), and the dashboard
+map renders a genuinely different symbol per category group -- a rotor
+cross for rotorcraft, a wing bowtie for gliders, a balloon envelope for
+lighter-than-air, a diamond for UAVs -- instead of one generic triangle
+for every aircraft. Falls back to that same generic triangle whenever no
+category is known (most GA aircraft with older transponders never report
+one), never a guess. If `aircraft.json` isn't reachable at all (a minimal
+dump1090 install without its web server running), detections keep flowing
+normally, just without category enrichment.
+
 **Radar via ASTERIX CAT048** (`app/adapters/asterix_bridge.py`): the
 protocol most commercial primary/secondary surveillance radars actually
 speak on their network interface, not a proprietary vendor format --

@@ -1536,6 +1536,79 @@ function initMap() {
 // A distinct shape per classification (not just color) so markers are
 // tellable apart at a glance even for a viewer with red/green color
 // vision deficiency, plus a heading arrow overlay for the selected track.
+// Real ICAO ADS-B emitter categories (DO-260B Table 2-36; see
+// app.models.Track.aircraft_category and app/adapters/dump1090_bridge.py
+// for where a live feed actually supplies these) grouped into the shapes
+// aircraftShape() below draws. A1/A2 (light/small) and A3-A6 (large/
+// high-vortex/heavy/high-performance) both fall back to the plain
+// triangle -- the same glyph shown when no category is known at all --
+// since "somewhat bigger than light" isn't worth a whole extra symbol,
+// unlike the genuinely different silhouettes below.
+const AIRCRAFT_CATEGORY_GROUP = {
+  A1: "light", A2: "light",
+  A7: "rotorcraft",
+  B1: "glider",
+  B2: "lighter_than_air",
+  B6: "uav",
+};
+// Human-readable names for a marker's hover tooltip (see renderMap()) --
+// every real code DO-260B defines, not just the ones with a dedicated
+// shape above, so hovering a large/heavy/high-performance aircraft still
+// says something more specific than just "aircraft".
+const AIRCRAFT_CATEGORY_LABEL = {
+  A1: "light aircraft", A2: "small aircraft", A3: "large aircraft",
+  A4: "high-vortex large aircraft", A5: "heavy aircraft", A6: "high-performance aircraft",
+  A7: "rotorcraft", B1: "glider", B2: "lighter-than-air", B3: "parachutist/skydiver",
+  B4: "ultralight/hang-glider", B6: "UAV", B7: "space vehicle",
+};
+
+// One shape per real, visually-distinct aircraft category group -- falls
+// back to the standard triangle (the same glyph used when no category is
+// known) for every group not worth a dedicated symbol. Never fabricates a
+// distinction the sensor data doesn't actually support: a track with no
+// aircraft_category always gets the plain triangle, not a guess.
+function aircraftShape(category, size, half, color, stroke, strokeWidth) {
+  const group = category ? AIRCRAFT_CATEGORY_GROUP[category] : null;
+  if (group === "rotorcraft") {
+    // Rotor blades: a cross through a small hub -- reads as "helicopter"
+    // at a glance, nothing like a fixed-wing silhouette.
+    return `
+      <line x1="${half}" y1="1" x2="${half}" y2="${size - 1}" stroke="${color}" stroke-width="2"/>
+      <line x1="1" y1="${half}" x2="${size - 1}" y2="${half}" stroke="${color}" stroke-width="2"/>
+      <circle cx="${half}" cy="${half}" r="2" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  }
+  if (group === "glider") {
+    // A bowtie of long, thin wings -- no fuselage-triangle bulk, evoking
+    // a sailplane's long unpowered wingspan.
+    return `
+      <polygon points="1,3 ${half},${half} 1,${size - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>
+      <polygon points="${size - 1},3 ${half},${half} ${size - 1},${size - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  }
+  if (group === "lighter_than_air") {
+    // A balloon envelope with a small gondola tail underneath -- distinct
+    // from the bird glyph's plain dot and the default circle used for
+    // drone/friendly/unknown classifications.
+    return `
+      <circle cx="${half}" cy="${half - 1}" r="${half - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>
+      <polygon points="${half - 1.5},${size - 3} ${half + 1.5},${size - 3} ${half},${size - 1}" fill="${color}"/>`;
+  }
+  if (group === "uav") {
+    // A diamond -- deliberately not the quadcopter glyph classIcon() uses
+    // for this app's own DRONE classification, so an ADS-B-broadcasting
+    // UAV (someone else's, category-reporting) never looks like a threat
+    // detection this tracker itself flagged as a drone.
+    return `<polygon points="${half},1 ${size - 1},${half} ${half},${size - 1} 1,${half}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  }
+  if (group === "light") {
+    // Same triangle, scaled down -- "light/small fixed-wing" is a real
+    // distinction (a Cessna vs. an airliner), just not one that needs its
+    // own silhouette the way rotorcraft/glider/balloon/UAV do.
+    const inset = 2.5;
+    return `<polygon points="${half},${1 + inset} ${size - 1 - inset},${size - 1 - inset} ${half},${size - 5} ${1 + inset},${size - 1 - inset}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+  }
+  return `<polygon points="${half},1 ${size - 1},${size - 1} ${half},${size - 5} 1,${size - 1}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+}
+
 function markerIcon(track, selected) {
   const color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
   const size = selected ? 24 : 16;
@@ -1544,7 +1617,7 @@ function markerIcon(track, selected) {
   const strokeWidth = selected ? 2 : 1;
   let shape;
   if (track.classification === "aircraft") {
-    shape = `<polygon points="${half},1 ${size - 1},${size - 1} ${half},${size - 5} 1,${size - 1}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    shape = aircraftShape(track.aircraft_category, size, half, color, stroke, strokeWidth);
   } else if (track.classification === "bird") {
     shape = `<circle cx="${half}" cy="${half}" r="${half - 3}" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
   } else {
@@ -1657,6 +1730,10 @@ function renderMap() {
     if (scrubbing) marker.setOpacity(0.35);
 
     const labelParts = [`#${t.id}`, t.classification];
+    if (t.aircraft_category) {
+      const categoryLabel = AIRCRAFT_CATEGORY_LABEL[t.aircraft_category] || t.aircraft_category;
+      labelParts.push(categoryLabel);
+    }
     if (t.speed_mps != null) labelParts.push(`${t.speed_mps.toFixed(1)} m/s`);
     const label = labelParts.join(" · ");
     if (selected && !scrubbing) {

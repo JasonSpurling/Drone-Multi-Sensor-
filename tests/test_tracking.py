@@ -252,3 +252,56 @@ def test_confident_classification_does_not_decay_back_to_bird(site_id):
     )
     track = list_tracks(site_id=site_id)[0]
     assert track.classification == Classification.DRONE
+
+
+def test_aircraft_category_is_carried_from_detection_to_track(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"
+
+
+def test_aircraft_category_defaults_to_none_when_never_reported(site_id):
+    associate_detection(make_detection(site_id, sensor_type=SensorType.RADAR))
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category is None
+
+
+def test_aircraft_category_updates_to_the_latest_report(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A3"},
+        )
+    )
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            timestamp=BASE_TIME + timedelta(seconds=5),
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"
+
+
+def test_aircraft_category_is_not_cleared_by_a_later_detection_without_one(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            timestamp=BASE_TIME + timedelta(seconds=5),
+            raw_data={"hex_ident": "4ca593"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"

@@ -169,6 +169,17 @@ class Track(BaseModel):
         description="IMM MANEUVER-mode probability (0-1): how confident the tracker is that "
         "this object is currently maneuvering (turning/accelerating) rather than flying straight",
     )
+    aircraft_category: str | None = Field(
+        default=None,
+        max_length=2,
+        description="The real ICAO ADS-B 'emitter category' code (DO-260B Table 2-36) this track's "
+        "most recent category-reporting detection carried, e.g. 'A7' (rotorcraft), 'B1' (glider), "
+        "'B2' (lighter-than-air), 'B6' (unmanned aerial vehicle), 'A1'/'A2' (light/small fixed-wing), "
+        "'A3'-'A6' (large/heavy/high-performance fixed-wing) -- see app/adapters/dump1090_bridge.py "
+        "for where this is actually decoded from a live ADS-B feed. None whenever no detection has "
+        "reported one (most sensors don't carry this at all), in which case the dashboard falls back "
+        "to a generic aircraft glyph rather than guessing.",
+    )
 
 
 class Incident(BaseModel):

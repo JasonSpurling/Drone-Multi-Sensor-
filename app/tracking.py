@@ -299,6 +299,13 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     fills_in_unknown = track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN
     if upgrades_to_drone or fills_in_unknown:
         track.classification = fused_label
+    # A real ADS-B emitter category (app.models.Track.aircraft_category's
+    # docstring) is a transponder-reported fact, not a threat judgment --
+    # unlike classification above, the latest report simply wins rather
+    # than needing an "upgrade only" guard.
+    reported_category = (detection.raw_data or {}).get("category")
+    if reported_category:
+        track.aircraft_category = reported_category
     update_track(track)
     publish_track_cot(track)
     publish_live_event(track.site_id, {"type": "track_update", "track": track.model_dump(mode="json")})
