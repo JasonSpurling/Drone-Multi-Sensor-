@@ -309,6 +309,13 @@
   }
   #map-empty-state .map-empty-title { font-size: 16px; font-weight: 600; color: var(--text); opacity: 0.5; }
   #map-empty-state .map-empty-body { font-size: 12px; margin-top: 4px; opacity: 0.4; }
+  #map-offline-banner {
+    display: none;
+    position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-glass); border: 1px solid var(--medium); border-radius: 8px;
+    padding: 6px 12px; font-size: 11px; color: var(--text); backdrop-filter: blur(4px);
+  }
+  #map-offline-banner.show { display: block; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--panel); color: var(--text); }
   .leaflet-container { font-family: inherit; background: var(--map-bg); }
   .leaflet-control-layers {
@@ -519,6 +526,8 @@
 
 <div id="app-shell">
   <div id="map"></div>
+
+  <div id="map-offline-banner" role="status">Map imagery unavailable (no connection to the tile server) — tracking data below is still live.</div>
 
   <div id="map-empty-state" style="display:none" aria-hidden="true">
     <div class="map-empty-title">No active tracks</div>
@@ -1395,6 +1404,32 @@ function initMap() {
     if (e.name !== "Satellite" && leafletMap.hasLayer(satelliteLabels)) {
       setTimeout(() => leafletMap.removeLayer(satelliteLabels), 0);
     }
+    // Switching layers resets tile-health tracking -- a newly-selected
+    // layer deserves its own grace period before the banner judges it,
+    // rather than inheriting an error streak run up by the old one.
+    tileErrorStreak = 0;
+    hideOfflineBanner();
+  });
+
+  // Map imagery (unlike the vendored Leaflet library itself, see
+  // static/vendor/) always comes from an external tile CDN -- a
+  // deployment with no internet still tracks/classifies/alerts correctly
+  // (none of that depends on tiles), but the map background would
+  // otherwise just silently stay blank forever with no indication why.
+  // 3 consecutive tile failures with no successful load in between is a
+  // real outage, not a couple of dropped/slow requests during normal use.
+  let tileErrorStreak = 0;
+  const showOfflineBanner = () => document.getElementById("map-offline-banner").classList.add("show");
+  const hideOfflineBanner = () => document.getElementById("map-offline-banner").classList.remove("show");
+  [darkLayer, roadLayer, satelliteLayer, satelliteLabels].forEach((layer) => {
+    layer.on("tileerror", () => {
+      tileErrorStreak += 1;
+      if (tileErrorStreak >= 3) showOfflineBanner();
+    });
+    layer.on("tileload", () => {
+      tileErrorStreak = 0;
+      hideOfflineBanner();
+    });
   });
 
   zoneLayer = L.layerGroup().addTo(leafletMap);

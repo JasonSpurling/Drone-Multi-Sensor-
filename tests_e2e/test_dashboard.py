@@ -429,3 +429,41 @@ def test_after_action_report_button_populates_a_printable_summary(live_server, p
     assert "After-Action Report" in report_text
     assert "zone incursion" in report_text.lower()
     assert "radar-1" in report_text
+
+
+def test_map_offline_banner_appears_after_repeated_tile_failures_and_clears_on_recovery(live_server, page):
+    """Map tile imagery comes from an external CDN (unlike the vendored
+    Leaflet library itself) -- a deployment with no internet access would
+    otherwise just show a permanently blank map background with no
+    indication why, even though tracking/alerting all still works fine
+    without it. Drives the exact Leaflet events the app listens for
+    (see initMap()'s tileerror/tileload wiring) rather than depending on
+    real network access, which test environments can't rely on.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#map")
+
+    result = page.evaluate("""
+        () => {
+            const layers = [];
+            leafletMap.eachLayer((l) => { if (l instanceof L.TileLayer) layers.push(l); });
+            const activeLayer = layers[0];
+            const banner = document.getElementById('map-offline-banner');
+            // Real tile requests may already have failed a few times
+            // before this runs (this test environment has no route to the
+            // real tile CDN either) -- a tileload resets the app's error
+            // streak to a known 0 before the synthetic sequence below.
+            activeLayer.fire('tileload');
+            activeLayer.fire('tileerror');
+            activeLayer.fire('tileerror');
+            const shownAfterTwo = banner.classList.contains('show');
+            activeLayer.fire('tileerror');
+            const shownAfterThree = banner.classList.contains('show');
+            activeLayer.fire('tileload');
+            const hiddenAfterLoad = !banner.classList.contains('show');
+            return { shownAfterTwo, shownAfterThree, hiddenAfterLoad };
+        }
+    """)
+    assert result["shownAfterTwo"] is False  # below the 3-failure threshold
+    assert result["shownAfterThree"] is True
+    assert result["hiddenAfterLoad"] is True

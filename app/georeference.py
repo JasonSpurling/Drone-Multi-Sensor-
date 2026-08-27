@@ -11,7 +11,7 @@ never need this.
 from __future__ import annotations
 
 from app.db import get_sensor_registration
-from app.geo import destination_point
+from app.geo import destination_point, slant_range_to_ground_range_m
 from app.models import Detection
 
 
@@ -28,8 +28,19 @@ def georeference(detection: Detection) -> Detection:
         return detection
 
     bearing_deg = (registration["azimuth_reference_deg"] + detection.azimuth_deg) % 360.0
+    # range_m from an azimuth/range sensor (e.g. ASTERIX CAT048's RHO) is
+    # slant range, not ground range -- destination_point needs the latter.
+    # Only correctable when both ends of the height difference are known;
+    # a detection reporting no altitude of its own (most azimuth/range
+    # sensors -- acoustic bearing-only arrays, many RF direction finders)
+    # falls back to treating range_m as ground range unchanged, same as
+    # before this correction existed.
+    ground_range_m = detection.range_m
+    if detection.altitude_m is not None and registration["altitude_m"] is not None:
+        height_diff_m = detection.altitude_m - registration["altitude_m"]
+        ground_range_m = slant_range_to_ground_range_m(detection.range_m, height_diff_m)
     latitude, longitude = destination_point(
-        registration["latitude"], registration["longitude"], bearing_deg, detection.range_m
+        registration["latitude"], registration["longitude"], bearing_deg, ground_range_m
     )
     detection.latitude = latitude
     detection.longitude = longitude

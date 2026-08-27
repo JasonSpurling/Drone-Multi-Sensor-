@@ -69,3 +69,36 @@ def test_initial_bearing_is_the_inverse_of_destination_point():
         lat2, lon2 = destination_point(51.5, -0.1, bearing, 5000.0)
         recovered = initial_bearing_deg(51.5, -0.1, lat2, lon2)
         assert recovered == pytest.approx(bearing, abs=1e-6)
+
+
+def test_slant_range_equals_ground_range_when_no_height_difference():
+    from app.geo import slant_range_to_ground_range_m
+
+    assert slant_range_to_ground_range_m(1000.0, 0.0) == pytest.approx(1000.0)
+
+
+def test_slant_range_to_ground_range_is_shorter_when_target_is_higher():
+    from app.geo import slant_range_to_ground_range_m
+
+    # 500m slant range, 150m higher than the radar -> classic 3-4-5-ish
+    # right triangle: ground_range = sqrt(500^2 - 150^2).
+    ground = slant_range_to_ground_range_m(500.0, 150.0)
+    assert ground == pytest.approx((500.0**2 - 150.0**2) ** 0.5)
+    assert ground < 500.0
+
+
+def test_slant_range_to_ground_range_ignores_sign_of_height_difference():
+    from app.geo import slant_range_to_ground_range_m
+
+    above = slant_range_to_ground_range_m(500.0, 150.0)
+    below = slant_range_to_ground_range_m(500.0, -150.0)
+    assert above == pytest.approx(below)
+
+
+def test_slant_range_to_ground_range_falls_back_when_geometrically_impossible():
+    from app.geo import slant_range_to_ground_range_m
+
+    # A height difference that can't fit inside the slant range at all
+    # (bad/inconsistent altitude data) -- must not raise.
+    assert slant_range_to_ground_range_m(100.0, 500.0) == pytest.approx(100.0)
+    assert slant_range_to_ground_range_m(100.0, 100.0) == pytest.approx(100.0)

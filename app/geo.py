@@ -55,6 +55,29 @@ def initial_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> f
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
 
+def slant_range_to_ground_range_m(slant_range_m: float, height_diff_m: float) -> float:
+    """A radar's reported range (e.g. ASTERIX CAT048 item 040's RHO -- see
+    app/adapters/asterix.py) is *slant range*: straight-line distance to
+    the target, not the horizontal ground distance destination_point
+    actually needs. For a target much higher than the radar and not too
+    far away, treating slant range as ground range measurably overplaces
+    it beyond its true position (e.g. a target 150m above the radar at
+    500m slant range is really only ~477m away over the ground -- a ~5%
+    error, worse at closer range/steeper look angles, negligible at long
+    range). `height_diff_m` is target altitude minus sensor altitude
+    (either sign).
+
+    Falls back to the slant range unchanged (rather than raising) if
+    height_diff_m is geometrically inconsistent with slant_range_m (e.g.
+    from noisy/independently-sourced altitude data) -- an impossible
+    right triangle shouldn't crash georeferencing, and slant range is
+    still the best available estimate at that point.
+    """
+    if abs(height_diff_m) >= slant_range_m:
+        return slant_range_m
+    return math.sqrt(slant_range_m**2 - height_diff_m**2)
+
+
 def destination_point(
     lat: float, lon: float, bearing_deg: float, distance_m: float
 ) -> tuple[float, float]:

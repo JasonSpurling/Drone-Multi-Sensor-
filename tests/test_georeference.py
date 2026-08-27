@@ -1,3 +1,5 @@
+import pytest
+
 from app.db import upsert_sensor_registration
 from app.georeference import georeference
 from app.models import Detection, SensorType
@@ -92,3 +94,46 @@ def test_existing_altitude_is_not_overwritten_by_sensor_altitude(site_id):
     )
     result = georeference(detection)
     assert result.altitude_m == 42.0
+
+
+def test_slant_range_is_corrected_to_ground_range_when_altitudes_are_known(site_id):
+    from app.geo import haversine_distance_m
+
+    upsert_sensor_registration(
+        sensor_id="radar-4",
+        site_id=site_id,
+        sensor_type="radar",
+        latitude=51.5,
+        longitude=-0.1,
+        altitude_m=0.0,
+        azimuth_reference_deg=0.0,
+    )
+    # 500m slant range, target 150m above the radar -> true ground range is
+    # sqrt(500^2 - 150^2) =~ 477.1m, not the full 500m.
+    detection = make_detection(
+        site_id=site_id, sensor_id="radar-4", azimuth_deg=90.0, range_m=500.0, altitude_m=150.0
+    )
+    result = georeference(detection)
+    plotted_distance = haversine_distance_m(51.5, -0.1, result.latitude, result.longitude)
+    assert plotted_distance == pytest.approx((500.0**2 - 150.0**2) ** 0.5, rel=1e-3)
+
+
+def test_range_is_used_unadjusted_when_detection_altitude_is_unknown(site_id):
+    from app.geo import haversine_distance_m
+
+    upsert_sensor_registration(
+        sensor_id="radar-5",
+        site_id=site_id,
+        sensor_type="radar",
+        latitude=51.5,
+        longitude=-0.1,
+        altitude_m=0.0,
+        azimuth_reference_deg=0.0,
+    )
+    # No detection.altitude_m (e.g. a bearing-only acoustic array, or a
+    # radar that didn't decode a flight level) -- same behavior as before
+    # this correction existed: range_m is treated as ground range as-is.
+    detection = make_detection(site_id=site_id, sensor_id="radar-5", azimuth_deg=90.0, range_m=500.0)
+    result = georeference(detection)
+    plotted_distance = haversine_distance_m(51.5, -0.1, result.latitude, result.longitude)
+    assert plotted_distance == pytest.approx(500.0, rel=1e-6)

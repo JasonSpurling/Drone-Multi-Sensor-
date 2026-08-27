@@ -348,6 +348,19 @@ stays dark in either theme, matching how most mapping dashboards keep
 plotted symbology legible against a fixed dark base rather than flipping
 it with the surrounding chrome.
 
+### Map imagery vs. tracking data
+
+The map background (dark/road/satellite tiles) always comes from an
+external tile CDN -- unlike the vendored Leaflet library itself (see
+`static/vendor/`), there's no offline/self-hosted tile source by default.
+None of the actual tracking/classification/alerting pipeline depends on
+it, so a deployment with no internet access (a real possibility for a
+field-sited sensor) still works correctly -- it just has a blank map
+background, which used to give no indication of why. Three consecutive
+tile load failures now shows a small "Map imagery unavailable" banner
+(clearing again once tiles start loading) so that's never mistaken for
+the dashboard itself being broken.
+
 ### Live updates
 
 `GET /ws/live` (WebSocket) pushes a `{"type": "track_update", ...}` or
@@ -667,6 +680,18 @@ curl -X PUT http://127.0.0.1:8000/api/sensor-registrations/radar-1 \
 `azimuth_deg=0` points to (0 if it's already mounted true-north-referenced).
 Detections that already carry lat/lon (GPS-tagged cameras, ADS-B, etc.)
 skip this entirely.
+
+`range_m` from an azimuth/range sensor is *slant range* -- straight-line
+distance to the target, not horizontal ground distance -- since that's
+what radars actually report (e.g. ASTERIX CAT048's RHO field, see
+`app/adapters/asterix.py`). Georeferencing corrects this to ground range
+using the target's and sensor's altitude difference whenever both are
+known (`app/geo.py`'s `slant_range_to_ground_range_m`), which matters most
+at close range/steep look angles -- a target 150m above a radar at 500m
+slant range is really only ~477m away over the ground, a ~5% position
+error left uncorrected. Falls back to using `range_m` unadjusted when the
+detection carries no altitude of its own (bearing-only acoustic arrays,
+many RF direction finders), same as before this correction existed.
 
 **ADS-B via dump1090** (`app/adapters/`): the most common real-world way
 to get ADS-B into this tracker is an RTL-SDR dongle (~$20) running
