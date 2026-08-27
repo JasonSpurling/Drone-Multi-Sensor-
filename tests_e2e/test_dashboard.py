@@ -549,3 +549,53 @@ def test_map_marker_renders_a_distinct_symbol_per_aircraft_category(live_server,
     assert "<line" in shapes["rotor"]  # rotor cross, not the triangle
     assert "<polygon" in shapes["generic"]  # unchanged fallback triangle
     assert shapes["rotor"] != shapes["generic"]
+
+
+def test_map_shows_registered_sensor_positions_and_scale_bar(live_server, page):
+    """Registered sensor positions (app/api/sensor_registry.py) show up as
+    their own markers on the map, colored by health status -- not just
+    listed in the Sensor Health side panel -- so an operator can see at a
+    glance where sensors actually are and whether any have gone quiet.
+    """
+    requests.put(
+        f"{live_server}/api/sensor-registrations/radar-1",
+        json={
+            "sensor_type": "radar", "latitude": 51.51, "longitude": -0.12,
+            "altitude_m": 15, "azimuth_reference_deg": 0,
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={"sensor_id": "radar-1", "sensor_type": "radar", "azimuth_deg": 10, "range_m": 500, "confidence": 0.9},
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+
+    assert page.locator(".leaflet-control-scale").count() == 1
+
+    # The Sensors toggle actually controls this layer, not just a label.
+    page.click("#toggle-sensors")
+    page.wait_for_function("sensorLayer.getLayers().length === 0")
+    page.click("#toggle-sensors")
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+
+
+def test_recenter_control_fits_all_tracks_zones_and_sensors(live_server, page):
+    requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    recenter = page.locator('.leaflet-bar a[aria-label*="Fit all"]')
+    assert recenter.count() == 1
+
+    # Pan away, then confirm the recenter control brings the seeded
+    # detection's position back into view.
+    page.evaluate("leafletMap.setView([0, 0], 3)")
+    recenter.click()
+    page.wait_for_function(
+        f"leafletMap.getBounds().contains([{DETECTION_BODY['latitude']}, {DETECTION_BODY['longitude']}])"
+    )

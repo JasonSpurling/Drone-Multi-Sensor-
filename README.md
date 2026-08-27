@@ -363,6 +363,28 @@ tile load failures now shows a small "Map imagery unavailable" banner
 (clearing again once tiles start loading) so that's never mistaken for
 the dashboard itself being broken.
 
+### Sensor positions on the map
+
+Every registered sensor position (`PUT /api/sensor-registrations/{id}`,
+see "Georeferencing" above) shows up on the map as its own small square
+marker -- not just listed in the Sensor Health side panel -- colored by
+that sensor's real health status (online/stale/offline, the same signal
+`GET /api/sensors` already computes) so a sensor that's gone quiet is
+visible at a glance on the map itself, not buried in a side panel you
+have to go looking in. A sensor that's never been registered (most GPS-
+tagged sensors -- cameras, ADS-B receivers -- never need to be) simply
+isn't plotted, rather than guessing a position for it. Toggle with the
+**Sensors** checkbox alongside Trails/Vectors/Uncertainty.
+
+Two smaller additions alongside it: a scale bar (bottom-right, next to
+the zoom controls) for real distance context, and a "fit all" control
+(the small square-corners icon above the scale bar) that re-centers the
+map on every visible track, zone, and sensor on demand -- useful after
+panning away, since the automatic fit-to-bounds only ever runs once, the
+first time anything appears, by design (an operator actively looking at
+one area shouldn't have the view yanked out from under them every time a
+new detection arrives elsewhere).
+
 ### Live updates
 
 `GET /ws/live` (WebSocket) pushes a `{"type": "track_update", ...}` or
