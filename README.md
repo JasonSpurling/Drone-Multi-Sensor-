@@ -759,6 +759,11 @@ coloring would wash it out. Falls back to the flat classification color
 when altitude isn't known, same "never guess" rule as the category
 symbols above.
 
+Drone and unknown tracks likewise get a real symbol on the map, not a
+plain dot -- the same quadcopter glyph (four rotors and a body) already
+used for the sidebar/details thumbnail, so a drone reads as a drone at a
+glance instead of just a colored circle.
+
 **Radar via ASTERIX CAT048** (`app/adapters/asterix_bridge.py`): the
 protocol most commercial primary/secondary surveillance radars actually
 speak on their network interface, not a proprietary vendor format --

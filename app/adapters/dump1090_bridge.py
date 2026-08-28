@@ -92,7 +92,11 @@ class CategoryLookup:
         self.url = url
         self.refresh_interval_s = refresh_interval_s
         self._categories: dict[str, str] = {}
-        self._last_refresh = 0.0
+        # -inf, not 0.0: time.monotonic() isn't epoch-anchored, so on a
+        # freshly-booted host its value can itself be smaller than
+        # refresh_interval_s, which would silently skip the very first
+        # refresh in get() below.
+        self._last_refresh = float("-inf")
         self._warned = False
 
     def get(self, hex_ident: str) -> str | None:

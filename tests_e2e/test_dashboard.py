@@ -657,3 +657,32 @@ def test_aircraft_marker_uses_realistic_silhouette_and_altitude_color(live_serve
     assert "hsl(" in result["high"]
     assert result["low"] != result["high"]  # different altitudes, genuinely different colors
     assert "hsl(" not in result["unknown"]  # no altitude known -> flat classification color, not a guess
+
+
+def test_drone_marker_uses_quadcopter_glyph_not_a_plain_dot(live_server, page):
+    """markerIcon() draws the same quadcopter glyph classIcon() already uses
+    for the sidebar thumbnail for drone (and unclassified) tracks on the map
+    itself, instead of the old plain circle.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.5, "longitude": -0.1, "confidence": 0.95,
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    html = page.evaluate("""
+        () => {
+            const drone = state.tracks.find(t => t.classification === "drone");
+            return markerIcon(drone, false).options.html;
+        }
+    """)
+    # The quadcopter glyph (droneGlyphMarkup): four rotor circles plus a
+    # body rect, not the old flat `<circle ... r="${half - 2}"` dot.
+    assert html.count("<circle") == 4
+    assert "<rect" in html
