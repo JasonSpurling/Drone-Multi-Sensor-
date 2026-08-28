@@ -351,6 +351,20 @@ stays dark in either theme, matching how most mapping dashboards keep
 plotted symbology legible against a fixed dark base rather than flipping
 it with the surrounding chrome.
 
+### Track search
+
+The Tracks panel's search box matches more than the track's numeric ID or
+UID -- also its classification (`drone`, `aircraft`, ...), status
+(`active`/`lost`/`closed`), and, when the sensor data actually reported
+one, the aircraft category (both the raw ICAO code and its human-readable
+label, e.g. `A7` or `rotor` both match a rotorcraft track). Multiple
+space-separated terms are ANDed ("drone lost" finds a lost drone without
+needing the terms in any particular order), and it combines with the
+classification chips above it rather than replacing them. Press `/` from
+anywhere on the page to jump straight to the search box, `Esc` while it
+has focus to clear it, or click the &times; button that appears once
+there's something to clear.
+
 ### Map imagery vs. tracking data
 
 The map background (dark/road/satellite tiles) always comes from an

@@ -686,3 +686,53 @@ def test_drone_marker_uses_quadcopter_glyph_not_a_plain_dot(live_server, page):
     # body rect, not the old flat `<circle ... r="${half - 2}"` dot.
     assert html.count("<circle") == 4
     assert "<rect" in html
+
+
+def test_search_matches_classification_and_status_not_just_id(live_server, page):
+    """visibleTracks()/trackMatchesSearch() search more than the numeric ID
+    or track_uid substring -- classification and status too -- so typing
+    "drone" or "lost" actually finds tracks, not just a UID fragment.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.5, "longitude": -0.1, "confidence": 0.95,
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb",
+            "latitude": 51.6, "longitude": -0.2, "confidence": 0.99,
+            "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    assert page.locator(".track-card[data-id]").count() == 2
+
+    page.fill("#search-input", "drone")
+    page.wait_for_function("visibleTracks().length === 1")
+    assert page.locator(".track-card[data-id]").count() == 1
+    assert page.locator("#search-clear").is_visible()
+
+    # Category label match ("rotor" is a substring of "rotorcraft", the
+    # human-readable label for the A7 code, not the raw code itself).
+    page.fill("#search-input", "rotor")
+    page.wait_for_function("visibleTracks().length === 1")
+    assert page.evaluate("visibleTracks()[0].aircraft_category") == "A7"
+
+    # Clear button empties the box and restores every track.
+    page.click("#search-clear")
+    page.wait_for_function("visibleTracks().length === 2")
+    assert page.input_value("#search-input") == ""
+    assert not page.locator("#search-clear").is_visible()
+
+    # "/" focuses the search box from anywhere on the page.
+    page.click("body")
+    page.keyboard.press("/")
+    assert page.evaluate("document.activeElement.id") == "search-input"

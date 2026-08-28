@@ -204,12 +204,20 @@
   .icon-btn:hover { color: var(--text); background: var(--panel-2); }
 
   #left-panel-search { padding: 10px 14px 0 14px; }
+  .search-box { position: relative; }
   #search-input {
     width: 100%;
     background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; padding: 7px 10px; font-size: 12px;
+    border-radius: 8px; padding: 7px 26px 7px 10px; font-size: 12px;
   }
   #search-input:focus { outline: none; border-color: var(--accent); }
+  #search-clear {
+    display: none; position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    background: transparent; border: none; color: var(--muted); cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 4px 6px; border-radius: 4px;
+  }
+  #search-clear.show { display: block; }
+  #search-clear:hover { color: var(--text); background: var(--panel); }
   #class-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .filter-chip {
     background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
@@ -579,7 +587,10 @@
     </div>
 
     <div id="left-panel-search">
-      <input id="search-input" type="text" placeholder="Search ID or UID…">
+      <div class="search-box">
+        <input id="search-input" type="text" placeholder="Search ID, UID, class, status…" title="Also matches classification, status, and aircraft category (e.g. &quot;rotor&quot;) — press / to focus, Esc to clear">
+        <button id="search-clear" type="button" aria-label="Clear search">&times;</button>
+      </div>
       <div id="class-filters"></div>
     </div>
 
@@ -812,12 +823,36 @@ function headingArrow(headingDeg) {
   return `<span class="heading-arrow" style="display:inline-block;transform:rotate(${headingDeg}deg)">&#8593;</span>`;
 }
 
+// Space-separated terms are ANDed, each matched against every searchable
+// field -- "drone lost" finds a lost drone track without needing the
+// terms in field order, the way most real search boxes behave. Matches
+// more than just the ID/UID: classification, status, and (when the
+// sensor data actually reported one) the aircraft category, so "rotor"
+// or "a7" finds a real rotorcraft track instead of only working when you
+// already know its numeric ID.
+function searchTerms(raw) {
+  return raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function trackSearchHaystack(t) {
+  const categoryLabel = t.aircraft_category ? AIRCRAFT_CATEGORY_LABEL[t.aircraft_category] || "" : "";
+  return [
+    String(t.id), t.track_uid, t.classification, t.status,
+    t.aircraft_category || "", categoryLabel,
+  ].join(" ").toLowerCase();
+}
+
+function trackMatchesSearch(t, terms) {
+  if (terms.length === 0) return true;
+  const haystack = trackSearchHaystack(t);
+  return terms.every((term) => haystack.includes(term));
+}
+
 function visibleTracks() {
-  const search = state.search.trim().toLowerCase();
+  const terms = searchTerms(state.search);
   return state.tracks.filter((t) => {
     if (state.classFilter !== "all" && t.classification !== state.classFilter) return false;
-    if (!search) return true;
-    return String(t.id).includes(search) || t.track_uid.toLowerCase().includes(search);
+    return trackMatchesSearch(t, terms);
   });
 }
 
@@ -1084,11 +1119,8 @@ function renderClassFilters() {
   // trivially reflect a filter it isn't applying). Without this, "All"
   // selected with zero results reads as broken rather than as "genuinely
   // nothing yet, in any category."
-  const search = state.search.trim().toLowerCase();
-  const searchMatches = state.tracks.filter((t) => {
-    if (!search) return true;
-    return String(t.id).includes(search) || t.track_uid.toLowerCase().includes(search);
-  });
+  const terms = searchTerms(state.search);
+  const searchMatches = state.tracks.filter((t) => trackMatchesSearch(t, terms));
   el.innerHTML = CLASS_LABELS.map((c) => {
     const activeClass = state.classFilter === c ? "active" : "";
     const label = c === "all" ? "All" : c.charAt(0).toUpperCase() + c.slice(1);
@@ -2450,11 +2482,32 @@ document.getElementById("auth-save").addEventListener("click", () => {
 document.getElementById("auth-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("auth-save").click();
 });
-document.getElementById("search-input").addEventListener("input", (e) => {
-  state.search = e.target.value;
+const searchInput = document.getElementById("search-input");
+const searchClearBtn = document.getElementById("search-clear");
+function applySearch(value) {
+  state.search = value;
+  searchInput.value = value;
+  searchClearBtn.classList.toggle("show", value.length > 0);
   renderClassFilters();
   renderTracks();
   renderMap();
+}
+searchInput.addEventListener("input", (e) => applySearch(e.target.value));
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && searchInput.value) applySearch("");
+});
+searchClearBtn.addEventListener("click", () => {
+  applySearch("");
+  searchInput.focus();
+});
+// "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
+// Slack) -- as long as the user isn't already typing into some other field.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  e.preventDefault();
+  showPanel("tracks");
+  searchInput.focus();
 });
 document.querySelectorAll(".rail-btn").forEach((btn) => {
   btn.addEventListener("click", () => toggleOrShowPanel(btn.dataset.panel));
