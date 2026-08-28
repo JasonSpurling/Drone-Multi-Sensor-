@@ -365,6 +365,24 @@ anywhere on the page to jump straight to the search box, `Esc` while it
 has focus to clear it, or click the &times; button that appears once
 there's something to clear.
 
+### Track list: alert indicator and sort
+
+A track with an active (non-resolved) incident now shows a small colored
+dot on its thumbnail in the Tracks list, colored by that incident's
+severity (hovering it names the incident count/severity) -- an operator
+can see which track triggered an alert without switching to the Alerts
+panel. A "Sort" control next to the classification chips reorders each
+classification group by "Most recent" (default), "Alerts first",
+"Altitude: high to low", or "Speed: fastest first"; a track with no
+altitude/speed known always sorts after every track that has one, never
+implied to be on the ground or stationary just to fit a sort. Sorting
+only ever reorders *within* a classification group, never across groups
+-- the drone/aircraft/bird/... grouping is the primary, deliberate
+ordering for a counter-drone operator, so an alerting or fast-moving
+track never jumps into a different group's position and gets mistaken
+for a different kind of object. The choice is remembered per-browser
+(like the theme toggle) so it persists across reloads.
+
 ### Map imagery vs. tracking data
 
 The map background (dark/road/satellite tiles) always comes from an

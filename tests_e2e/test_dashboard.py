@@ -736,3 +736,67 @@ def test_search_matches_classification_and_status_not_just_id(live_server, page)
     page.click("body")
     page.keyboard.press("/")
     assert page.evaluate("document.activeElement.id") == "search-input"
+
+
+def test_track_card_shows_alert_dot_and_sort_reorders_the_list(live_server, page):
+    """The Tracks list surfaces an at-a-glance alert indicator (no need to
+    switch to the Alerts panel to see which track triggered it) and a real
+    sort control -- "Alerts first" actually moves the alerting track above
+    a more-recently-seen track *in the same classification group*
+    (TRACK_SORT_COMPARATORS sorts within a group, never across groups --
+    the classification grouping itself stays the primary ordering),
+    "Altitude" actually reorders by that field.
+    """
+    # Inside the seeded "Central London Restricted Zone" (see conftest.py's
+    # live_server fixture) -- a real zone-incursion incident, not a
+    # fabricated one. High-confidence radar -> classified DRONE (see
+    # app/classification.py), altitude unknown.
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    # A second, also-DRONE-classified track (same group), seeded after --
+    # so it's more recent and would sort first under the default "Most
+    # recent" order despite having no alert.
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.9, "longitude": -0.5, "altitude_m": 5000, "confidence": 0.9,
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_function("state.incidents.length > 0")
+    page.wait_for_selector(".track-alert-dot")
+    assert page.locator(".track-alert-dot").count() == 1
+
+    alerting_track_id = page.evaluate("state.incidents[0].track_id")
+    assert page.evaluate(f"state.tracks.find(t => t.id === {alerting_track_id}).classification") == "drone"
+
+    # Default "Most recent" sort: the alert-free, more-recently-seen track
+    # leads its group.
+    first_id = page.eval_on_selector(".track-card", "el => Number(el.dataset.id)")
+    assert first_id != alerting_track_id
+
+    page.select_option("#track-sort", "alerts")
+    page.wait_for_function(f"Number(document.querySelector('.track-card').dataset.id) === {alerting_track_id}")
+
+    page.select_option("#track-sort", "altitude")
+    page.wait_for_function("""
+        () => {
+            const cards = [...document.querySelectorAll('.track-card')].map(c => Number(c.dataset.id));
+            const track = (id) => state.tracks.find(t => t.id === id);
+            // Every altitude-known track sorted before every altitude-unknown
+            // one, high to low among the known ones -- not just "some order".
+            for (let i = 1; i < cards.length; i++) {
+                const prev = track(cards[i - 1]).altitude_m, cur = track(cards[i]).altitude_m;
+                if (prev == null && cur != null) return false;
+                if (prev != null && cur != null && prev < cur) return false;
+            }
+            return true;
+        }
+    """)
+
+    # The choice survives a reload (persisted like the theme toggle).
+    page.reload(wait_until="networkidle")
+    assert page.eval_on_selector("#track-sort", "el => el.value") == "altitude"

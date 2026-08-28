@@ -255,16 +255,31 @@
   .track-card:hover { background: var(--panel-2); }
   .track-card.selected { background: var(--hover-bg); box-shadow: inset 3px 0 0 var(--accent); }
   .track-thumb {
+    position: relative;
     width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
     background: var(--panel-2); border: 1px solid var(--border);
     display: flex; align-items: center; justify-content: center;
     font-size: 18px; overflow: hidden;
   }
   .track-thumb svg { width: 22px; height: 22px; }
+  .track-alert-dot {
+    position: absolute; top: -2px; right: -2px; width: 9px; height: 9px;
+    border-radius: 50%; border: 1.5px solid var(--panel); box-shadow: 0 0 0 1px rgba(0,0,0,0.3);
+  }
   .track-card-body { flex: 1; min-width: 0; }
   .track-card-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track-card-sub { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 2px; }
   .track-card-meta { font-size: 10px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  #track-sort-row {
+    display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+    margin-top: 8px; font-size: 11px; color: var(--muted);
+  }
+  #track-sort {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 3px 6px; font-size: 11px;
+  }
+  #track-sort:focus { outline: none; border-color: var(--accent); }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--border); }
@@ -592,6 +607,15 @@
         <button id="search-clear" type="button" aria-label="Clear search">&times;</button>
       </div>
       <div id="class-filters"></div>
+      <div id="track-sort-row">
+        <label for="track-sort">Sort</label>
+        <select id="track-sort" aria-label="Sort tracks by">
+          <option value="recent">Most recent</option>
+          <option value="alerts">Alerts first</option>
+          <option value="altitude">Altitude: high to low</option>
+          <option value="speed">Speed: fastest first</option>
+        </select>
+      </div>
     </div>
 
     <div id="left-panel-body">
@@ -703,6 +727,9 @@ const state = {
   reportLoaded: false,
 };
 let apiKey = localStorage.getItem("droneApiKey") || "";
+// Persisted per-browser like the theme/API key -- an operator's preferred
+// ordering shouldn't reset on every reload.
+let trackSort = localStorage.getItem("droneTrackSort") || "recent";
 
 // Recent on-map positions per track, captured from each poll (not fetched
 // history) so every visible track can show a short fading trail without a
@@ -756,6 +783,16 @@ const CLASS_COLOR_HEX = {
 };
 const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
+
+// The active (non-resolved) incidents for one track, worst severity first
+// -- used by the Tracks list to show an at-a-glance alert dot without
+// switching to the Alerts panel, and by the "Alerts first" sort.
+function activeIncidentsForTrack(trackId) {
+  return state.incidents
+    .filter((i) => i.track_id === trackId && i.status !== "resolved")
+    .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+}
 const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
 const CLASS_LABELS = ["all", "drone", "aircraft", "bird", "friendly", "unknown"];
 // Display grouping, closest read to "disposition" groups (Friendly / Hostile-
@@ -1166,6 +1203,38 @@ function classIcon(classification) {
   return `<svg viewBox="0 0 24 24">${droneGlyphMarkup(color)}</svg>`;
 }
 
+// Sorts *within* each classification group, never across groups -- the
+// classification grouping itself (friendly/drone/aircraft/bird/unknown,
+// see GROUP_ORDER) is the primary, deliberate ordering for a counter-drone
+// operator (see the "Every other classification..." comment on altitude
+// coloring above), so a fastest/highest/alerting track never jumps out of
+// its group and gets mistaken for a different kind of object.
+const TRACK_SORT_COMPARATORS = {
+  recent: (a, b) => (a.last_seen < b.last_seen ? 1 : -1),
+  alerts: (a, b) => {
+    const worst = (t) => {
+      const incidents = activeIncidentsForTrack(t.id);
+      return incidents.length ? SEVERITY_RANK[incidents[0].severity] : -1;
+    };
+    const diff = worst(b) - worst(a);
+    return diff !== 0 ? diff : (a.last_seen < b.last_seen ? 1 : -1);
+  },
+  // Nulls (altitude/speed genuinely unknown, not zero) always sort last --
+  // never implied to be "on the ground" or "stationary" just to fit a sort.
+  altitude: (a, b) => {
+    if (a.altitude_m == null && b.altitude_m == null) return a.last_seen < b.last_seen ? 1 : -1;
+    if (a.altitude_m == null) return 1;
+    if (b.altitude_m == null) return -1;
+    return b.altitude_m - a.altitude_m;
+  },
+  speed: (a, b) => {
+    if (a.speed_mps == null && b.speed_mps == null) return a.last_seen < b.last_seen ? 1 : -1;
+    if (a.speed_mps == null) return 1;
+    if (b.speed_mps == null) return -1;
+    return b.speed_mps - a.speed_mps;
+  },
+};
+
 function renderTracks() {
   const el = document.getElementById("tracks-list");
   const tracks = visibleTracks();
@@ -1198,14 +1267,18 @@ function renderTracks() {
 
   el.innerHTML = GROUP_ORDER.filter((g) => byGroup.get(g) && byGroup.get(g).length > 0)
     .map((g) => {
-      const groupTracks = byGroup.get(g).slice().sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
+      const groupTracks = byGroup.get(g).slice().sort(TRACK_SORT_COMPARATORS[trackSort] || TRACK_SORT_COMPARATORS.recent);
       const cards = groupTracks
         .map((t) => {
           const sel = t.id === state.selectedTrackId ? "selected" : "";
           const pos = t.latitude != null ? `${t.latitude.toFixed(4)}, ${t.longitude.toFixed(4)}` : "no position";
           const speed = t.speed_mps != null ? `${t.speed_mps.toFixed(1)} m/s` : null;
+          const incidents = activeIncidentsForTrack(t.id);
+          const alertDot = incidents.length
+            ? `<span class="track-alert-dot" style="background:${SEVERITY_COLOR[incidents[0].severity] || SEVERITY_COLOR.low}" title="${incidents.length} active alert${incidents.length > 1 ? "s" : ""} (${escapeHtml(incidents[0].severity)})"></span>`
+            : "";
           return `<div class="track-card ${sel}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
-            <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}</div>
+            <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}${alertDot}</div>
             <div class="track-card-body">
               <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))}</div>
               <div class="track-card-sub">
@@ -2499,6 +2572,13 @@ searchInput.addEventListener("keydown", (e) => {
 searchClearBtn.addEventListener("click", () => {
   applySearch("");
   searchInput.focus();
+});
+const trackSortSelect = document.getElementById("track-sort");
+trackSortSelect.value = trackSort;
+trackSortSelect.addEventListener("change", (e) => {
+  trackSort = e.target.value;
+  localStorage.setItem("droneTrackSort", trackSort);
+  renderTracks();
 });
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.
