@@ -1,10 +1,10 @@
 fastapi==0.141.1
-uvicorn[standard]==0.52.1
+uvicorn[standard]==0.52.4
 pydantic==2.13.4
 sqlalchemy==2.0.52
 prometheus-client==0.26.0
-cryptography==50.0.0
-numpy==2.4.6
+cryptography==50.0.1
+numpy==2.5.2
 # Backs Starlette's SessionMiddleware (app/main.py), needed unconditionally
 # even though it's only meaningfully used by the optional OIDC login flow
 # (app/oidc.py) -- SessionMiddleware itself hard-imports this at module
