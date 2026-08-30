@@ -464,6 +464,14 @@ active alerts) has a **Report** button that fetches this and renders it
 as a printable page (`window.print()`) -- useful for after-action review
 or an incident record you want on paper/PDF rather than just on screen.
 
+An open incident's card also has **Acknowledge** and **Resolve** buttons
+(driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
+an acknowledged one keeps just **Resolve**. Nothing resolves an incident
+automatically -- not even the offending track leaving the zone or going
+stale (see `app/incidents.py`) -- resolution is a deliberate operator
+judgment call ("we reviewed this and it's handled"), not something
+inferred from the tracked object's own state.
+
 ## Tracking core
 
 Each track runs its own IMM (Interacting Multiple Model) filter

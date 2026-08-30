@@ -1091,6 +1091,24 @@ async function acknowledge(id) {
   }
 }
 
+// Nothing auto-resolves an incident (not even the offending track leaving
+// the zone/going stale) -- see app/incidents.py: this app treats
+// resolution as a deliberate operator judgment call ("we reviewed this
+// and it's handled"), not something inferable from the object's own
+// state. POST /api/incidents/{id}/resolve has always existed
+// server-side (app/api/incidents.py); this was just never wired to a
+// button, so a resolved-in-fact incident had no way to actually reach
+// "resolved" and sat "acknowledged" forever.
+async function resolveIncident(id) {
+  try {
+    await fetchJSON(`/api/incidents/${id}/resolve`, { method: "POST" });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    console.error(e);
+  }
+}
+
 // Posts a short sequence of detections forming one moving track, via the
 // same public /api/detections path any real sensor uses -- lets the
 // empty-state "Simulate tracks" button show what the dashboard actually
@@ -1345,6 +1363,7 @@ function renderAlerts() {
         <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtRelative(i.opened_at)}</div>
         <div style="margin-top:6px; display:flex; gap:6px;">
           ${i.status === "open" ? `<button data-ack-id="${i.id}">Acknowledge</button>` : ""}
+          ${i.status !== "resolved" ? `<button class="secondary" data-resolve-id="${i.id}">Resolve</button>` : ""}
           <button class="secondary" data-report-id="${i.id}">Report</button>
         </div>
       </div>
@@ -1352,6 +1371,9 @@ function renderAlerts() {
     .join("");
   el.querySelectorAll("button[data-ack-id]").forEach((btn) => {
     btn.addEventListener("click", () => acknowledge(Number(btn.dataset.ackId)));
+  });
+  el.querySelectorAll("button[data-resolve-id]").forEach((btn) => {
+    btn.addEventListener("click", () => resolveIncident(Number(btn.dataset.resolveId)));
   });
   el.querySelectorAll("button[data-report-id]").forEach((btn) => {
     btn.addEventListener("click", () => openIncidentReport(Number(btn.dataset.reportId)));

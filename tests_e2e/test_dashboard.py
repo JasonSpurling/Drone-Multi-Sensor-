@@ -402,6 +402,37 @@ def test_theme_toggle_switches_and_persists_across_reload(live_server, page):
     assert page.evaluate("document.documentElement.dataset.theme") == "dark"
 
 
+def test_alerts_panel_can_acknowledge_and_resolve_an_incident(live_server, page):
+    """POST /api/incidents/{id}/resolve has always existed server-side
+    (app/api/incidents.py), but the dashboard never had a button that
+    called it -- an incident could be acknowledged from the UI and then
+    sat "acknowledged" forever, with no way to actually mark it resolved.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    assert page.locator('.alert-item .badge-outline:has-text("open")').count() == 1
+    assert page.locator("#alerts-badge").inner_text() == "1"
+
+    page.click("button[data-ack-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
+    # Acknowledging doesn't resolve it -- still counts as active.
+    assert page.locator("#alerts-badge").inner_text() == "1"
+    assert page.locator("button[data-ack-id]").count() == 0
+    assert page.locator("button[data-resolve-id]").count() == 1
+
+    page.click("button[data-resolve-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("resolved")')
+    assert page.locator("button[data-resolve-id]").count() == 0
+    # Resolved incidents stay listed for after-action review, but no
+    # longer count toward the active-alerts badge.
+    assert not page.locator("#alerts-badge").is_visible()
+    assert page.evaluate("state.incidents.find(i => i.status === 'resolved').closed_at") is not None
+
+
 def test_incident_reports_panel_shows_a_rollup_for_a_seeded_incident(live_server, page):
     requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
     page.goto(live_server, wait_until="networkidle")
