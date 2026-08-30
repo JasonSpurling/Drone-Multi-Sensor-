@@ -50,6 +50,39 @@ def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
         return json.loads(response.read())
 
 
+def format_post_error(exc: urllib.error.URLError) -> str:
+    """Plain `str(exc)` on an HTTPError is just its status line (e.g. "HTTP
+    Error 401: Unauthorized") -- it drops the JSON body FastAPI actually
+    sends (e.g. {"detail": "Missing X-API-Key header"}), which is what an
+    operator needs to see to fix a misconfigured --api-key or malformed
+    request. Falls back to plain str(exc) for a non-HTTP URLError
+    (connection refused, DNS failure, ...), which has no response body.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode(errors="replace").strip()
+        except OSError:
+            body = ""
+        return f"HTTP {exc.code} {exc.reason}" + (f" -- {body}" if body else "")
+    return str(exc)
+
+
+def parse_mic_positions(raw_json: str) -> list[list[float]]:
+    """Parses --mic-positions and validates it upfront -- at least 2
+    microphones, app.acoustic_beamforming.estimate_bearing's own minimum
+    for bearing estimation -- so a misconfigured array fails immediately
+    with a clear message instead of after already opening the audio
+    device and recording a full block, deep inside that module's own
+    ValueError.
+    """
+    positions = json.loads(raw_json)
+    if len(positions) < 2:
+        raise SystemExit(
+            f"--mic-positions must list at least 2 microphones for bearing estimation, got {len(positions)}"
+        )
+    return positions
+
+
 def build_detection_payload(
     azimuth_deg: float,
     bearing_confidence: float,
@@ -75,7 +108,7 @@ def build_detection_payload(
 def watch(args: argparse.Namespace) -> None:
     import sounddevice as sd
 
-    mic_positions = json.loads(args.mic_positions)
+    mic_positions = parse_mic_positions(args.mic_positions)
     n_mics = len(mic_positions)
     block_frames = int(args.block_seconds * args.sample_rate)
 
@@ -101,7 +134,7 @@ def watch(args: argparse.Namespace) -> None:
                 f"track {result.get('track_id')}"
             )
         except urllib.error.URLError as exc:
-            print(f"ERROR posting detection: {exc}")
+            print(f"ERROR posting detection: {format_post_error(exc)}")
 
 
 def main() -> None:
@@ -128,6 +161,8 @@ def main() -> None:
     parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
     parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
+    if args.assumed_range_m <= 0:
+        parser.error("--assumed-range-m must be positive")
     watch(args)
 
 
