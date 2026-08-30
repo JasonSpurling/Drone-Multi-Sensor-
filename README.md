@@ -466,11 +466,24 @@ or an incident record you want on paper/PDF rather than just on screen.
 
 An open incident's card also has **Acknowledge** and **Resolve** buttons
 (driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
-an acknowledged one keeps just **Resolve**. Nothing resolves an incident
-automatically -- not even the offending track leaving the zone or going
-stale (see `app/incidents.py`) -- resolution is a deliberate operator
-judgment call ("we reviewed this and it's handled"), not something
-inferred from the tracked object's own state.
+an acknowledged one keeps just **Resolve**, for a deliberate operator
+judgment call -- "we reviewed this and it's handled."
+
+The system also auto-closes an incident once its own trigger condition
+is confirmed gone, so it never sits open/acknowledged indefinitely after
+the fact that caused it no longer holds: a zone-incursion incident closes
+as soon as a later detection places the track outside that zone again
+(`app.incidents.check_zone_incident_resolutions`, run on every detection
+alongside the check that opens one), and closing a track (active -> lost
+-> closed once it's gone quiet too long, see `app.tracking
+.expire_stale_tracks`) closes every incident type still open for it
+(`close_incidents_for_closed_track`) -- there'd otherwise be no signal
+left to resolve a zone-based one against, and nothing was tracking a
+behavioral one (loitering/formation/shadowing) either. An auto-closed
+incident is never mistaken for a reviewed one: its description is
+suffixed `(auto-closed: ...)` with the reason, and `acknowledged_by`
+is left exactly as it was (`null` if no operator ever acknowledged it) --
+never fabricated as if someone signed off on it.
 
 ## Tracking core
 

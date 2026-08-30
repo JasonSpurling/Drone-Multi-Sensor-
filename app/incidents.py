@@ -24,7 +24,9 @@ from app.db import (
     create_incident,
     get_open_behavioral_incident,
     get_open_incident,
+    list_open_incidents_for_track,
     list_recent_detections,
+    update_incident,
 )
 from app.geo import local_m_to_latlon
 from app.live import publish as publish_live_event
@@ -267,6 +269,75 @@ def check_zone_incidents(track: Track) -> list[Incident]:
         if incident is not None:
             opened.append(incident)
     return opened
+
+
+def _auto_close_incident(incident: Incident, reason: str) -> Incident:
+    """Closes an incident the system itself determined no longer applies
+    -- distinct from POST /api/incidents/{id}/resolve (app/api/
+    incidents.py), which is an operator's deliberate "we reviewed this
+    and it's handled" judgment call. This never fabricates that judgment:
+    `acknowledged_by` is left exactly as it was (None if no operator ever
+    acknowledged it), and `reason` is appended to the description so an
+    after-action report or audit reader can tell the two apart -- an
+    incident nobody ever looked at reads differently from one an operator
+    actively closed.
+    """
+    incident.status = IncidentStatus.RESOLVED
+    incident.closed_at = utcnow()
+    note = f"(auto-closed: {reason})"
+    incident.description = f"{incident.description} {note}" if incident.description else note
+    updated = update_incident(incident)
+    logger.info(
+        "Incident auto-closed (%s): track %s, incident %s", reason, incident.track_id, incident.incident_uid
+    )
+    if incident.site_id is not None:
+        publish_live_event(
+            incident.site_id, {"type": "incident_resolved", "incident": updated.model_dump(mode="json")}
+        )
+    return updated
+
+
+def check_zone_incident_resolutions(track: Track) -> list[Incident]:
+    """The other half of check_zone_incidents(): that function only ever
+    opens a ZONE_INCURSION incident when a track's position enters a
+    restricted zone -- nothing closed one back out once the track's
+    position left again, so an incident for a track that flew straight
+    through a zone in seconds stayed open (or acknowledged) indefinitely,
+    long after the track itself was gone. Runs on every detection commit
+    alongside check_zone_incidents, so an incident closes as soon as a
+    new position confirms the track is no longer inside that zone.
+    """
+    if track.id is None or track.site_id is None or track.latitude is None or track.longitude is None:
+        return []
+
+    still_inside_zone_ids = {
+        zone.id
+        for zone in zones_containing_point(track.latitude, track.longitude, track.site_id, track.altitude_m)
+        if zone.zone_type == ZoneType.RESTRICTED
+    }
+    closed = []
+    for incident in list_open_incidents_for_track(track.id, track.site_id, IncidentType.ZONE_INCURSION.value):
+        if incident.zone_id is not None and incident.zone_id not in still_inside_zone_ids:
+            closed.append(_auto_close_incident(incident, "track exited the zone"))
+    return closed
+
+
+def close_incidents_for_closed_track(track: Track) -> list[Incident]:
+    """Called from app.tracking.expire_stale_tracks when a track transitions
+    to CLOSED: nothing was tracking that object's position/behavior once
+    it went stale, so no still-open incident (zone incursion, predicted
+    incursion, loitering, formation, shadowing -- every type, not just
+    zone-based ones) has anything left to keep monitoring either. Without
+    this, a track that simply flew out of sensor range -- rather than
+    being resolved by check_zone_incident_resolutions' position check --
+    left its incidents open forever with no path to close them at all.
+    """
+    if track.id is None or track.site_id is None:
+        return []
+    return [
+        _auto_close_incident(incident, "track closed")
+        for incident in list_open_incidents_for_track(track.id, track.site_id)
+    ]
 
 
 def check_predicted_incursions(track: Track) -> list[Incident]:

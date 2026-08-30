@@ -841,6 +841,26 @@ def get_open_behavioral_incident(
     return _row_to_incident(row) if row else None
 
 
+def list_open_incidents_for_track(
+    track_id: int, site_id: int, incident_type: str | None = None
+) -> list[Incident]:
+    """Every still-open (open or acknowledged) incident for one track --
+    unlike get_open_incident/get_open_behavioral_incident, which each look
+    up at most one specific (track, zone/pair, type) combination to dedup
+    against before opening a new incident, this is app/incidents.py's
+    auto-close path: "what does this track currently have open, so I can
+    check whether each one's trigger condition still holds."
+    """
+    query = "SELECT * FROM incident WHERE track_id = :track_id AND site_id = :site_id AND status != 'resolved'"
+    params: dict = {"track_id": track_id, "site_id": site_id}
+    if incident_type is not None:
+        query += " AND incident_type = :incident_type"
+        params["incident_type"] = incident_type
+    with db_session() as conn:
+        rows = conn.execute(text(query), params).mappings().all()
+    return [_row_to_incident(row) for row in rows]
+
+
 def list_incidents(
     site_id: int, status: str | None = None, limit: int | None = None, offset: int = 0
 ) -> list[Incident]:

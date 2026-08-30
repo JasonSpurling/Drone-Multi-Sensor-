@@ -1,16 +1,25 @@
+import uuid
 from datetime import datetime
 
-from app.db import create_track, create_zone, list_incidents
-from app.incidents import check_predicted_incursions, check_zone_incidents
+from app.db import create_incident, create_track, create_zone, list_incidents, update_incident
+from app.incidents import (
+    check_predicted_incursions,
+    check_zone_incident_resolutions,
+    check_zone_incidents,
+    close_incidents_for_closed_track,
+)
 from app.models import (
     Classification,
+    Incident,
     IncidentSeverity,
+    IncidentStatus,
     IncidentType,
     Track,
     TrackStatus,
     Zone,
     ZoneType,
 )
+from app.util import utcnow
 
 SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
@@ -154,3 +163,67 @@ def test_after_action_report_404s_for_unknown_incident(site_id):
     with TestClient(app) as client:
         r = client.get("/api/incidents/999999/report")
         assert r.status_code == 404
+
+
+def test_zone_incident_auto_closes_when_track_exits_the_zone(site_id):
+    # Regression test: check_zone_incidents() only ever opened an
+    # incident on entry -- nothing closed it back out once the track's
+    # position left again, so it sat open/acknowledged forever even for
+    # a track that flew straight through the zone in seconds.
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id)
+    incidents = check_zone_incidents(track)
+    assert len(incidents) == 1
+
+    # Still inside the zone -- nothing to close yet.
+    assert check_zone_incident_resolutions(track) == []
+
+    track.latitude, track.longitude = 60.0, 60.0  # well outside the zone
+    closed = check_zone_incident_resolutions(track)
+    assert len(closed) == 1
+    assert closed[0].id == incidents[0].id
+    assert closed[0].status == IncidentStatus.RESOLVED
+    assert closed[0].closed_at is not None
+    assert "auto-closed" in closed[0].description
+    # Never fabricates that an operator reviewed it.
+    assert closed[0].acknowledged_by is None
+
+
+def test_zone_incident_auto_close_preserves_an_existing_acknowledgment(site_id):
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id)
+    incident = check_zone_incidents(track)[0]
+    incident.status = IncidentStatus.ACKNOWLEDGED
+    incident.acknowledged_by = "operator-1"
+    update_incident(incident)
+
+    track.latitude, track.longitude = 60.0, 60.0
+    closed = check_zone_incident_resolutions(track)
+    assert len(closed) == 1
+    assert closed[0].acknowledged_by == "operator-1"
+
+
+def test_close_incidents_for_closed_track_closes_every_open_incident(site_id):
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id)
+    zone_incident = check_zone_incidents(track)[0]
+    # A behavioral incident (loitering) isn't zone-based, so
+    # check_zone_incident_resolutions never touches it -- only a track
+    # actually closing should close this one.
+    loitering_incident = create_incident(
+        Incident(
+            site_id=site_id, incident_uid=str(uuid.uuid4()), incident_type=IncidentType.LOITERING,
+            severity=IncidentSeverity.MEDIUM, status=IncidentStatus.OPEN, track_id=track.id,
+            opened_at=utcnow(), description="loitering",
+        )
+    )
+
+    closed = close_incidents_for_closed_track(track)
+    closed_ids = {i.id for i in closed}
+    assert closed_ids == {zone_incident.id, loitering_incident.id}
+    assert all(i.status == IncidentStatus.RESOLVED for i in closed)
+
+
+def test_close_incidents_for_closed_track_is_a_noop_with_none_open(site_id):
+    track = make_track(site_id)
+    assert close_incidents_for_closed_track(track) == []

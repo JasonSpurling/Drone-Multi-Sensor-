@@ -49,7 +49,13 @@ from app.fusion import fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
 from app.imm import IMMFilter
-from app.incidents import check_loitering_incident, check_predicted_incursions, check_zone_incidents
+from app.incidents import (
+    check_loitering_incident,
+    check_predicted_incursions,
+    check_zone_incident_resolutions,
+    check_zone_incidents,
+    close_incidents_for_closed_track,
+)
 from app.kalman import ConstantVelocityKalmanFilter
 from app.live import publish as publish_live_event
 from app.models import Classification, Detection, Track, TrackStatus
@@ -142,6 +148,7 @@ def expire_stale_tracks(site_id: int, now: datetime | None = None) -> None:
             track.status = TrackStatus.CLOSED
             update_track(track)
             logger.info("Track %s -> closed (last seen %s)", track.track_uid, track.last_seen)
+            close_incidents_for_closed_track(track)
 
 
 def _coarse_distance_gate_m(track: Track, elapsed_s: float) -> float:
@@ -311,6 +318,7 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     publish_live_event(track.site_id, {"type": "track_update", "track": track.model_dump(mode="json")})
 
     check_zone_incidents(track)
+    check_zone_incident_resolutions(track)
     check_predicted_incursions(track)
     check_loitering_incident(track)
 

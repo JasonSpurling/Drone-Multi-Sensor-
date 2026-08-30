@@ -433,6 +433,42 @@ def test_alerts_panel_can_acknowledge_and_resolve_an_incident(live_server, page)
     assert page.evaluate("state.incidents.find(i => i.status === 'resolved').closed_at") is not None
 
 
+def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server, page):
+    """check_zone_incidents() only ever opened an incident on entry --
+    nothing closed it back out once the track's position left again.
+    A track that flew straight through the zone and out the other side
+    should show its incident auto-resolve in the dashboard without any
+    operator action, distinct from a manually-Acknowledged/Resolved one.
+    """
+    # Near the restricted zone's west edge (zone: lat 51.49-51.51,
+    # lon -0.11--0.09, see app/zones.seed.json) rather than dead-center --
+    # a single next detection just past the edge needs to stay within
+    # app.tracking's ~500m default association gate to be recognized as
+    # the *same* track leaving, not a new one spawning outside the zone.
+    near_edge = {
+        "sensor_id": "radar-1", "sensor_type": "radar",
+        "latitude": 51.50, "longitude": -0.108, "confidence": 0.9,
+    }
+    requests.post(live_server + "/api/detections", json=near_edge, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    assert page.locator('.alert-item .badge-outline:has-text("open")').count() == 1
+
+    # Same sensor_id (associates with the same track), ~485m further
+    # west -- now outside the zone, still inside the association gate.
+    requests.post(
+        live_server + "/api/detections", json={**near_edge, "longitude": -0.115}, timeout=5
+    ).raise_for_status()
+
+    page.wait_for_function("state.incidents.some(i => i.status === 'resolved')", timeout=5000)
+    assert page.locator('.alert-item .badge-outline:has-text("resolved")').count() == 1
+    assert not page.locator("#alerts-badge").is_visible()
+    description = page.evaluate("state.incidents.find(i => i.status === 'resolved').description")
+    assert "auto-closed" in description
+    assert page.evaluate("state.incidents.find(i => i.status === 'resolved').acknowledged_by") is None
+
+
 def test_incident_reports_panel_shows_a_rollup_for_a_seeded_incident(live_server, page):
     requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
     page.goto(live_server, wait_until="networkidle")
