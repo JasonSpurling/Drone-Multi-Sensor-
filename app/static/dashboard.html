@@ -28,6 +28,7 @@
     --online: #22c55e;
     --stale: #d99b1f;
     --offline: #6b7280;
+    --missing: #8b5cf6;
     --accent: #2563eb;
     --accent-hover: #1d4ed8;
     --zone: #f59e0b;
@@ -798,7 +799,9 @@ function activeIncidentsForTrack(trackId) {
     .filter((i) => i.track_id === trackId && i.status !== "resolved")
     .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
 }
-const SENSOR_STATUS_COLOR = { online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)" };
+const SENSOR_STATUS_COLOR = {
+  online: "var(--online)", stale: "var(--stale)", offline: "var(--offline)", missing: "var(--missing)",
+};
 const CLASS_LABELS = ["all", "drone", "aircraft", "bird", "friendly", "unknown"];
 // Display grouping, closest read to "disposition" groups (Friendly / Hostile-
 // ish / Unknown) without inventing a military disposition vocabulary this
@@ -1971,9 +1974,13 @@ function renderMap() {
   // Where your sensors actually are, not just what they're seeing --
   // only ever a real registered position (app/api/sensor_registry.py),
   // never a guess for a sensor that hasn't reported one. Colored by the
-  // same online/stale/offline health status the Sensor Health panel
-  // shows, so a sensor that's gone quiet is visible on the map itself,
-  // not just buried in a side panel.
+  // same online/stale/offline/missing health status the Sensor Health
+  // panel shows (app.sensors.get_sensor_health -- "missing" means
+  // registered but has never actually posted a detection at all,
+  // distinct from "offline", which means it was seen before and has
+  // since gone quiet), so a sensor that's gone quiet -- or was never
+  // hooked up in the first place -- is visible on the map itself, not
+  // just buried in a side panel.
   if (state.showSensors) {
     const healthBySensorId = new Map(state.sensors.map((s) => [s.sensor_id, s]));
     state.sensorRegistrations.filter((s) => s.active).forEach((s) => {
@@ -1986,7 +1993,7 @@ function renderMap() {
         </svg>`,
         className: "", iconSize: [14, 14], iconAnchor: [7, 7],
       });
-      const seenText = health ? fmtRelative(health.last_seen) : "never reported a detection";
+      const seenText = health && health.last_seen ? fmtRelative(health.last_seen) : "never reported a detection";
       L.marker([s.latitude, s.longitude], { icon, zIndexOffset: -100 })
         .bindPopup(
           `${escapeHtml(s.sensor_id)} <span style="color:var(--muted);">(${escapeHtml(s.sensor_type)})</span>` +
@@ -2161,7 +2168,7 @@ function renderSensors() {
   if (state.sensors.length === 0) {
     el.innerHTML = `<div class="empty-guidance">
       <div class="empty-title">No sensors connected</div>
-      <div class="empty-body">A sensor appears here automatically the first time it reports a detection -- nothing to register or configure in advance.</div>
+      <div class="empty-body">A sensor appears here automatically the first time it reports a detection -- nothing to register or configure in advance. Registering a sensor's position ahead of time (<code>PUT /api/sensor-registrations/{id}</code>) also makes it appear here right away, as <span style="color:var(--missing);">missing</span> until it actually reports something.</div>
       <ol class="empty-checklist">
         <li>Point your sensor/adapter at <code>POST /api/detections</code> on this server</li>
         <li>Include a <code>sensor_id</code>, <code>sensor_type</code>, and a position (or azimuth/range from a registered mount)</li>

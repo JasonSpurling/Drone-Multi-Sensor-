@@ -23,6 +23,14 @@ class SensorStatus(StrEnum):
     ONLINE = "online"
     STALE = "stale"
     OFFLINE = "offline"
+    # Registered (app/api/sensor_registry.py -- a known mounting position
+    # exists) but has never actually posted a single detection -- distinct
+    # from OFFLINE, which means "was seen before, has since gone quiet."
+    # Without this status, an operator has no way to tell "the sensor
+    # nobody bothered to hook up yet" apart from "the sensor that just
+    # went down" -- both looked identical (simply absent from
+    # GET /api/sensors) before this.
+    MISSING = "missing"
 
 
 class TrackStatus(StrEnum):
@@ -241,11 +249,15 @@ class ZoneInput(BaseModel):
 
 
 class SensorHealth(BaseModel):
-    """Derived liveness status for a sensor, based on its most recent detection."""
+    """Derived liveness status for a sensor, based on its most recent
+    detection -- except status=MISSING, which has no detection to derive
+    from at all (last_seen is None in that case: never fabricated as a
+    real timestamp).
+    """
 
     sensor_id: str
     sensor_type: SensorType
-    last_seen: datetime
+    last_seen: datetime | None
     status: SensorStatus
 
 

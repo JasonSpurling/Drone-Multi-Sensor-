@@ -327,7 +327,7 @@ replica so the product still fits.
 | `GET /api/zones` | List active zones (`?include_inactive=true` for the zone-management UI, which also needs to find and reactivate a deactivated one) |
 | `POST /api/zones` | Create a zone (admin) |
 | `PUT /api/zones/{id}` | Update a zone -- polygon, type, altitude band, active state (admin) |
-| `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
+| `GET /api/sensors` | Per-sensor health: online/stale/offline derived from each sensor's most recent detection, plus a `missing` entry for any registered sensor that's never actually reported one |
 | `GET /api/sensor-registrations` | List registered sensors (position/orientation used for georeferencing) |
 | `PUT /api/sensor-registrations/{sensor_id}` | Register/update a sensor's fixed position and orientation (admin) |
 | `GET /api/authorized-operators` | List authorized ("friendly") drone operators (admin) |
@@ -402,13 +402,23 @@ the dashboard itself being broken.
 Every registered sensor position (`PUT /api/sensor-registrations/{id}`,
 see "Georeferencing" above) shows up on the map as its own small square
 marker -- not just listed in the Sensor Health side panel -- colored by
-that sensor's real health status (online/stale/offline, the same signal
-`GET /api/sensors` already computes) so a sensor that's gone quiet is
-visible at a glance on the map itself, not buried in a side panel you
-have to go looking in. A sensor that's never been registered (most GPS-
-tagged sensors -- cameras, ADS-B receivers -- never need to be) simply
-isn't plotted, rather than guessing a position for it. Toggle with the
-**Sensors** checkbox alongside Trails/Vectors/Uncertainty.
+that sensor's real health status (online/stale/offline/missing, the same
+signal `GET /api/sensors` already computes) so a sensor that's gone
+quiet is visible at a glance on the map itself, not buried in a side
+panel you have to go looking in. A sensor that's never been registered
+(most GPS-tagged sensors -- cameras, ADS-B receivers -- never need to be)
+simply isn't plotted, rather than guessing a position for it. Toggle
+with the **Sensors** checkbox alongside Trails/Vectors/Uncertainty.
+
+**"Missing" status**: a sensor with a registered position but zero
+detections ever shows a distinct `missing` status (violet), not just
+absence from the list -- `app.sensors.get_sensor_health` cross-references
+`sensor_registry` for exactly this. Without it, "the sensor nobody
+bothered to wire up yet" and "the sensor that just went down" were
+indistinguishable: both were simply absent from `GET /api/sensors`,
+whether the registration was five minutes or five months old. A
+deactivated registration is never flagged this way -- a deliberately
+decommissioned sensor isn't a gap to surface.
 
 Two smaller additions alongside it: a scale bar (bottom-right, next to
 the zoom controls) for real distance context, and a "fit all" control

@@ -203,6 +203,31 @@ def test_empty_sensors_panel_shows_a_connection_checklist(live_server, page):
     assert "/api/detections" in text
 
 
+def test_registered_but_silent_sensor_shows_as_missing(live_server, page):
+    """Regression test: a sensor with a registered position (a known
+    mounting point, see app/api/sensor_registry.py) but zero detections
+    ever used to be entirely absent from both the Sensor Health panel and
+    the map -- indistinguishable from a sensor nobody had configured at
+    all. It should now show up as a distinct "missing" status.
+    """
+    requests.put(
+        f"{live_server}/api/sensor-registrations/radar-ghost",
+        json={"sensor_type": "radar", "latitude": 51.51, "longitude": -0.12, "azimuth_reference_deg": 0},
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=sensors]")
+    page.wait_for_selector("#sensors-table table")
+    row_text = page.locator("#sensors-table tbody tr").inner_text()
+    assert "radar-ghost" in row_text
+    assert "missing" in row_text
+
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+    popup_html = page.evaluate("sensorLayer.getLayers()[0].getPopup().getContent()")
+    assert "never reported a detection" in popup_html
+
+
 def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zones, page):
     page.goto(live_server_no_seed_zones, wait_until="networkidle")
     page.click(".rail-btn[data-panel=zones]")
