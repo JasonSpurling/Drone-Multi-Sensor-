@@ -445,8 +445,13 @@
     color: var(--active); margin-bottom: 2px; display: block;
   }
   .detail-title-row { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
-  .detail-actions { display: flex; gap: 6px; padding: 0 14px 12px 14px; border-bottom: 1px solid var(--border); }
+  .detail-actions { display: flex; gap: 6px; padding: 0 14px 8px 14px; }
   .detail-actions button { flex: 1; }
+  .detail-actions.secondary { padding-top: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .detail-actions select {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; font-size: 12px; padding: 0 4px;
+  }
   .kv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; align-content: start; }
   .kv .k { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -1403,6 +1408,15 @@ function renderDetails() {
       <button class="secondary" id="focus-btn">Focus</button>
       <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
     </div>
+    <div class="detail-actions secondary">
+      <button class="secondary" id="copy-btn" title="Copy this track's data as text">Copy</button>
+      <select id="export-format" aria-label="Export format">
+        <option value="csv">CSV</option>
+        <option value="gpx">GPX</option>
+        <option value="kml">KML</option>
+      </select>
+      <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
+    </div>
 
     <div class="kv-section">
       <div class="kv-section-title">Identity</div>
@@ -1410,6 +1424,7 @@ function renderDetails() {
         <div class="kv">
           <div class="k">UID</div><div class="v" title="${escapeHtml(track.track_uid)}">${escapeHtml(track.track_uid.slice(0, 13))}…</div>
           <div class="k">First seen</div><div class="v">${fmtRelative(track.first_seen)}</div>
+          <div class="k">Category</div><div class="v">${track.aircraft_category ? escapeHtml(AIRCRAFT_CATEGORY_LABEL[track.aircraft_category] || track.aircraft_category) : "—"}</div>
         </div>
         <div class="kv">
           <div class="k">Last seen</div><div class="v">${fmtRelative(track.last_seen)}</div>
@@ -1472,6 +1487,10 @@ function renderDetails() {
     if (state.follow) flyToTrack(track.id, { animate: true });
     renderDetails();
   });
+  document.getElementById("copy-btn").addEventListener("click", (e) => copyTrackSummary(track, e.target));
+  document.getElementById("export-btn").addEventListener("click", () => {
+    exportTrackHistory(track.id, track.track_uid, document.getElementById("export-format").value);
+  });
   const scrubRange = document.getElementById("scrub-range");
   if (scrubRange) scrubRange.addEventListener("input", (e) => setScrubIndex(Number(e.target.value)));
   const playBtn = document.getElementById("play-btn");
@@ -1481,6 +1500,67 @@ function renderDetails() {
   el.querySelectorAll(".label-chip").forEach((btn) => {
     btn.addEventListener("click", () => labelDetection(Number(btn.dataset.detectionId), btn.dataset.label));
   });
+}
+
+// Plain text, not JSON -- meant for pasting into a chat/radio-log/incident
+// note, not for round-tripping back into this app (that's what Export is
+// for). Only ever includes fields that are actually known; "—" for the
+// same set of fields renderDetails() itself shows as unknown, never a
+// fabricated value.
+function trackSummaryText(track) {
+  const category = track.aircraft_category
+    ? (AIRCRAFT_CATEGORY_LABEL[track.aircraft_category] || track.aircraft_category)
+    : null;
+  const lines = [
+    `Track ${track.id} (${track.track_uid})`,
+    `Classification: ${track.classification}${category ? ` (${category})` : ""}`,
+    `Status: ${track.status}`,
+    `Position: ${track.latitude != null ? `${track.latitude.toFixed(5)}, ${track.longitude.toFixed(5)}` : "unknown"}`,
+    `Altitude: ${track.altitude_m != null ? Math.round(track.altitude_m) + " m" : "unknown"}`,
+    `Heading: ${track.heading_deg != null ? Math.round(track.heading_deg) + "°" : "unknown"}`,
+    `Speed: ${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "unknown"}`,
+    `Last seen: ${new Date(track.last_seen).toLocaleString()}`,
+  ];
+  return lines.join("\n");
+}
+
+async function copyTrackSummary(track, button) {
+  const text = trackSummaryText(track);
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied!";
+  } catch {
+    // Clipboard access can fail (no HTTPS/localhost, no permission) --
+    // the button label itself is the only feedback a user gets either
+    // way, so a failure just gets its own honest label instead of
+    // silently doing nothing.
+    button.textContent = "Copy failed";
+  }
+  setTimeout(() => { button.textContent = original; }, 1500);
+}
+
+// Downloads GET /api/tracks/{id}/history/export via fetch (not a plain
+// <a href>) so the X-API-Key header actually gets attached when an API
+// key is configured -- a browser navigation triggered by a bare link
+// can't set custom headers, and that endpoint requires the same viewer
+// role as everything else here. Mirrors exportReportCSV() above.
+async function exportTrackHistory(trackId, trackUid, format) {
+  const headers = apiKey ? { "X-API-Key": apiKey } : {};
+  const res = await fetch(`/api/tracks/${trackId}/history/export?format=${format}`, { headers });
+  if (!res.ok) {
+    if (res.status === 401) showAuthBar(true);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `track-${trackUid}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // The most recent handful of the selected track's detections, each with

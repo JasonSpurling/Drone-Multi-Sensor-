@@ -1453,8 +1453,14 @@ can't set it to fake a position out of the signature's scope.
 - **Track history export**: `GET /api/tracks/{track_id}/history/export?format=gpx|kml|csv`
   returns the same history as a downloadable file for an external tool --
   GPX or KML for a GIS/mapping application (Google Earth, QGIS, ...), CSV
-  for a spreadsheet -- instead of only being usable from this app's own
-  API/dashboard.
+  for a spreadsheet. The track details panel's Export button drives this
+  directly (format picker, downloads as `track-<uid>.<format>`) -- an
+  operator doesn't need to know the endpoint exists. A Copy button next
+  to it copies a plain-text summary of the selected track (classification,
+  category, position, altitude, heading, speed, last seen) to the
+  clipboard, for pasting into a chat/radio-log/incident note -- only
+  fields the track actually has data for, "unknown" for the rest, never a
+  guess.
 - **Structured logging**: `DRONE_LOG_FORMAT=json` emits one JSON object per
   log line instead of human-readable text, for log aggregators.
 - **Metrics**: `GET /api/metrics` in Prometheus exposition format -- two

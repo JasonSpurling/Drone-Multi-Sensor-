@@ -800,3 +800,42 @@ def test_track_card_shows_alert_dot_and_sort_reorders_the_list(live_server, page
     # The choice survives a reload (persisted like the theme toggle).
     page.reload(wait_until="networkidle")
     assert page.eval_on_selector("#track-sort", "el => el.value") == "altitude"
+
+
+def test_track_details_copy_and_export_use_real_track_data(live_server, page):
+    """The details panel's Copy button puts real, currently-selected-track
+    data on the clipboard (not a stub), and Export actually downloads the
+    already-existing GET /api/tracks/{id}/history/export endpoint (CSV by
+    default), which had no dashboard UI before this.
+    """
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb",
+            "latitude": 51.5, "longitude": -0.1, "altitude_m": 3000, "confidence": 0.99,
+            "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#copy-btn")
+
+    track_id = page.evaluate("state.selectedTrackId")
+    assert page.locator(".kv-section:has-text('Identity')").inner_text().find("rotorcraft") != -1
+
+    page.click("#copy-btn")
+    page.wait_for_function("document.getElementById('copy-btn').textContent === 'Copied!'")
+    clipboard_text = page.evaluate("navigator.clipboard.readText()")
+    assert f"Track {track_id}" in clipboard_text
+    assert "rotorcraft" in clipboard_text
+    assert "3000 m" in clipboard_text or "3000" in clipboard_text
+
+    with page.expect_download() as download_info:
+        page.click("#export-btn")
+    download = download_info.value
+    assert download.suggested_filename.startswith("track-")
+    assert download.suggested_filename.endswith(".csv")
