@@ -412,18 +412,47 @@ def list_labeled_detections(site_id: int) -> list[Detection]:
 
 
 def list_detections(
-    site_id: int, track_id: int | None = None, limit: int | None = None, offset: int = 0
+    site_id: int,
+    track_id: int | None = None,
+    sensor_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Detection]:
+    """track_id narrows to one track's history (app.api.tracks' /history
+    endpoints); sensor_id/start/end narrow independently of any track at
+    all (GET /api/detections, app.api.detections) -- raw ingest data for
+    sensor-level QA/debugging that isn't naturally scoped to a single
+    track (e.g. "everything this sensor reported in the last hour",
+    across however many tracks that spans). All filters are optional and
+    compose freely with each other.
+    """
+    # Each optional filter appends its own literal SQL fragment (like
+    # get_open_behavioral_incident above), rather than joining a
+    # runtime-built list into the query -- every value is still a bound
+    # :param either way, but this also keeps bandit's B608 (string-built
+    # query) check, which can't tell a `.join()` of hardcoded fragments
+    # apart from actually-unsafe interpolation, from flagging it.
+    query = "SELECT * FROM detection WHERE site_id = :site_id"
+    params: dict = {"site_id": site_id}
+    if track_id is not None:
+        query += " AND track_id = :track_id"
+        params["track_id"] = track_id
+    if sensor_id is not None:
+        query += " AND sensor_id = :sensor_id"
+        params["sensor_id"] = sensor_id
+    if start is not None:
+        query += " AND timestamp >= :start"
+        params["start"] = start.isoformat()
+    if end is not None:
+        query += " AND timestamp < :end"
+        params["end"] = end.isoformat()
+    query += " ORDER BY timestamp"
+    if limit is not None:
+        query += " LIMIT :limit OFFSET :offset"
+        params.update(limit=limit, offset=offset)
     with db_session() as conn:
-        if track_id is not None:
-            query = "SELECT * FROM detection WHERE site_id = :site_id AND track_id = :track_id ORDER BY timestamp"
-            params: dict = {"site_id": site_id, "track_id": track_id}
-        else:
-            query = "SELECT * FROM detection WHERE site_id = :site_id ORDER BY timestamp"
-            params = {"site_id": site_id}
-        if limit is not None:
-            query += " LIMIT :limit OFFSET :offset"
-            params.update(limit=limit, offset=offset)
         rows = conn.execute(text(query), params).mappings().all()
     return [_row_to_detection(row) for row in rows]
 

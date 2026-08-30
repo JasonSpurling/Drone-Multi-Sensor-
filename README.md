@@ -319,6 +319,7 @@ replica so the product still fits.
 | `GET /api/metrics` | Prometheus metrics (unauthenticated) |
 | `POST /api/detections` | Ingest one detection; runs georeferencing, IMM track association, classification fusion, and zone-incident checks |
 | `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
+| `GET /api/detections` | Raw ingested detections, independent of any track (`?sensor_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`) -- for sensor-level QA/debugging without a track id in hand already; see `GET /api/tracks/{id}/history` below for one track's own path |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |

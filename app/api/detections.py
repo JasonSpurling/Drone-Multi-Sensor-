@@ -1,11 +1,12 @@
 import json
 import math
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.auth import ROLE_ADMIN, ROLE_INGEST, ROLE_OPERATOR, Principal, require_role
+from app.auth import ROLE_ADMIN, ROLE_INGEST, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.config import MAX_BATCH_SIZE, MAX_DETECTION_CLOCK_SKEW_SECONDS
-from app.db import record_audit, set_detection_human_label
+from app.db import list_detections, record_audit, set_detection_human_label
 from app.metrics import (
     clock_skew_rejected_total,
     detections_ingested_total,
@@ -18,6 +19,8 @@ from app.tracking import associate_detection, associate_detections_batch
 from app.util import utcnow
 
 router = APIRouter()
+
+_viewer_roles = (ROLE_VIEWER, ROLE_OPERATOR, ROLE_ADMIN)
 
 
 def _check_rate_limit(sensor_id: str, site_id: int) -> None:
@@ -63,6 +66,30 @@ def _check_clock_skew(detection: Detection) -> None:
                 "clock is synchronized (e.g. NTP) and reporting UTC."
             ),
         )
+
+
+@router.get("/detections", response_model=list[Detection])
+def get_detections(
+    sensor_id: str | None = Query(default=None),
+    start: datetime | None = Query(default=None),
+    end: datetime | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_role(*_viewer_roles)),
+) -> list[Detection]:
+    """Raw ingested detections, independent of any track -- unlike
+    GET /api/tracks/{id}/history (app.api.tracks), which is scoped to one
+    already-known track's path, this is for sensor-level QA/debugging
+    ("what has sensor X actually reported in the last hour") without
+    needing to first find which track(s) that spans. Every detection
+    this app ever ingests gets associated with some track (app.tracking
+    always spawns one if nothing matches), so this and /tracks/{id}/history
+    overlap in content -- they differ in what you're allowed to already
+    know before you ask.
+    """
+    return list_detections(
+        site_id=principal.site_id, sensor_id=sensor_id, start=start, end=end, limit=limit, offset=offset
+    )
 
 
 @router.post(
