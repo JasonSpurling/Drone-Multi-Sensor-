@@ -1682,6 +1682,32 @@ limiter correctly rejecting excess load under this script's intentionally
 saturating traffic is expected, not a regression, and would otherwise make
 this job flaky for a reason that has nothing to do with correctness.
 
+## Recording and replaying detection traffic
+
+`scripts/replay_detections.py` records real detection traffic from a
+running instance's `GET /api/detections` and replays it against another
+(or the same, later) instance -- useful for reproducing a tracking/
+incident bug against a fresh DB without waiting for it to recur live, or
+for feeding a demo/staging deployment realistic-looking traffic without
+sensors attached:
+
+```bash
+# Save an hour of traffic from a source server to a file:
+python scripts/replay_detections.py record --url http://source:8000 \
+    --start 2026-01-01T00:00:00 --end 2026-01-01T01:00:00 --out captured.jsonl
+
+# Replay it against a target server at 4x speed, timestamps rewritten to
+# "now" (a stale timestamp would just be rejected -- see
+# DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS above) with the recorded
+# inter-detection spacing preserved so a track's motion looks like it did
+# the first time instead of arriving all at once:
+python scripts/replay_detections.py replay --url http://target:8000 \
+    --in captured.jsonl --speed 4 --api-key $DRONE_API_KEY
+```
+
+Like `load_test.py`, this isn't part of the pytest suite or CI -- it talks
+to a real running server, not a fixture.
+
 **Last recorded results** (this container's CPU, single instance, rate
 limiting raised via `DRONE_RATE_LIMIT_PER_SECOND`/`_BURST` to measure the
 actual processing ceiling rather than the deliberate per-sensor throttle --
