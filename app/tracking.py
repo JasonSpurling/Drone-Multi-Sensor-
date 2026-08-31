@@ -45,7 +45,7 @@ from app.db import (
     update_track,
     upsert_kalman_state,
 )
-from app.fusion import fuse_classification
+from app.fusion import classification_confidence, fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
 from app.imm import IMMFilter
@@ -306,6 +306,15 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     fills_in_unknown = track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN
     if upgrades_to_drone or fills_in_unknown:
         track.classification = fused_label
+    # How strongly *current* evidence backs whatever ended up stored above
+    # (app.fusion.classification_confidence's docstring) -- deliberately
+    # decoupled from the upgrade-only ratchet just above: the label can
+    # only ever move toward DRONE/fill in from UNKNOWN, but confidence in
+    # it is free to rise and fall with the actual evidence, e.g. a track
+    # that's DRONE from an early high-confidence reading but has since
+    # only gathered bird-like evidence shows falling confidence without
+    # ever silently losing its DRONE label.
+    track.classification_confidence = classification_confidence(history, track.classification)
     # A real ADS-B emitter category (app.models.Track.aircraft_category's
     # docstring) is a transponder-reported fact, not a threat judgment --
     # unlike classification above, the latest report simply wins rather

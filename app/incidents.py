@@ -14,6 +14,8 @@ from app.config import (
     FORMATION_HEADING_TOLERANCE_DEG,
     FORMATION_MAX_SPACING_M,
     FORMATION_SPEED_TOLERANCE_MPS,
+    FUSION_HISTORY_LIMIT,
+    INCIDENT_CORROBORATION_MIN_SENSOR_TYPES,
     LOITERING_MIN_DURATION_S,
     LOITERING_RADIUS_M,
     PREDICTIVE_HORIZON_SECONDS,
@@ -72,6 +74,46 @@ _SEVERITY_BY_CLASSIFICATION = {
 # projection off in a random direction.
 _MIN_SPEED_FOR_PROJECTION_MPS = 1.0
 
+_SEVERITY_ESCALATION = {
+    IncidentSeverity.LOW: IncidentSeverity.MEDIUM,
+    IncidentSeverity.MEDIUM: IncidentSeverity.HIGH,
+    IncidentSeverity.HIGH: IncidentSeverity.CRITICAL,
+    IncidentSeverity.CRITICAL: IncidentSeverity.CRITICAL,
+}
+
+
+def _corroborating_sensor_type_count(track: Track) -> int:
+    """Distinct sensor types among the same recent-detection window
+    app.fusion's classification fusion itself considers
+    (FUSION_HISTORY_LIMIT) -- multiple sensor *types* independently
+    reporting on this track, not just multiple detections from the same
+    one repeating itself.
+    """
+    if track.id is None or track.site_id is None:
+        return 0
+    history = list_recent_detections(track.id, track.site_id, FUSION_HISTORY_LIMIT)
+    return len({d.sensor_type for d in history})
+
+
+def _severity_with_corroboration(
+    track: Track, base_severity: IncidentSeverity
+) -> tuple[IncidentSeverity, int]:
+    """Escalates `base_severity` one level once at least
+    INCIDENT_CORROBORATION_MIN_SENSOR_TYPES distinct sensor types have
+    reported on this track. app/fusion.py already fuses multi-sensor
+    evidence into one classification label, but a DRONE reading
+    independently confirmed by radar+RF+camera together is more
+    actionable than the identical label from a single acoustic sensor
+    alone -- severity previously couldn't tell those two situations
+    apart, since it was keyed only on the resulting label. Returns the
+    (possibly escalated) severity alongside the sensor-type count that
+    was actually checked, so a caller that escalates can say why.
+    """
+    sensor_type_count = _corroborating_sensor_type_count(track)
+    if sensor_type_count >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES:
+        return _SEVERITY_ESCALATION[base_severity], sensor_type_count
+    return base_severity, sensor_type_count
+
 
 def _open_incident(
     track: Track, zone: Zone, incident_type: IncidentType, description: str
@@ -83,7 +125,10 @@ def _open_incident(
     assert track.id is not None and zone.id is not None and track.site_id is not None
     if get_open_incident(track.id, zone.id, incident_type.value, track.site_id) is not None:
         return None
-    severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
+    base_severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
+    severity, sensor_type_count = _severity_with_corroboration(track, base_severity)
+    if severity != base_severity:
+        description = f"{description} (escalated: corroborated by {sensor_type_count} sensor types)"
     incident = create_incident(
         Incident(
             site_id=track.site_id,
@@ -135,7 +180,10 @@ def _open_behavioral_incident(
     ) is not None:
         return None
 
-    severity = _BEHAVIORAL_SEVERITY.get(incident_type, IncidentSeverity.MEDIUM)
+    base_severity = _BEHAVIORAL_SEVERITY.get(incident_type, IncidentSeverity.MEDIUM)
+    severity, sensor_type_count = _severity_with_corroboration(track, base_severity)
+    if severity != base_severity:
+        description = f"{description} (escalated: corroborated by {sensor_type_count} sensor types)"
     incident = create_incident(
         Incident(
             site_id=track.site_id,

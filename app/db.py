@@ -75,6 +75,7 @@ _TABLE_MIGRATION_COLUMNS = {
         "maneuver_probability": "REAL",
         "site_id": "INTEGER",
         "aircraft_category": "VARCHAR(2)",
+        "classification_confidence": "REAL",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
@@ -580,10 +581,12 @@ def create_track(track: Track) -> Track:
                 INSERT INTO track
                     (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
-                     position_uncertainty_m, maneuver_probability, aircraft_category)
+                     position_uncertainty_m, maneuver_probability, aircraft_category,
+                     classification_confidence)
                 VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
-                        :position_uncertainty_m, :maneuver_probability, :aircraft_category)
+                        :position_uncertainty_m, :maneuver_probability, :aircraft_category,
+                        :classification_confidence)
                 RETURNING id
                 """
             ),
@@ -602,6 +605,7 @@ def create_track(track: Track) -> Track:
                 "position_uncertainty_m": track.position_uncertainty_m,
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
+                "classification_confidence": track.classification_confidence,
             },
         ).one()
         track.id = row.id
@@ -618,7 +622,8 @@ def update_track(track: Track) -> Track:
                     latitude = :latitude, longitude = :longitude, altitude_m = :altitude_m,
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
                     position_uncertainty_m = :position_uncertainty_m,
-                    maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category
+                    maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category,
+                    classification_confidence = :classification_confidence
                 WHERE id = :id
                 """
             ),
@@ -634,6 +639,7 @@ def update_track(track: Track) -> Track:
                 "position_uncertainty_m": track.position_uncertainty_m,
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
+                "classification_confidence": track.classification_confidence,
                 "id": track.id,
             },
         )
@@ -683,6 +689,7 @@ def _row_to_track(row) -> Track:
         position_uncertainty_m=row["position_uncertainty_m"],
         maneuver_probability=row["maneuver_probability"],
         aircraft_category=row["aircraft_category"],
+        classification_confidence=row["classification_confidence"],
     )
 
 

@@ -1418,6 +1418,14 @@ function renderDetails() {
   const related = state.incidents.filter((i) => i.track_id === track.id);
   const maneuverPct = track.maneuver_probability != null ? Math.round(track.maneuver_probability * 100) : null;
   const meterColor = maneuverPct == null ? "var(--border)" : maneuverPct < 33 ? "var(--active)" : maneuverPct < 66 ? "var(--medium)" : "var(--high)";
+  // How strongly *current* evidence backs the classification label above
+  // -- distinct from the label itself, which only ever upgrades (see
+  // app.tracking's _commit_detection); this can fall as contradicting
+  // evidence accumulates or the track goes stale, even while the label
+  // stays put. High is good here (unlike Maneuvering below), so the
+  // color scale runs the opposite direction.
+  const confidencePct = track.classification_confidence != null ? Math.round(track.classification_confidence * 100) : null;
+  const confidenceColor = confidencePct == null ? "var(--border)" : confidencePct < 40 ? "var(--high)" : confidencePct < 70 ? "var(--medium)" : "var(--active)";
 
   el.innerHTML = `
     <div class="kv-section" style="padding-top:14px;">
@@ -1475,6 +1483,11 @@ function renderDetails() {
     <div class="kv-section">
       <div class="kv-section-title">Track quality</div>
       <div class="kv">
+        <div class="k" title="How strongly current evidence backs the classification above -- can fall as the track goes stale, even though the label itself never downgrades">Confidence</div>
+        <div class="v">
+          ${confidencePct != null ? confidencePct + "%" : "—"}
+          <div class="meter"><div class="meter-fill" style="width:${confidencePct ?? 0}%; background:${confidenceColor}"></div></div>
+        </div>
         <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
         <div class="k">Maneuvering</div>
         <div class="v">
@@ -1538,7 +1551,10 @@ function trackSummaryText(track) {
     : null;
   const lines = [
     `Track ${track.id} (${track.track_uid})`,
-    `Classification: ${track.classification}${category ? ` (${category})` : ""}`,
+    `Classification: ${track.classification}${category ? ` (${category})` : ""}` +
+      (track.classification_confidence != null
+        ? ` [${Math.round(track.classification_confidence * 100)}% confidence]`
+        : ""),
     `Status: ${track.status}`,
     `Position: ${track.latitude != null ? `${track.latitude.toFixed(5)}, ${track.longitude.toFixed(5)}` : "unknown"}`,
     `Altitude: ${track.altitude_m != null ? Math.round(track.altitude_m) + " m" : "unknown"}`,

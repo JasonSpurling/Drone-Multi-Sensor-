@@ -1287,6 +1287,38 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
 
+**Classification confidence, distinct from the label**: `Track.classification_confidence`
+(0-1) is how strongly *current* evidence backs whatever label is actually
+stored -- not the winning label, if the two have diverged, since the
+upgrade-only rule above means the stored label can outlive contradicting
+evidence by design. It can fall even while the label itself never
+downgrades: a track marked `drone` early on whose more recent detections
+increasingly look like `bird` keeps its `drone` label but shows falling
+confidence in it, an honest signal instead of either silently downgrading
+or looking exactly as certain as a freshly-reconfirmed track. `GET
+/api/tracks`/`GET /api/tracks/{id}` additionally apply read-time
+staleness decay on top of the as-of-last-detection value `app/tracking.py`
+stores -- a track nobody's heard from in a while decays linearly toward
+`DRONE_CLASSIFICATION_CONFIDENCE_FLOOR` (default `0.3`, never fully zero:
+real evidence did once support it) over `DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS`
+(default `300`), computed fresh on every request rather than kept current
+by a background job. The dashboard's track details panel shows it as a
+**Confidence** meter alongside Maneuvering/Uncertainty in Track quality.
+
+**Severity escalates with sensor-type corroboration**: fusing multiple
+sensors into one classification (above) doesn't by itself change how
+*actionable* an incident is -- a `drone` reading from a single acoustic
+sensor previously got the same severity as one independently confirmed by
+radar+RF+camera together. `app/incidents.py` now escalates a zone-incursion
+or behavioral incident's severity one level (capped at `critical`) once at
+least `DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES` (default `2`)
+distinct sensor types have reported on the opening track, using the same
+recent-detection window classification fusion itself considers
+(`DRONE_FUSION_HISTORY_LIMIT`). The incident's description gets an
+`(escalated: corroborated by N sensor types)` suffix when this fires, so
+it's visible in the Alerts panel and after-action reports why severity is
+higher than the classification alone would suggest.
+
 **Labeling real detections for training**: the missing piece between "no
 labeled dataset" and being able to train a real model is real labeled
 data -- this doesn't create any, but gives you a way to build it up as
@@ -1709,6 +1741,9 @@ needs to be set to run locally.
 | `DRONE_COT_UDP_PORT` | `6969` | TAK endpoint UDP port |
 | `DRONE_COT_STALE_SECONDS` | `60` | How long a CoT event is valid before a TAK client greys it out |
 | `DRONE_FUSION_HISTORY_LIMIT` | `50` | Max recent detections per track fed into classification fusion |
+| `DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES` | `2` | Distinct sensor types needed to escalate an incident's severity one level |
+| `DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS` | `300` | Time for a stale track's `classification_confidence` to decay to the floor |
+| `DRONE_CLASSIFICATION_CONFIDENCE_FLOOR` | `0.3` | Floor `classification_confidence` decays toward, never below |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |
 | `DRONE_TRACK_STALE_SECONDS` | `30` | Active track goes `lost` after this many quiet seconds |

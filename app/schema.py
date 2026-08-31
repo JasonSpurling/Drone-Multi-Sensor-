@@ -61,6 +61,11 @@ track = Table(
     # glider) most recently reported for this track -- see
     # app.models.Track.aircraft_category's docstring.
     Column("aircraft_category", String(2)),
+    # Fused vote-share (0-1) for the stored `classification` as of this
+    # track's last detection -- see app.models.Track.classification_confidence's
+    # docstring. Read-time staleness decay is applied in app/api/tracks.py,
+    # not stored here.
+    Column("classification_confidence", Float),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --

@@ -401,6 +401,29 @@ BEHAVIOR_SWEEP_INTERVAL_SECONDS = float(os.getenv("DRONE_BEHAVIOR_SWEEP_INTERVAL
 # on every new detection.
 FUSION_HISTORY_LIMIT = int(os.getenv("DRONE_FUSION_HISTORY_LIMIT", "50"))
 
+# A zone-incursion/predicted-incursion or behavioral incident's severity
+# escalates one level (app/incidents.py) when the opening track's recent
+# evidence comes from at least this many distinct sensor types -- a
+# multi-sensor-corroborated DRONE reading is more actionable than one
+# from a single acoustic sensor, even though both fuse to the same
+# classification label.
+INCIDENT_CORROBORATION_MIN_SENSOR_TYPES = int(os.getenv("DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES", "2"))
+
+# How long, in seconds, a track's classification_confidence (app/fusion.py's
+# fused vote-share for whatever label is actually stored -- NOT the
+# classification label itself, which only ever upgrades, never downgrades,
+# see app/tracking.py's _commit_detection) takes to decay from its
+# as-of-last-detection value down to CLASSIFICATION_CONFIDENCE_FLOOR once
+# no new detections arrive. Linear decay, applied at read time
+# (app/api/tracks.py) so it's always current without a background job.
+CLASSIFICATION_CONFIDENCE_DECAY_SECONDS = float(
+    os.getenv("DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS", "300")
+)
+# Confidence never decays below this -- real evidence did once support
+# the stored classification; going quiet doesn't erase that it happened,
+# it just means it's no longer fresh.
+CLASSIFICATION_CONFIDENCE_FLOOR = float(os.getenv("DRONE_CLASSIFICATION_CONFIDENCE_FLOOR", "0.3"))
+
 
 def get_api_key() -> str:
     """The file-aware, rotation-capable accessor for the legacy single

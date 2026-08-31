@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from app.db import create_incident, create_track, create_zone, list_incidents, update_incident
+from app.db import create_detection, create_incident, create_track, create_zone, list_incidents, update_incident
 from app.incidents import (
     check_predicted_incursions,
     check_zone_incident_resolutions,
@@ -10,10 +10,12 @@ from app.incidents import (
 )
 from app.models import (
     Classification,
+    Detection,
     Incident,
     IncidentSeverity,
     IncidentStatus,
     IncidentType,
+    SensorType,
     Track,
     TrackStatus,
     Zone,
@@ -74,6 +76,56 @@ def test_severity_matches_classification(site_id):
     create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
     incidents = check_zone_incidents(make_track(site_id, classification=Classification.DRONE))
     assert incidents[0].severity == IncidentSeverity.HIGH
+
+
+def _seed_detection(site_id: int, track_id: int, sensor_type: SensorType) -> None:
+    create_detection(
+        Detection(
+            site_id=site_id, sensor_id=f"{sensor_type.value}-1", sensor_type=sensor_type,
+            track_id=track_id, timestamp=datetime(2026, 1, 1, 12, 0, 0),
+            latitude=51.1, longitude=0.0, confidence=0.9,
+        )
+    )
+
+
+def test_severity_escalates_when_corroborated_by_multiple_sensor_types(site_id):
+    # A DRONE reading independently confirmed by two distinct sensor
+    # types is more actionable than the identical label from a single
+    # sensor -- severity used to be keyed only on the classification
+    # label and couldn't tell the two apart.
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id, classification=Classification.DRONE)
+    _seed_detection(site_id, track.id, SensorType.RADAR)
+    _seed_detection(site_id, track.id, SensorType.RF)
+
+    incidents = check_zone_incidents(track)
+    assert incidents[0].severity == IncidentSeverity.CRITICAL  # HIGH escalated one level
+    assert "corroborated by 2 sensor types" in incidents[0].description
+
+
+def test_severity_does_not_escalate_from_a_single_sensor_type(site_id):
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id, classification=Classification.DRONE)
+    _seed_detection(site_id, track.id, SensorType.RADAR)
+    _seed_detection(site_id, track.id, SensorType.RADAR)  # same type again, still just one
+
+    incidents = check_zone_incidents(track)
+    assert incidents[0].severity == IncidentSeverity.HIGH  # unescalated
+    assert "corroborated" not in incidents[0].description
+
+
+def test_severity_escalation_caps_at_critical(site_id):
+    # AIRCRAFT/BIRD both map to LOW; FRIENDLY maps to MEDIUM. Confirm the
+    # escalation table doesn't error or overshoot for the one classification
+    # already at the ceiling once escalated.
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    track = make_track(site_id, classification=Classification.DRONE)
+    _seed_detection(site_id, track.id, SensorType.RADAR)
+    _seed_detection(site_id, track.id, SensorType.CAMERA)
+    _seed_detection(site_id, track.id, SensorType.ACOUSTIC)
+
+    incidents = check_zone_incidents(track)
+    assert incidents[0].severity == IncidentSeverity.CRITICAL
 
 
 def test_friendly_classification_is_not_downgraded_to_low_severity(site_id):

@@ -265,6 +265,27 @@ def test_confident_classification_does_not_decay_back_to_bird(site_id):
     assert track.classification == Classification.DRONE
 
 
+def test_classification_confidence_falls_as_contradicting_evidence_accumulates_without_downgrading(site_id):
+    # The label stays DRONE (the upgrade-only ratchet, see the test just
+    # above) even as more recent evidence increasingly looks like BIRD --
+    # but confidence in that stored DRONE label should honestly fall,
+    # rather than staying pinned at whatever it was on the first detection.
+    associate_detection(make_detection(site_id, sensor_type=SensorType.CAMERA, confidence=0.95))  # -> DRONE
+    first_confidence = list_tracks(site_id=site_id)[0].classification_confidence
+    assert first_confidence == 1.0
+
+    for i in range(5):
+        associate_detection(
+            make_detection(
+                site_id, timestamp=BASE_TIME + timedelta(seconds=5 * (i + 1)),
+                sensor_type=SensorType.CAMERA, confidence=0.1,  # BIRD-ish on its own
+            )
+        )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.classification == Classification.DRONE  # never downgraded
+    assert track.classification_confidence < first_confidence  # but less confident in it now
+
+
 def test_aircraft_category_is_carried_from_detection_to_track(site_id):
     associate_detection(
         make_detection(

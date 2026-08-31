@@ -188,6 +188,19 @@ class Track(BaseModel):
         "reported one (most sensors don't carry this at all), in which case the dashboard falls back "
         "to a generic aircraft glyph rather than guessing.",
     )
+    classification_confidence: float | None = Field(
+        default=None,
+        description="How strongly current evidence backs this track's stored `classification` "
+        "specifically (0-1) -- see app.fusion.classification_confidence. Distinct from the "
+        "classification label itself, which app.tracking's upgrade-only ratchet never downgrades "
+        "(never re-flagging a real drone as a bird is the failure mode that avoids); this can "
+        "still fall as contradicting evidence accumulates or the track goes stale, so a DRONE "
+        "track nobody's heard from in a while reads honestly as low-confidence DRONE rather than "
+        "either silently downgrading or looking exactly as certain as a freshly-confirmed one. "
+        "GET /api/tracks applies read-time staleness decay (app.fusion.decay_classification_confidence) "
+        "on top of the as-of-last-detection value stored here. None for an UNKNOWN track -- there's "
+        "no meaningful confidence in not knowing.",
+    )
 
 
 class Incident(BaseModel):

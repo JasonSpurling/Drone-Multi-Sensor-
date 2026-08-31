@@ -11,8 +11,11 @@ from more trustworthy sensors.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from app.allowlist import is_authorized_detection
 from app.classification import classify
+from app.config import CLASSIFICATION_CONFIDENCE_DECAY_SECONDS, CLASSIFICATION_CONFIDENCE_FLOOR
 from app.ml.model import predict as ml_predict
 from app.models import Classification, Detection, SensorType
 from app.rf_signatures import match_rf_signature
@@ -62,11 +65,12 @@ def _detection_label(detection: Detection, effective_confidence: float) -> Class
     return classify(detection.sensor_type, effective_confidence)
 
 
-def fuse_classification(detections: list[Detection]) -> Classification:
-    """Weighted vote across every detection: each casts a vote for its own
-    label, weighted by (sensor trust * effective confidence). UNKNOWN
-    votes don't count towards any label winning -- they just contribute
-    no evidence. Returns UNKNOWN if there's no non-UNKNOWN evidence at all.
+def _classification_weights(detections: list[Detection]) -> dict[Classification, float]:
+    """Each detection casts a vote for its own label, weighted by (sensor
+    trust * effective confidence). UNKNOWN votes don't count towards any
+    label -- they just contribute no evidence. Shared by fuse_classification
+    (which label wins) and classification_confidence (how strongly current
+    evidence backs a *specific* label, win or not).
     """
     weights: dict[Classification, float] = {}
     for detection in detections:
@@ -76,7 +80,59 @@ def fuse_classification(detections: list[Detection]) -> Classification:
             continue
         weight = SENSOR_TRUST.get(detection.sensor_type, 1.0) * effective_confidence
         weights[label] = weights.get(label, 0.0) + weight
+    return weights
 
+
+def fuse_classification(detections: list[Detection]) -> Classification:
+    """Weighted vote across every detection -- see _classification_weights.
+    Returns UNKNOWN if there's no non-UNKNOWN evidence at all.
+    """
+    weights = _classification_weights(detections)
     if not weights:
         return Classification.UNKNOWN
     return max(weights, key=lambda label: weights[label])
+
+
+def classification_confidence(detections: list[Detection], label: Classification) -> float | None:
+    """How strongly the current evidence backs `label` specifically (0-1)
+    -- not necessarily the winning label. app.tracking's upgrade-only
+    ratchet (_commit_detection) means a track's *stored* classification
+    can outlive contradicting evidence by design (misclassifying a real
+    drone as a bird and never re-flagging it is the failure mode that
+    ratchet exists to prevent) -- but that doesn't mean the evidence for
+    it can't get weaker. This measures confidence in whatever label is
+    actually stored, which can legitimately fall even while the label
+    itself never downgrades: e.g. a track marked DRONE early on, whose
+    more recent detections increasingly look like BIRD, keeps its DRONE
+    label but shows falling confidence in it -- an honest signal instead
+    of either silently downgrading (the failure mode above) or pretending
+    nothing changed.
+
+    None for UNKNOWN -- there's no meaningful "confidence in not knowing".
+    """
+    if label == Classification.UNKNOWN:
+        return None
+    weights = _classification_weights(detections)
+    total = sum(weights.values())
+    if total <= 0:
+        return None
+    return weights.get(label, 0.0) / total
+
+
+def decay_classification_confidence(raw_confidence: float | None, last_seen: datetime, now: datetime) -> float | None:
+    """Applies read-time staleness decay to a track's stored
+    classification_confidence (the fused vote-share as of its last
+    detection, computed by classification_confidence above and persisted
+    on the track) -- linearly toward CLASSIFICATION_CONFIDENCE_FLOOR as
+    `now` moves past `last_seen`, fully decayed by
+    CLASSIFICATION_CONFIDENCE_DECAY_SECONDS. Pure function of elapsed
+    time, computed at read time (app/api/tracks.py) rather than a stored,
+    actively-updated value -- there's no background job that could ever
+    go stale itself, and it's always correct for whatever "now" the
+    caller asks from.
+    """
+    if raw_confidence is None:
+        return None
+    age_s = max(0.0, (now - last_seen).total_seconds())
+    decay_fraction = min(1.0, age_s / CLASSIFICATION_CONFIDENCE_DECAY_SECONDS)
+    return raw_confidence + (CLASSIFICATION_CONFIDENCE_FLOOR - raw_confidence) * decay_fraction
