@@ -467,12 +467,20 @@ def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server,
     """
     # Near the restricted zone's west edge (zone: lat 51.49-51.51,
     # lon -0.11--0.09, see app/zones.seed.json) rather than dead-center --
-    # a single next detection just past the edge needs to stay within
+    # the next detection just past the edge needs to stay well inside
     # app.tracking's ~500m default association gate to be recognized as
     # the *same* track leaving, not a new one spawning outside the zone.
+    # Only ~138m from the edge (not right at it): the original ~485m move
+    # left just ~15m of gate margin, which the tighter Mahalanobis check
+    # (not just the coarse distance gate) could occasionally reject under
+    # normal timing jitter between the two POSTs below, intermittently
+    # failing to associate the second point with the same track at all --
+    # no amount of extra wait_for_function timeout fixes a resolution
+    # that structurally never happens. ~138m total move keeps a wide,
+    # reliable margin under the gate while still crossing the boundary.
     near_edge = {
         "sensor_id": "radar-1", "sensor_type": "radar",
-        "latitude": 51.50, "longitude": -0.108, "confidence": 0.9,
+        "latitude": 51.50, "longitude": -0.109, "confidence": 0.9,
     }
     requests.post(live_server + "/api/detections", json=near_edge, timeout=5).raise_for_status()
     page.goto(live_server, wait_until="networkidle")
@@ -480,17 +488,15 @@ def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server,
     page.wait_for_selector(".alert-item")
     assert page.locator('.alert-item .badge-outline:has-text("open")').count() == 1
 
-    # Same sensor_id (associates with the same track), ~485m further
-    # west -- now outside the zone, still inside the association gate.
+    # Same sensor_id (associates with the same track), ~138m further
+    # west -- now outside the zone, comfortably inside the association gate.
     requests.post(
-        live_server + "/api/detections", json={**near_edge, "longitude": -0.115}, timeout=5
+        live_server + "/api/detections", json={**near_edge, "longitude": -0.111}, timeout=5
     ).raise_for_status()
 
-    # 10s, not 5s: this waits on the dashboard's poll interval picking up
-    # the resolved incident, and 5s has shown intermittent timeouts on a
-    # loaded CI runner even though the same poll finishes well within that
-    # margin locally -- matches the 10s precedent used elsewhere in this
-    # file (see the .track-card wait above) for the same reason.
+    # 10s, not 5s, as extra headroom for the websocket-push-triggered
+    # refresh -- matches the 10s precedent used elsewhere in this file
+    # (see the .track-card wait above).
     page.wait_for_function("state.incidents.some(i => i.status === 'resolved')", timeout=10000)
     assert page.locator('.alert-item .badge-outline:has-text("resolved")').count() == 1
     assert not page.locator("#alerts-badge").is_visible()
