@@ -18,6 +18,11 @@ since the app's own API never talks to a sensor directly.
 - lattice.py / lattice_bridge.py -- Anduril Lattice downstream sync
 - faa_notam_check.py / faa_zones_import.py -- one-off FAA airspace-data
   CLIs (see app/airspace/)
+- validate_zone.py -- checks a hand-written/drawn zone polygon is
+  structurally valid (app/zone_validation.py) before it goes into
+  app/zones.seed.json or POST /api/zones; not a sensor bridge like the
+  rest of this package, but placed here rather than scripts/ since it
+  needs app.models.Zone the same way the FAA CLIs above need app.db
 
 Each `*_bridge.py`/adapter is its own optional dependency (see the
 per-integration requirements-*.txt at the repo root) -- a deployment only

@@ -1242,6 +1242,25 @@ in every fresh deployment (what ships with this repo), not for zones an
 operator adds afterward; those belong in the database via the two options
 above, not in a file a deploy might overwrite.
 
+A hand-edited seed file has no validation beyond Pydantic's field-level
+checks (each vertex is a float pair) -- a self-intersecting polygon
+doesn't error, `app.zones.point_in_polygon`'s ray-casting test just
+silently gives a wrong inside/outside answer near the crossing.
+`app/adapters/validate_zone.py` checks the actual geometry (at least 3
+vertices, real lat/lon range, no self-intersection) before a polygon goes
+in:
+
+```bash
+# Check a new polygon, or append it once it's valid:
+.venv/bin/python -m app.adapters.validate_zone check --polygon '[[51.49,-0.11],[51.49,-0.09],[51.51,-0.09],[51.51,-0.11]]'
+.venv/bin/python -m app.adapters.validate_zone add --name "New Zone" --zone-type restricted \
+  --polygon '[[51.49,-0.11],[51.49,-0.09],[51.51,-0.09],[51.51,-0.11]]' --write app/zones.seed.json
+
+# Re-validate everything already in a seed file (catches a polygon that
+# was hand-edited badly after the fact):
+.venv/bin/python -m app.adapters.validate_zone check-file app/zones.seed.json
+```
+
 Two real, publicly published FAA data sources can supplement or
 replace it:
 
