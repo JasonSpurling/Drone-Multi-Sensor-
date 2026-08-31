@@ -84,6 +84,20 @@ ML_MODEL_PATH = os.getenv("DRONE_ML_MODEL_PATH", "")
 # classifier exactly as if ML weren't involved at all.
 ML_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_ML_CONFIDENCE_THRESHOLD", "0.6"))
 
+# Same reasoning and same "unset by default, zero behavior change" contract
+# as ML_MODEL_PATH above, for a separate, audio-specific model:
+# app/adapters/acoustic_array_bridge.py currently reports a single manual,
+# operator-supplied --confidence for every detection -- no classification
+# of the actual rotor/propeller acoustic signature. Point this at a model
+# produced by `python -m app.ml.train_acoustic` (your own labeled
+# recordings) to have that bridge consult it instead; unset, or pointing
+# at a missing file, and the bridge behaves exactly as it always has. See
+# app/ml/acoustic_model.py and app/acoustic_features.py.
+ACOUSTIC_ML_MODEL_PATH = os.getenv("DRONE_ACOUSTIC_ML_MODEL_PATH", "")
+
+# Same role as ML_CONFIDENCE_THRESHOLD, for the acoustic model.
+ACOUSTIC_ML_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD", "0.6"))
+
 # SQLite by default (zero setup). Point this at a PostgreSQL instance for
 # production deployments that need concurrent-write throughput SQLite can't
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname

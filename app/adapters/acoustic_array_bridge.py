@@ -18,6 +18,16 @@ Also requires the sensor's mounting position to be registered (see the
 README's "Georeferencing" section) -- an azimuth_deg/range_m detection
 with no registered sensor position is silently dropped.
 
+--confidence stays a flat manual estimate by default, exactly as always
+-- but if DRONE_ACOUSTIC_ML_MODEL_PATH is configured (see
+app/ml/acoustic_model.py, app/ml/train_acoustic.py), a trained
+classifier's opinion (MFCC features of the recorded audio -- an actual
+rotor/propeller acoustic signature, not a fixed number) takes over
+whenever it's confident enough, falling back to --confidence otherwise.
+This app ships no such trained model (see app/ml/__init__.py for why);
+it's opt-in scaffolding for a deployment with real labeled recordings to
+train on, not a claim that acoustic classification works out of the box.
+
 Usage:
     pip install -r requirements-acoustic.txt
     .venv/bin/python -m app.adapters.acoustic_array_bridge \\
@@ -37,6 +47,7 @@ import numpy as np
 
 from app.acoustic_beamforming import estimate_bearing
 from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
+from app.ml.acoustic_model import classify_audio
 
 
 def parse_mic_positions(raw_json: str) -> list[list[float]]:
@@ -96,17 +107,31 @@ def watch(args: argparse.Namespace) -> None:
         azimuth_deg, bearing_confidence = estimate_bearing(
             np.ascontiguousarray(channels), mic_positions, args.sample_rate, args.azimuth_resolution_deg
         )
+
+        # An optional trained classifier's opinion (see app/ml/acoustic_model.py
+        # and app/ml/train_acoustic.py) takes over from the manual --confidence
+        # estimate when DRONE_ACOUSTIC_ML_MODEL_PATH is configured and the
+        # model is confident enough -- None (unconfigured, missing model
+        # file, not confident enough) falls straight back to args.confidence,
+        # so this bridge's behavior is unchanged from before this classifier
+        # existed unless an operator opts in. MFCC extraction doesn't need
+        # the array's spatial info, only its combined spectral content, so
+        # every mic channel is averaged into one signal first.
+        ml_confidence = classify_audio(channels.mean(axis=0), args.sample_rate)
+        confidence = ml_confidence if ml_confidence is not None else args.confidence
+
         payload = build_detection_payload(
-            azimuth_deg, bearing_confidence, args.sensor_id, args.assumed_range_m, args.confidence
+            azimuth_deg, bearing_confidence, args.sensor_id, args.assumed_range_m, confidence
         )
         try:
             result = post_detection(
                 args.api_url, payload, args.api_key,
                 max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
             )
+            source = "ml" if ml_confidence is not None else "manual"
             print(
                 f"-> azimuth={azimuth_deg:.1f} bearing_confidence={bearing_confidence:.2f} "
-                f"track {result.get('track_id')}"
+                f"confidence={confidence:.2f} ({source}) track {result.get('track_id')}"
             )
         except urllib.error.URLError as exc:
             print(f"ERROR posting detection: {format_post_error(exc)}")

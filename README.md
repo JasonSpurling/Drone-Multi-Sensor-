@@ -1456,6 +1456,41 @@ control-link RF envelope matching (`app/rf_signatures.py`) that
 classification -- real, already-computed domain signal, not anything
 fabricated, given to the model as an additional feature to learn from.
 
+**Acoustic classification (optional, `app/ml/train_acoustic.py` +
+`app/ml/acoustic_model.py`)**: a separate, parallel piece of scaffolding
+for `app/adapters/acoustic_array_bridge.py`, which otherwise reports a
+single flat, manually-estimated `--confidence` for every detection --
+no classification of the actual rotor/propeller acoustic signature, only
+beamforming's real bearing estimate. `app/acoustic_features.py` extracts
+MFCCs (Mel-Frequency Cepstral Coefficients, the standard spectral
+features for this) from a recorded audio block via textbook DSP (framing
++ Hamming window -> power spectrum -> triangular mel filterbank -> log ->
+DCT-II) -- pure numpy, no new dependency for that step:
+
+```bash
+pip install -r requirements-ml.txt   # same scikit-learn/joblib as above
+
+# One subdirectory per label, each full of your own labeled .wav
+# recordings -- same trainable label set as app.ml.train (not "friendly"):
+#   data/acoustic/drone/*.wav
+#   data/acoustic/bird/*.wav
+#   data/acoustic/aircraft/*.wav
+#   data/acoustic/unknown/*.wav
+python -m app.ml.train_acoustic --data-dir data/acoustic --out acoustic_model.joblib
+export DRONE_ACOUSTIC_ML_MODEL_PATH=acoustic_model.joblib
+```
+
+Once configured, `acoustic_array_bridge.py`'s `watch()` consults the
+trained model for each recorded block, using its predicted DRONE-class
+probability as `--confidence` instead of the manual value -- falling back
+to `--confidence` exactly as before whenever the model has no opinion (the
+same "no opinion below `DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD`" gating
+`app/ml/model.py` already uses, default `0.6`) or isn't configured at all.
+Every array channel is averaged into one signal before MFCC extraction --
+classification doesn't need the array's spatial information, only its
+combined spectral content, unlike beamforming's own bearing estimate.
+Same joblib/pickle security note as above applies here too.
+
 A detection votes `friendly` only if its `raw_data` carries an
 `operator_id` matching a registered authorized operator **and** a valid
 Ed25519 signature over that operator/detection pair (`app/remote_id.py`,
@@ -1827,6 +1862,8 @@ needs to be set to run locally.
 | `DRONE_RF_SIGNATURES_PATH` | unset | Operator-supplied RF signatures JSON file (see "RF signature fingerprinting" below); no default -- unlike zones, this app ships no bundled file since it has no real per-model data to bundle |
 | `DRONE_ML_MODEL_PATH` | unset | Trained model file (see "ML-based classification" above); no default -- this app ships no trained model |
 | `DRONE_ML_CONFIDENCE_THRESHOLD` | `0.6` | Minimum top-class probability before a configured model's prediction is trusted over the rule-based classifier |
+| `DRONE_ACOUSTIC_ML_MODEL_PATH` | unset | Trained acoustic model file (see "Acoustic classification" above); no default -- this app ships no trained model |
+| `DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD` | `0.6` | Same role as `DRONE_ML_CONFIDENCE_THRESHOLD`, for the acoustic model |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |

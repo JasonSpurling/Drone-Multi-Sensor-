@@ -26,4 +26,12 @@ scikit-learn is a genuinely optional dependency (requirements-ml.txt, not
 requirements.txt) -- only imported inside app.ml.model's _load_model() and
 app.ml.train, both gated so a deployment that never sets
 DRONE_ML_MODEL_PATH or runs the training script never needs it installed.
+
+A parallel, separate piece of scaffolding lives alongside this for
+acoustic classification specifically -- app/ml/train_acoustic.py and
+app/ml/acoustic_model.py, backed by app/acoustic_features.py's MFCC
+extraction. It's not folded into the files above because it classifies
+raw audio, not an already-formed Detection's metadata, so it needs its
+own feature extraction and training entry point; the "ships no trained
+model, same lazy scikit-learn import" contract is identical.
 """
