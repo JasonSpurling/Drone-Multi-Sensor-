@@ -869,7 +869,14 @@ pip install -r requirements-mavlink.txt
 
 **Camera motion cueing** (`app/adapters/camera_motion.py`): watches a
 webcam or RTSP camera stream with OpenCV background subtraction and posts
-a `camera` detection whenever it sees motion above a threshold.
+a `camera` detection whenever it sees motion above a threshold. It's built
+on `app/adapters/sdk.py` -- the shared POST-to-`/api/detections` +
+`--api-url`/`--api-key`/`--sensor-id` argparse wiring every adapter in this
+package duplicated independently, factored out once (this is the first
+adapter migrated onto it; the rest still carry their own copy). New
+adapters should use it directly rather than re-copying the pattern; it
+also adds `--max-retries`/`--retry-backoff` for a transient network blip,
+which no hand-rolled adapter had before.
 
 ```bash
 pip install -r requirements-camera.txt

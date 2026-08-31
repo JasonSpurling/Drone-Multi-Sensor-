@@ -4,6 +4,10 @@ actual hardware/infrastructure and POST it to this app's own
 directly) -- nothing in app/ imports from this package at request time,
 since the app's own API never talks to a sensor directly.
 
+- sdk.py -- shared POST-to-/api/detections + argparse plumbing, factored
+  out once real duplication existed across several adapters (see its own
+  docstring); camera_motion.py is the first adapter built on it, the
+  others aren't all migrated in one pass
 - sbs1.py / dump1090_bridge.py -- ADS-B via dump1090's SBS-1 text feed,
   plus ICAO emitter-category enrichment from aircraft.json
 - asterix.py / asterix_bridge.py -- radar via ASTERIX CAT048

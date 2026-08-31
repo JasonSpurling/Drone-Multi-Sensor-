@@ -27,12 +27,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import time
 import urllib.error
-import urllib.request
 from datetime import UTC, datetime
+
+from app.adapters.sdk import add_common_post_args, post_detection
 
 DEFAULT_MIN_CONTOUR_AREA_PX = 500.0
 
@@ -53,16 +52,6 @@ def build_detection_payload(
 
 def should_post(motion_area_px: float, min_area_px: float, elapsed_s: float, min_interval_s: float) -> bool:
     return motion_area_px >= min_area_px and elapsed_s >= min_interval_s
-
-
-def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
 
 
 def _largest_contour_area(frame, subtractor) -> float:
@@ -99,7 +88,10 @@ def watch(args: argparse.Namespace) -> None:
                     args.sensor_id, args.target_lat, args.target_lon, args.confidence, motion_area
                 )
                 try:
-                    result = post_detection(args.api_url, payload, args.api_key)
+                    result = post_detection(
+                        args.api_url, payload, args.api_key,
+                        max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+                    )
                     print(f"-> motion (area={motion_area:.0f}px) track {result['track_id']}")
                 except urllib.error.URLError as exc:
                     print(f"ERROR posting detection: {exc}")
@@ -111,8 +103,7 @@ def watch(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", default="0", help="cv2.VideoCapture source: camera index or RTSP/file URL")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--sensor-id", default="camera-1")
+    add_common_post_args(parser, default_sensor_id="camera-1")
     parser.add_argument("--target-lat", type=float, required=True, help="Latitude of the camera's field of view")
     parser.add_argument("--target-lon", type=float, required=True, help="Longitude of the camera's field of view")
     parser.add_argument(
@@ -125,7 +116,6 @@ def main() -> None:
         "--min-area", type=float, default=DEFAULT_MIN_CONTOUR_AREA_PX, help="Min motion area in pixels to report"
     )
     parser.add_argument("--min-interval", type=float, default=2.0, help="Seconds between posted detections")
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
     watch(args)
 
