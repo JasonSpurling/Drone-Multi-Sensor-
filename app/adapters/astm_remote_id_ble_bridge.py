@@ -21,13 +21,11 @@ your setup.)
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import time
 import urllib.error
-import urllib.request
 
 from app.adapters.astm_remote_id import build_detection_payload, merge_fields
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 # The 16-bit UUID 0xFFFA ("ASTM International, ASTM Remote ID") expanded
 # to the full 128-bit form bleak reports service_data keys as.
@@ -81,16 +79,6 @@ def _extract_fields(message) -> dict | None:
     return None
 
 
-def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def watch(args: argparse.Namespace) -> None:
     from bleak import BleakScanner
     from dtpyodid.messages.messagepack import MessagePack
@@ -121,11 +109,14 @@ def watch(args: argparse.Namespace) -> None:
         if payload is None:
             return
         try:
-            result = post_detection(args.api_url, payload, args.api_key)
+            result = post_detection(
+                args.api_url, payload, args.api_key,
+                max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+            )
             print(f"-> {address} uas_id={state.get('uas_id')} track {result.get('track_id')}")
             last_post[address] = now
         except urllib.error.URLError as exc:
-            print(f"ERROR posting detection: {exc}")
+            print(f"ERROR posting detection: {format_post_error(exc)}")
 
     def detection_callback(device, advertisement_data) -> None:
         service_data = advertisement_data.service_data.get(REMOTE_ID_SERVICE_UUID)
@@ -155,11 +146,9 @@ def watch(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--sensor-id", default="remote-id-ble-1")
+    add_common_post_args(parser, default_sensor_id="remote-id-ble-1")
     parser.add_argument("--confidence", type=float, default=0.9)
     parser.add_argument("--min-interval", type=float, default=1.0, help="Seconds between posts per device")
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
     watch(args)
 

@@ -4,10 +4,10 @@ actual hardware/infrastructure and POST it to this app's own
 directly) -- nothing in app/ imports from this package at request time,
 since the app's own API never talks to a sensor directly.
 
-- sdk.py -- shared POST-to-/api/detections + argparse plumbing, factored
-  out once real duplication existed across several adapters (see its own
-  docstring); camera_motion.py is the first adapter built on it, the
-  others aren't all migrated in one pass
+- sdk.py -- shared POST-to-/api/detections + argparse plumbing every
+  detection-posting adapter below is built on (see its own docstring);
+  lattice_bridge.py and onvif_ptz_bridge.py don't use it -- neither posts
+  detections (one pushes tracks OUT to Lattice, the other slews a camera)
 - sbs1.py / dump1090_bridge.py -- ADS-B via dump1090's SBS-1 text feed,
   plus ICAO emitter-category enrichment from aircraft.json
 - asterix.py / asterix_bridge.py -- radar via ASTERIX CAT048

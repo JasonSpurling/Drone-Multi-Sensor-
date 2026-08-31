@@ -13,23 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import socket
 import time
 import urllib.error
 import urllib.request
 
 from app.adapters.sbs1 import parse_sbs1_line
-
-
-def post_detection(url: str, payload: dict, api_key: str = "") -> None:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5):
-        pass
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 
 def stream_lines(sock: socket.socket):
@@ -124,12 +114,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sbs-host", default="127.0.0.1", help="dump1090 host")
     parser.add_argument("--sbs-port", type=int, default=30003, help="dump1090 SBS-1 port")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--sensor-id", default="dump1090-1")
-    parser.add_argument(
-        "--api-key", default=os.getenv("DRONE_API_KEY", ""),
-        help="X-API-Key header value; defaults to $DRONE_API_KEY",
-    )
+    add_common_post_args(parser, default_sensor_id="dump1090-1")
     parser.add_argument(
         "--aircraft-json-url", default=None,
         help="dump1090-fa/readsb aircraft.json URL for real ADS-B emitter category enrichment "
@@ -159,11 +144,14 @@ def main() -> None:
             if category:
                 payload["raw_data"]["category"] = category
             try:
-                post_detection(args.api_url, payload, args.api_key)
+                post_detection(
+                    args.api_url, payload, args.api_key,
+                    max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+                )
                 print(f"-> {payload['latitude']:.5f}, {payload['longitude']:.5f}"
                       + (f" ({category})" if category else ""))
             except urllib.error.URLError as exc:
-                print(f"ERROR posting detection: {exc}")
+                print(f"ERROR posting detection: {format_post_error(exc)}")
 
 
 if __name__ == "__main__":

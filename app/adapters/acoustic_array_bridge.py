@@ -30,41 +30,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 
 import numpy as np
 
 from app.acoustic_beamforming import estimate_bearing
-
-
-def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
-
-
-def format_post_error(exc: urllib.error.URLError) -> str:
-    """Plain `str(exc)` on an HTTPError is just its status line (e.g. "HTTP
-    Error 401: Unauthorized") -- it drops the JSON body FastAPI actually
-    sends (e.g. {"detail": "Missing X-API-Key header"}), which is what an
-    operator needs to see to fix a misconfigured --api-key or malformed
-    request. Falls back to plain str(exc) for a non-HTTP URLError
-    (connection refused, DNS failure, ...), which has no response body.
-    """
-    if isinstance(exc, urllib.error.HTTPError):
-        try:
-            body = exc.read().decode(errors="replace").strip()
-        except OSError:
-            body = ""
-        return f"HTTP {exc.code} {exc.reason}" + (f" -- {body}" if body else "")
-    return str(exc)
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 
 def parse_mic_positions(raw_json: str) -> list[list[float]]:
@@ -128,7 +100,10 @@ def watch(args: argparse.Namespace) -> None:
             azimuth_deg, bearing_confidence, args.sensor_id, args.assumed_range_m, args.confidence
         )
         try:
-            result = post_detection(args.api_url, payload, args.api_key)
+            result = post_detection(
+                args.api_url, payload, args.api_key,
+                max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+            )
             print(
                 f"-> azimuth={azimuth_deg:.1f} bearing_confidence={bearing_confidence:.2f} "
                 f"track {result.get('track_id')}"
@@ -139,7 +114,7 @@ def watch(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--sensor-id", default="acoustic-array-1")
+    add_common_post_args(parser, default_sensor_id="acoustic-array-1")
     parser.add_argument(
         "--mic-positions", required=True,
         help='JSON list of [x_east_m, y_north_m] mic positions relative to the array center, '
@@ -158,8 +133,6 @@ def main() -> None:
         "(separate from bearing_confidence, which reflects only how sharp the DIRECTION estimate is)",
     )
     parser.add_argument("--device", default=None, help="sounddevice input device index or name")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
     if args.assumed_range_m <= 0:
         parser.error("--assumed-range-m must be positive")

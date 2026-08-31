@@ -1,10 +1,11 @@
 import argparse
+import io
 import json
 import urllib.error
 
 import pytest
 
-from app.adapters.sdk import add_common_post_args, post_detection
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 
 class _FakeHTTPResponse:
@@ -119,3 +120,21 @@ def test_add_common_post_args_overridable_from_cli(monkeypatch):
     args = parser.parse_args(["--sensor-id", "other", "--max-retries", "5"])
     assert args.sensor_id == "other"
     assert args.max_retries == 5
+
+
+def test_format_post_error_includes_the_response_body_for_an_http_error():
+    # Plain str(exc) on an HTTPError drops the JSON body FastAPI actually
+    # sends (e.g. the reason an API key was rejected) -- that body is
+    # exactly what an operator needs to see to fix the problem.
+    exc = urllib.error.HTTPError(
+        url="http://x/api/detections", code=401, msg="Unauthorized",
+        hdrs=None, fp=io.BytesIO(b'{"detail": "Missing X-API-Key header"}'),
+    )
+    message = format_post_error(exc)
+    assert "401" in message
+    assert "Missing X-API-Key header" in message
+
+
+def test_format_post_error_falls_back_to_str_for_a_non_http_error():
+    exc = urllib.error.URLError("Connection refused")
+    assert format_post_error(exc) == str(exc)
