@@ -1273,21 +1273,38 @@ TFRs, a stadium event, a UAS area closed for the day. Requires a free
 developer portal:
 
 ```bash
+# Print only, for situational awareness:
 .venv/bin/python -m app.adapters.faa_notam_check \
   --client-id "$DRONE_FAA_NOTAM_CLIENT_ID" --client-secret "$DRONE_FAA_NOTAM_CLIENT_SECRET" \
   --lat 51.5 --lon -0.1 --radius-nm 50
+
+# Also import each as a zone into site 1 -- safe to re-run periodically
+# (e.g. from cron): a NOTAM still active from a previous run is skipped,
+# not duplicated.
+.venv/bin/python -m app.adapters.faa_notam_check \
+  --client-id "$DRONE_FAA_NOTAM_CLIENT_ID" --client-secret "$DRONE_FAA_NOTAM_CLIENT_SECRET" \
+  --lat 51.5 --lon -0.1 --radius-nm 50 --site-id 1
 ```
+
+Each imported NOTAM becomes a `restricted` zone shaped as the **search
+circle actually queried to find it** (`center_lat`/`center_lon`/`radius_nm`,
+turned into a 16-vertex polygon), not a guess at that NOTAM's own real
+footprint: NOTAM geometry, when present at all, isn't reliably a clean
+polygon the way the facility map's is, and a wrong guessed shape is worse
+than no zone. Every NOTAM found in one fetch shares the identical circle
+-- what distinguishes them is the zone name (`NOTAM <number> (<ICAO
+location>)`), not the shape. This is a deliberate, honest approximation
+("something is active somewhere within this circle"), not the NOTAM's
+precise boundary -- for any NOTAM whose real geometry you actually know
+(e.g. parsed from its raw text), create that zone by hand via
+`POST /api/zones` instead of relying on this one.
 
 **This one genuinely hasn't been validated against a live account** --
 both `api.faa.gov` and its developer-registration flow were unreachable
 from this environment's network, so unlike every other real-protocol
 integration in this README, the request/response shape here is
 documented-but-unverified; treat it as a starting point to confirm against
-your own registered account, not a proven integration. It also
-deliberately returns NOTAMs as a plain list for a human to review rather
-than auto-converting them into zones -- NOTAM geometry, when present at
-all, isn't reliably a clean polygon the way the facility map's is, and a
-wrong guessed restricted-zone shape is worse than no zone.
+your own registered account, not a proven integration.
 
 ## Classification fusion & friendly allowlist
 
