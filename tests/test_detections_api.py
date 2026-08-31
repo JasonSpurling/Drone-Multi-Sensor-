@@ -51,6 +51,36 @@ def test_filters_by_sensor_id():
         assert body[0]["sensor_id"] == "camera-1"
 
 
+def test_filters_by_track_id():
+    with TestClient(app) as client:
+        r1 = client.post("/api/detections", json=DETECTION_BODY)
+        track_a = r1.json()["track_id"]
+        # Far enough away to spawn a distinct second track.
+        r2 = client.post("/api/detections", json={**DETECTION_BODY, "latitude": 10.0, "longitude": 10.0})
+        track_b = r2.json()["track_id"]
+        assert track_a != track_b
+
+        r = client.get("/api/detections", params={"track_id": track_a})
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body) == 1
+        assert body[0]["track_id"] == track_a
+
+
+def test_combines_track_id_with_a_time_range():
+    with TestClient(app) as client:
+        r1 = client.post("/api/detections", json=DETECTION_BODY)
+        track_id = r1.json()["track_id"]
+
+        far_past = client.get(
+            "/api/detections", params={"track_id": track_id, "end": "2000-01-01T00:00:00"}
+        ).json()
+        assert far_past == []
+
+        everything = client.get("/api/detections", params={"track_id": track_id}).json()
+        assert len(everything) == 1
+
+
 def test_filters_by_time_range():
     # Both timestamps stay within MAX_DETECTION_CLOCK_SKEW_SECONDS of the
     # real current time -- ingest itself rejects anything further out

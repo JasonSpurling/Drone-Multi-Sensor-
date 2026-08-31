@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from app.db import create_incident, create_track, create_zone
+from app.db import create_incident, create_track, create_zone, get_zone_by_name
 from app.main import app
 from app.models import (
     Classification,
@@ -20,7 +20,13 @@ SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
 
 def _seed_incident(site_id: int, opened_at: datetime, severity=IncidentSeverity.MEDIUM) -> Incident:
-    zone = create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    # get-or-create: real incidents typically pile up against the same
+    # restricted zone, and zone.name is now unique per site (see
+    # idx_zone_site_id_name), so a fresh "rz" on every call would collide
+    # from the second _seed_incident() in any test that seeds more than one.
+    zone = get_zone_by_name("rz", site_id) or create_zone(
+        Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE)
+    )
     track = create_track(
         Track(
             site_id=site_id,

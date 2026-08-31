@@ -71,6 +71,7 @@ def _check_clock_skew(detection: Detection) -> None:
 @router.get("/detections", response_model=list[Detection])
 def get_detections(
     sensor_id: str | None = Query(default=None),
+    track_id: int | None = Query(default=None),
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -85,10 +86,14 @@ def get_detections(
     this app ever ingests gets associated with some track (app.tracking
     always spawns one if nothing matches), so this and /tracks/{id}/history
     overlap in content -- they differ in what you're allowed to already
-    know before you ask.
+    know before you ask. track_id is here too (app.db.list_detections
+    already supported it) so a caller who *does* already know a track
+    can still combine it with sensor_id/start/end, rather than needing
+    to switch endpoints just to add a time window to a track's history.
     """
     return list_detections(
-        site_id=principal.site_id, sensor_id=sensor_id, start=start, end=end, limit=limit, offset=offset
+        site_id=principal.site_id, track_id=track_id, sensor_id=sensor_id,
+        start=start, end=end, limit=limit, offset=offset,
     )
 
 

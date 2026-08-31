@@ -37,7 +37,15 @@ zone = Table(
     Column("min_altitude_m", Float),
     Column("max_altitude_m", Float),
     Column("active", Integer, nullable=False, server_default="1"),  # 0/1
-    Index("idx_zone_site_id", "site_id"),
+    # Unique per site (not globally -- two different sites may reasonably
+    # each have their own "Restricted Zone"), and covers plain
+    # site_id-only lookups too (leftmost-prefix), so this replaces what
+    # was a separate non-unique idx_zone_site_id. Backs app.api.zones'
+    # create_new_zone's own get_zone_by_name pre-check at the DB layer --
+    # without this, two concurrent POST /api/zones requests for the same
+    # name could both pass that check and both insert, a real TOCTOU race
+    # the application-level check alone can't close.
+    Index("idx_zone_site_id_name", "site_id", "name", unique=True),
 )
 
 track = Table(
@@ -155,6 +163,14 @@ incident = Table(
     Index("idx_incident_zone_id", "zone_id"),
     Index("idx_incident_site_id", "site_id"),
     Index("idx_incident_related_track_id", "related_track_id"),
+    # Every status-filtered incident query (list_incidents(status=...),
+    # get_open_incident, get_open_behavioral_incident,
+    # list_open_incidents_for_track) already scopes by site_id too --
+    # this composite, leading with site_id, serves both that combination
+    # and a plain site_id-only query (making idx_incident_site_id above
+    # redundant for new rows, but it's left in place rather than removed
+    # as part of an unrelated change).
+    Index("idx_incident_site_status", "site_id", "status"),
 )
 
 # A registered sensor's fixed mounting position/orientation, used to

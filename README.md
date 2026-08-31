@@ -319,7 +319,7 @@ replica so the product still fits.
 | `GET /api/metrics` | Prometheus metrics (unauthenticated) |
 | `POST /api/detections` | Ingest one detection; runs georeferencing, IMM track association, classification fusion, and zone-incident checks |
 | `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
-| `GET /api/detections` | Raw ingested detections, independent of any track (`?sensor_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`) -- for sensor-level QA/debugging without a track id in hand already; see `GET /api/tracks/{id}/history` below for one track's own path |
+| `GET /api/detections` | Raw ingested detections (`?sensor_id=`, `?track_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`, freely combined) -- for sensor-level QA/debugging without a track id in hand already, or a bounded time slice once you do; see `GET /api/tracks/{id}/history` below for one track's own full path |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
@@ -632,6 +632,15 @@ same code path -- the full test suite passes unmodified against either
 (see "Tests" below). Table/column additions since the initial release are
 picked up automatically on startup via a lightweight migration check --
 no manual step, no separate tool, for that class of change.
+
+Every SQLite connection uses **WAL** (write-ahead logging) instead of
+SQLite's default rollback-journal mode (`app.db._configure_sqlite_connection`)
+-- a reader (`GET /api/tracks`, polled every few seconds by every connected
+dashboard) no longer blocks behind a writer (a continuously-ingesting
+`POST /api/detections`) or vice versa; the two only briefly contend at the
+moment a writer actually commits, not for its whole transaction. Not
+applicable to PostgreSQL, which handles concurrent readers/writers with
+MVCC regardless.
 
 **Alembic** (`migrations/`) is available for the migrations that
 startup-time approach structurally can't do safely -- renaming/dropping a
@@ -1220,6 +1229,12 @@ curl -X POST http://127.0.0.1:8000/api/zones \
   -d '{"name": "warehouse-perimeter", "zone_type": "restricted",
        "polygon": [[51.49, -0.11], [51.49, -0.09], [51.51, -0.09], [51.51, -0.11]]}'
 ```
+
+A zone's name is unique per site (not globally -- two different sites may
+each reasonably have their own "Restricted Zone"), enforced at the
+database layer (`idx_zone_site_id_name`, `app/schema.py`), not just as an
+application-level check -- two concurrent `POST /api/zones` requests for
+the same new name can't both succeed.
 
 **`app/zones.seed.json`** (or `DRONE_ZONES_SEED_PATH`), loaded at every
 startup -- still the right place for a zone that should exist by default

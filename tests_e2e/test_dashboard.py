@@ -959,3 +959,19 @@ def test_track_details_shows_classification_confidence_meter(live_server, page):
     quality_text = page.locator(".kv-section:has-text('Track quality')").inner_text()
     assert "Confidence" in quality_text
     assert f"{confidence_pct}%" in quality_text
+
+
+def test_a_failed_action_shows_a_visible_error_toast_not_just_console(live_server, page):
+    """A non-auth action failure (acknowledge/resolve/label/...) used to
+    only ever reach console.error -- invisible to anyone not watching
+    devtools, so a click that silently failed looked identical to one
+    that succeeded.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+    assert not page.locator("#error-toast").is_visible()
+
+    # A nonexistent incident id -> a real 404 from the API, not a stub.
+    page.evaluate("acknowledge(999999)")
+    page.wait_for_selector("#error-toast.show")
+    assert "couldn't acknowledge" in page.locator("#error-toast").inner_text().lower()

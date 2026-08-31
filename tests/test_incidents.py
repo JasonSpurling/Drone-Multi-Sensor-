@@ -1,7 +1,15 @@
 import uuid
 from datetime import datetime
 
-from app.db import create_detection, create_incident, create_track, create_zone, list_incidents, update_incident
+from app.db import (
+    create_detection,
+    create_incident,
+    create_track,
+    create_zone,
+    get_incident,
+    list_incidents,
+    update_incident,
+)
 from app.incidents import (
     check_predicted_incursions,
     check_zone_incident_resolutions,
@@ -279,3 +287,21 @@ def test_close_incidents_for_closed_track_closes_every_open_incident(site_id):
 def test_close_incidents_for_closed_track_is_a_noop_with_none_open(site_id):
     track = make_track(site_id)
     assert close_incidents_for_closed_track(track) == []
+
+
+def test_update_incident_persists_a_changed_severity(site_id):
+    # Regression test: update_incident's UPDATE statement previously
+    # omitted severity from its SET clause entirely -- any caller that
+    # changed incident.severity and called update_incident() had that
+    # change silently discarded.
+    incident = create_incident(
+        Incident(
+            site_id=site_id, incident_uid=str(uuid.uuid4()), incident_type=IncidentType.ZONE_INCURSION,
+            severity=IncidentSeverity.LOW, status=IncidentStatus.OPEN, opened_at=utcnow(),
+        )
+    )
+    incident.severity = IncidentSeverity.CRITICAL
+    update_incident(incident)
+
+    reloaded = get_incident(incident.id, site_id)
+    assert reloaded.severity == IncidentSeverity.CRITICAL

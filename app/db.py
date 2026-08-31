@@ -8,6 +8,7 @@ verify against both backends.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -15,11 +16,14 @@ from pathlib import Path
 
 from sqlalchemy import bindparam, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import IntegrityError
 
 from app.config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
 from app.models import AuditLogEntry, Detection, Incident, Site, Track, Zone
 from app.schema import metadata
 from app.util import utcnow
+
+logger = logging.getLogger(__name__)
 
 # pool_size/max_overflow are QueuePool-specific -- SQLite doesn't use
 # QueuePool (SQLAlchemy defaults it to NullPool/SingletonThreadPool
@@ -51,10 +55,22 @@ engine: Engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
 @event.listens_for(engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+def _configure_sqlite_connection(dbapi_connection, connection_record) -> None:
     if engine.dialect.name == "sqlite":
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
+        # WAL instead of SQLite's default rollback-journal mode: readers
+        # (GET /api/tracks etc., polled every few seconds by every
+        # connected dashboard) no longer block behind a writer (a
+        # detection POST, which this app ingests continuously) or vice
+        # versa -- the two only ever briefly contend at the moment a
+        # writer commits, not for the writer's whole transaction. A
+        # no-op, not an error, for an in-memory (":memory:") database,
+        # which SQLite always keeps in-memory journal mode for regardless
+        # of this pragma -- harmless to still set it there (the test
+        # suite's isolated_db fixture uses on-disk SQLite files, not
+        # :memory:, so this is the real behavior under test too).
+        cursor.execute("PRAGMA journal_mode = WAL")
         cursor.close()
 
 
@@ -139,6 +155,37 @@ def _migrate_indexes() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_incident_related_track_id "
                 "ON incident (related_track_id)"
             )
+        )
+        # Every status-filtered incident query (list_incidents(status=...),
+        # get_open_incident, get_open_behavioral_incident,
+        # list_open_incidents_for_track) already scopes by site_id too --
+        # a composite leading with site_id serves both that combination
+        # and a plain site_id-only query, matching the same convention
+        # idx_track_site_status_last_seen already uses for tracks.
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_incident_site_status ON incident (site_id, status)")
+        )
+    # A separate transaction, and allowed to fail without taking startup
+    # down with it: unlike the indexes above, this one is UNIQUE, and a
+    # database that already has duplicate (site_id, name) zone rows from
+    # before this constraint existed (schema.py's zone Table only just
+    # started declaring it) genuinely can't have it created without first
+    # deduplicating those rows -- an existing data-quality issue this
+    # migration surfaces, not one it caused. Failing the whole app's
+    # startup over it would be a worse outcome than leaving the
+    # create-zone race unfixed until an operator cleans it up.
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS idx_zone_site_id_name ON zone (site_id, name)")
+            )
+    except IntegrityError:
+        logger.warning(
+            "Could not create the unique zone(site_id, name) index -- this database likely already "
+            "has two zones with the same name in the same site. New zone names are still checked for "
+            "collisions at the application layer (app/api/zones.py), just without the database-level "
+            "guarantee against a race between two simultaneous requests until the existing duplicates "
+            "are resolved and the app is restarted."
         )
 
 
@@ -811,13 +858,14 @@ def update_incident(incident: Incident) -> Incident:
             text(
                 """
                 UPDATE incident
-                SET status = :status, closed_at = :closed_at, description = :description,
-                    acknowledged_by = :acknowledged_by
+                SET status = :status, severity = :severity, closed_at = :closed_at,
+                    description = :description, acknowledged_by = :acknowledged_by
                 WHERE id = :id
                 """
             ),
             {
                 "status": incident.status.value,
+                "severity": incident.severity.value,
                 "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
                 "description": incident.description,
                 "acknowledged_by": incident.acknowledged_by,
