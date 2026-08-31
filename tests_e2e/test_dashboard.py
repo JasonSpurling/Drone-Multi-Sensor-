@@ -101,6 +101,14 @@ def test_selecting_a_track_shows_details_and_playback_scrubber(live_server, page
     live_btn = page.locator("#live-btn")
     assert live_btn.is_disabled()  # starts in "live" mode, not scrubbing
 
+    # Must be scrolled into view before reading its bounding box: unlike
+    # locator.click(), raw page.mouse coordinates below don't auto-scroll,
+    # so a bounding box taken before this could point at a screen position
+    # outside the (scrollable) details panel's visible area -- the actual
+    # cause of this test's previous flakiness, not a real drag-simulation
+    # limitation. document.elementFromPoint at the pre-scroll coordinates
+    # returned null, confirming the click was landing nowhere at all.
+    scrub.scroll_into_view_if_needed()
     box = scrub.bounding_box()
     page.mouse.move(box["x"] + 5, box["y"] + box["height"] / 2)
     page.mouse.down()
