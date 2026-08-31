@@ -565,6 +565,8 @@
     <div id="status-line">loading…</div>
   </div>
   <div class="topbar-right">
+    <span id="whoami" style="display:none; margin-right:8px; color:var(--muted);"></span>
+    <a id="sso-logout-link" href="/auth/logout" class="secondary" style="display:none; margin-right:8px;">Log out</a>
     <button id="theme-toggle" class="secondary" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">&#9788;</button>
   </div>
 </header>
@@ -573,6 +575,7 @@
   <span style="color:var(--drone);">API key required or rejected.</span>
   <input id="auth-input" type="password" placeholder="X-API-Key" aria-label="API key" style="background:var(--input-bg); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 8px;">
   <button id="auth-save">Save key</button>
+  <a id="sso-login-link" href="/auth/login" style="display:none; color:var(--text);">or log in with SSO</a>
 </div>
 
 <div id="error-toast" role="alert"></div>
@@ -833,6 +836,49 @@ async function fetchJSON(url, opts) {
 
 function showAuthBar(show) {
   document.getElementById("auth-bar").style.display = show ? "flex" : "none";
+}
+
+// Whether this deployment has DRONE_OIDC_* configured at all -- unknown
+// (false) until loadAuthConfig() resolves, so the "or log in with SSO"
+// link stays hidden rather than flashing in and then 404ing on a
+// deployment that never enabled it. Fetched once at startup, not on
+// every showAuthBar(true): it can't change without a server restart.
+let ssoEnabled = false;
+
+async function loadAuthConfig() {
+  try {
+    const cfg = await fetchJSON("/auth/config");
+    ssoEnabled = !!cfg.sso_enabled;
+  } catch (e) {
+    ssoEnabled = false;
+  }
+  document.getElementById("sso-login-link").style.display = ssoEnabled ? "inline" : "none";
+}
+
+// "Who am I" -- distinct from apiKey (which only tells this tab whether
+// *it* set a key in localStorage): an SSO login authenticates via an
+// httponly session cookie this script can't read directly, so the only
+// way to know a session is active -- and who it belongs to -- is to ask
+// the server. Best-effort: a failure here (no valid key, no session
+// cookie, or open-access with no principal worth naming) just hides the
+// indicator rather than surfacing as an error, since refresh()'s own
+// showAuthBar already owns "you need to authenticate."
+async function loadWhoami() {
+  const whoamiEl = document.getElementById("whoami");
+  const logoutEl = document.getElementById("sso-logout-link");
+  try {
+    const me = await fetchJSON("/api/me");
+    whoamiEl.textContent = `${me.name} (${me.role})`;
+    whoamiEl.style.display = "inline";
+    // A "Log out" link only makes sense for an SSO session -- a static
+    // API key has nothing to log out of (it just stays in localStorage
+    // until the "Save key" field is cleared), and /auth/logout 404s
+    // outright when SSO isn't configured.
+    logoutEl.style.display = ssoEnabled ? "inline" : "none";
+  } catch (e) {
+    whoamiEl.style.display = "none";
+    logoutEl.style.display = "none";
+  }
 }
 
 // A non-auth action failure (acknowledge/resolve an incident, label a
@@ -2661,6 +2707,7 @@ async function refresh() {
     state.sensorRegistrations = sensorRegistrations;
     recordBreadcrumbs(tracks);
     showAuthBar(false);
+    loadWhoami(); // fire-and-forget -- who's authenticated doesn't gate rendering the rest
     renderClassFilters();
     renderTracks();
     renderAlerts();
@@ -2848,6 +2895,7 @@ document.addEventListener("visibilitychange", () => {
 
 renderClassFilters();
 initMap();
+loadAuthConfig();
 refresh();
 if (!document.hidden) {
   startPolling();

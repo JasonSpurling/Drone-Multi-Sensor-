@@ -29,6 +29,17 @@ def _require_oidc_enabled() -> None:
         raise HTTPException(status_code=404, detail="OIDC SSO is not configured")
 
 
+@router.get("/config")
+def auth_config() -> dict:
+    """Unauthenticated (deliberately -- a client has to know whether SSO
+    is even available before it can authenticate at all) so
+    dashboard.html can decide at load time whether to show a "Log in"
+    link into /auth/login, instead of always showing one and having it
+    404 on a deployment that never configured DRONE_OIDC_*.
+    """
+    return {"sso_enabled": oidc_enabled()}
+
+
 @router.get("/login", include_in_schema=False)
 async def login(request: Request):
     _require_oidc_enabled()

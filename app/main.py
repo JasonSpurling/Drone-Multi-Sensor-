@@ -24,6 +24,7 @@ from app.api import (
     detections,
     health,
     incidents,
+    me,
     metrics,
     ml_training,
     reports,
@@ -304,6 +305,7 @@ app.include_router(ml_training.router, prefix="/api")
 app.include_router(sites.router, prefix="/api")
 app.include_router(audit_log.router, prefix="/api")
 app.include_router(keys_api.router, prefix="/api")
+app.include_router(me.router, prefix="/api")
 app.include_router(live_api.router)
 # Every route here 404s unless DRONE_OIDC_* is configured (checked live,
 # per-request -- see app/api/auth_sso.py) -- registered unconditionally

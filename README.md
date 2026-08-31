@@ -1958,6 +1958,14 @@ field — or the default site if absent/unset). An `X-API-Key` header still
 takes priority over a session cookie when both are present, so existing
 sensor/automation integrations are entirely unaffected by turning this on.
 
+The dashboard surfaces this itself, not just the raw `/auth/login`
+redirect: `GET /auth/config` (unauthenticated) tells it whether SSO is
+even configured, so the auth bar's "or log in with SSO" link only appears
+on a deployment that actually turned it on. Once authenticated (either
+way), `GET /api/me` reports who as — the topbar shows `name (role)`, with
+a "Log out" link (`/auth/logout`) that only appears for an SSO session,
+since a static API key has nothing to log out of.
+
 **Multi-site**: every record (tracks, detections, incidents, zones,
 sensor/operator registrations) belongs to exactly one *site* (a physical
 site/campus this deployment monitors — `app/sites.py`, `app/db.py`), and
