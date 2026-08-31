@@ -1335,7 +1335,7 @@ in:
 .venv/bin/python -m app.adapters.validate_zone check-file app/zones.seed.json
 ```
 
-Two real, publicly published FAA data sources can supplement or
+Three real, publicly published FAA data sources can supplement or
 replace it:
 
 **FAA UAS Facility Map** (`app/airspace/faa_uas_facility_map.py`): the
@@ -1357,6 +1357,36 @@ field name (`CEILING`) confirmed from the layer's public metadata, but
 outbound access to arcgis.com wasn't available from the environment this
 was built in to run a live import end-to-end -- sanity-check your first
 real import against a known airport's published facility map.
+
+**FAA Class Airspace** (`app/airspace/faa_class_airspace.py`): the
+permanent Class B/C/D/E controlled-airspace surface areas drawn on every
+VFR sectional chart -- a different, longer-lived kind of restriction than
+either the facility map's altitude ceilings or a NOTAM's temporary one.
+Same unauthenticated ArcGIS FeatureServer mechanics as the facility map
+above (same FAA ArcGIS org), via the same import CLI with `--source
+class-airspace`:
+
+```bash
+.venv/bin/python -m app.adapters.faa_zones_import --source class-airspace \
+  --min-lon -0.5 --min-lat 51.3 --max-lon 0.3 --max-lat 51.7
+```
+
+Each surface area is imported as a `monitoring` zone (the same reasoning
+as the facility map's: entering Class B/C/D/E means real-world ATC
+authorization is needed, not that an intrusion just happened), named with
+its class and airport identifier and carrying its real floor/ceiling
+(`SFC` -- surface -- becomes a real `min_altitude_m` of `0`, `UNLTD`
+becomes no `max_altitude_m` cap at all, not a fabricated number). The
+field names (`CLASS`, `LOWER_VAL`/`LOWER_UOM`/`LOWER_CODE`,
+`UPPER_VAL`/`UPPER_UOM`/`UPPER_CODE`, ...) are confirmed from the FAA's
+own published AIS Open Data Dictionary, but -- like the facility map
+above -- outbound access to every FAA/ArcGIS domain (including the Data
+Dictionary PDF itself and the FeatureServer) wasn't available from the
+environment this was built in, so `DEFAULT_FEATURE_SERVER_URL` is
+inferred from the same org/naming convention the facility map's already-
+confirmed URL uses, not itself confirmed by a live request. Sanity-check
+your first real import against a known Class B/C/D airport's published
+airspace, and pass your own `--feature-server-url` if it's moved.
 
 **FAA NOTAMs** (`app/airspace/faa_notam.py`, `app/adapters/faa_notam_check.py`):
 Notices to Air Missions cover the kind of temporary/event-driven airspace

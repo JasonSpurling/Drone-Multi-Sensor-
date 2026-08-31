@@ -37,6 +37,8 @@ section with the version and date, bump `__version__`, and start a fresh
 - Acoustic classification scaffolding (`app/acoustic_features.py`'s MFCC extraction, `app/ml/train_acoustic.py`, `app/ml/acoustic_model.py`): `acoustic_array_bridge.py` can now optionally consult a trained classifier's opinion of the actual rotor/propeller acoustic signature instead of always reporting a flat, manually-estimated confidence -- same "ships no trained model" scaffolding-only posture as the existing `app/ml/` classifier.
 - Meshtastic off-grid alerting (`app/alerting.py`'s `notify_meshtastic`): a severity-routed alert channel over a Meshtastic node's LoRa mesh, for a deployment with no internet/cell connectivity at all -- the scenario every other alert channel (Slack, PagerDuty, SMS) assumes away.
 - Generic RF energy-detection sweep (`app/adapters/rf_sweep_bridge.py`): reads `hackrf_sweep`'s CSV output and flags any bin exceeding the noise floor by a configurable margin, independent of protocol -- catches an unknown or non-cooperative RF emitter none of the protocol-specific RF adapters would recognize.
+- Esri Topo added as a fourth selectable map base layer, alongside the existing Dark/Road/Satellite.
+- FAA Class Airspace import (`app/airspace/faa_class_airspace.py`): Class B/C/D/E controlled-airspace surface areas as zones, via `app/adapters/faa_zones_import.py --source class-airspace` -- the permanent airspace structure, distinct from the existing UAS Facility Map (altitude ceilings) and NOTAM (temporary) sources.
 
 ### Fixed
 
