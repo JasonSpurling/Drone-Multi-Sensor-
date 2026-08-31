@@ -39,6 +39,7 @@ section with the version and date, bump `__version__`, and start a fresh
 - Generic RF energy-detection sweep (`app/adapters/rf_sweep_bridge.py`): reads `hackrf_sweep`'s CSV output and flags any bin exceeding the noise floor by a configurable margin, independent of protocol -- catches an unknown or non-cooperative RF emitter none of the protocol-specific RF adapters would recognize.
 - Esri Topo added as a fourth selectable map base layer, alongside the existing Dark/Road/Satellite.
 - FAA Class Airspace import (`app/airspace/faa_class_airspace.py`): Class B/C/D/E controlled-airspace surface areas as zones, via `app/adapters/faa_zones_import.py --source class-airspace` -- the permanent airspace structure, distinct from the existing UAS Facility Map (altitude ceilings) and NOTAM (temporary) sources.
+- FAA Special Use Airspace import (`app/airspace/faa_special_use_airspace.py`): Prohibited/Restricted/Warning/Alert/Military Operations/National Security Areas as zones, via `--source special-use` -- Prohibited/Restricted import as `no_fly`, the most directly relevant of the four FAA sources for a drone-detection deployment.
 
 ### Fixed
 

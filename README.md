@@ -1335,7 +1335,7 @@ in:
 .venv/bin/python -m app.adapters.validate_zone check-file app/zones.seed.json
 ```
 
-Three real, publicly published FAA data sources can supplement or
+Four real, publicly published FAA data sources can supplement or
 replace it:
 
 **FAA UAS Facility Map** (`app/airspace/faa_uas_facility_map.py`): the
@@ -1387,6 +1387,36 @@ inferred from the same org/naming convention the facility map's already-
 confirmed URL uses, not itself confirmed by a live request. Sanity-check
 your first real import against a known Class B/C/D airport's published
 airspace, and pass your own `--feature-server-url` if it's moved.
+
+**FAA Special Use Airspace** (`app/airspace/faa_special_use_airspace.py`):
+Prohibited, Restricted, Warning, Alert, Military Operations, and National
+Security Areas -- the most directly relevant of these four sources for a
+drone-detection deployment specifically, since Prohibited/Restricted
+areas are genuinely not permitted to fly in without specific clearance
+(P-56 over the White House/Capitol is the textbook example), not just
+"needs ATC coordination" the way Class Airspace above is. Same
+unauthenticated ArcGIS FeatureServer mechanics, via `--source
+special-use`:
+
+```bash
+.venv/bin/python -m app.adapters.faa_zones_import --source special-use \
+  --min-lon -0.5 --min-lat 51.3 --max-lon 0.3 --max-lat 51.7
+```
+
+Prohibited and Restricted areas import as `no_fly` zones (this app's
+closest match to "genuinely not permitted"); Warning/Alert/MOA/National
+Security Areas import as `monitoring`, the same "be aware, not an
+automatic intrusion" reasoning as the other two sources above. The
+classification is deliberately **not** a trust in one field's exact,
+unconfirmed spelling: it keys off the well-known chart designator prefix
+on the area's own name (`P-`/`R-` for Prohibited/Restricted, per the
+same convention every sectional chart and aviation reference uses),
+falling back to a loose match on the `TYPE` field only when the name
+doesn't start with a recognized prefix. Same caveat as the other two
+sources -- outbound access to every FAA/ArcGIS domain wasn't available
+to validate a live response, so sanity-check your first real import
+against a known Prohibited or Restricted area before relying on this for
+anything safety-relevant.
 
 **FAA NOTAMs** (`app/airspace/faa_notam.py`, `app/adapters/faa_notam_check.py`):
 Notices to Air Missions cover the kind of temporary/event-driven airspace
