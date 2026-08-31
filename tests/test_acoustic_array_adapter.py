@@ -43,7 +43,7 @@ def test_range_is_flagged_as_assumed_not_measured():
 
 def test_parse_mic_positions_accepts_a_valid_array():
     positions = parse_mic_positions("[[0.032,0.032],[0.032,-0.032],[-0.032,-0.032],[-0.032,0.032]]")
-    assert positions == [[0.032, 0.032], [0.032, -0.032], [-0.032, -0.032], [-0.032, 0.032]]
+    assert positions == [(0.032, 0.032), (0.032, -0.032), (-0.032, -0.032), (-0.032, 0.032)]
 
 
 def test_parse_mic_positions_rejects_fewer_than_two_mics():

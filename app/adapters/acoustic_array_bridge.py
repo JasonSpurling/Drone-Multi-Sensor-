@@ -50,20 +50,22 @@ from app.adapters.sdk import add_common_post_args, format_post_error, post_detec
 from app.ml.acoustic_model import classify_audio
 
 
-def parse_mic_positions(raw_json: str) -> list[list[float]]:
+def parse_mic_positions(raw_json: str) -> list[tuple[float, float]]:
     """Parses --mic-positions and validates it upfront -- at least 2
     microphones, app.acoustic_beamforming.estimate_bearing's own minimum
     for bearing estimation -- so a misconfigured array fails immediately
     with a clear message instead of after already opening the audio
     device and recording a full block, deep inside that module's own
-    ValueError.
+    ValueError. json.loads gives back a list of lists, not the tuples
+    estimate_bearing's signature expects -- converted here so callers
+    always get the type its own docstring promises.
     """
     positions = json.loads(raw_json)
     if len(positions) < 2:
         raise SystemExit(
             f"--mic-positions must list at least 2 microphones for bearing estimation, got {len(positions)}"
         )
-    return positions
+    return [(float(x), float(y)) for x, y in positions]
 
 
 def build_detection_payload(
