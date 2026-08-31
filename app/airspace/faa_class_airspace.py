@@ -42,9 +42,13 @@ environment's network, so unlike the field names above (confirmed from
 the FAA's own published documentation), DEFAULT_FEATURE_SERVER_URL
 specifically is inferred from the same org/naming convention
 FAA_UAS_FacilityMap_Data already uses, not confirmed by an actual request
-against it. Sanity-check your first real import (or pass your own
---feature-server-url if it's moved) against a known Class B/C/D
-airport's published airspace before relying on this.
+against it. A search engine's own index does independently corroborate
+this specific URL -- a crawled page titled "Class_Airspace FeatureServer
+... loaded on July 21, 2025 ... operational ... Server Version 11.5" at
+this exact org -- but that's still a crawler's snapshot, not this module
+making its own live request. Sanity-check your first real import (or
+pass your own --feature-server-url if it's moved) against a known Class
+B/C/D airport's published airspace before relying on this.
 """
 
 from __future__ import annotations

@@ -19,24 +19,30 @@ above). Standard ArcGIS REST `query` semantics (bbox via
 esriGeometryEnvelope, `f=geojson`) -- no API key needed, identical query
 mechanics to the other two airspace modules.
 
-Fields (TYPE, NAME, LOWER_ALT, UPPER_ALT) are confirmed present on this
-layer from its own public metadata, but -- unlike Class Airspace, where
-the FAA's Data Dictionary PDF gave an exact, confirmed set of TYPE/CODE
-enum values -- that document's Special Use Airspace section wasn't
-reachable from the environment this was built in, so the exact string
-values TYPE and the LOWER_ALT/UPPER_ALT altitude fields use weren't
-directly confirmed the same way. What IS reliable, independent of any
-single field's exact encoding, is the SUA name/designator convention
-used on every real FAA chart and in every public reference on the
-subject (also independently confirmed): a name literally starting with
-"P-" is Prohibited, "R-" is Restricted, "W-" is Warning, "A-" is Alert
--- classify_sua_type() below keys off that instead of trusting one
-uncertain field's exact casing/spelling. LOWER_ALT/UPPER_ALT are parsed
-defensively for the same reason: "SFC" (surface) and "UNL"/"UNLTD"/
-"UNLIMITED" are the universal conventions across every FAA aeronautical
-layer already integrated here, handled the same way regardless of which
-exact spelling this particular layer uses; anything else is parsed as a
-plain number of feet.
+Fields (TYPE, NAME, SUAS_IDENT, LOWER_ALT, UPPER_ALT) are confirmed
+present on this layer from its own public metadata, but -- unlike Class
+Airspace, where the FAA's Data Dictionary PDF gave an exact, confirmed
+set of TYPE/CODE enum values -- that document's Special Use Airspace
+section wasn't reachable from the environment this was built in, so the
+exact string values TYPE carries, and which of NAME/SUAS_IDENT actually
+holds the short "P-56"-style designator (NAME's own metadata shows it as
+a 38-character field, long enough to be a fuller descriptive name rather
+than just the short designator; SUAS_IDENT, at 12 characters, looks like
+the more likely home for it, but which field the live service actually
+populates wasn't confirmed), weren't directly confirmed the same way.
+What IS reliable, independent of any single field's exact encoding, is
+the SUA designator convention used on every real FAA chart and in every
+public reference on the subject (also independently confirmed): "P-" is
+Prohibited (P-40 over Camp David, P-56 over the White House/Capitol),
+"R-" is Restricted (R-4808N over Area 51) -- classify_sua_type() below
+checks SUAS_IDENT and NAME for that prefix (whichever field the live
+service actually uses it in, this doesn't need to guess which), rather
+than trusting TYPE's exact, unconfirmed spelling alone. LOWER_ALT/
+UPPER_ALT are parsed defensively for the same reason: "SFC" (surface)
+and "UNL"/"UNLTD"/"UNLIMITED" are the universal conventions across every
+FAA aeronautical layer already integrated here, handled the same way
+regardless of which exact spelling this particular layer uses; anything
+else is parsed as a plain number of feet.
 
 Prohibited and Restricted areas import as `no_fly` zones (the closest
 match this app's ZoneType has to "flight genuinely not permitted without
@@ -48,9 +54,23 @@ app/airspace/faa_uas_facility_map.py already use for their own zones.
 This module was not validated against a live response from the endpoint
 in the environment this was built in -- every FAA/ArcGIS domain was
 unreachable from this environment's network, same caveat as this
-package's other two modules. Sanity-check your first real import against
-a known Prohibited or Restricted area (P-56 is a common, well-documented
-reference point) before relying on this for anything safety-relevant.
+package's other two modules. A search engine's own index does
+independently corroborate DEFAULT_FEATURE_SERVER_URL being real (a
+crawled ArcGIS REST Services Directory listing shows a
+Special_Use_Airspace FeatureServer under this exact org), but that's
+still a crawler's snapshot, not this module making its own live
+request. Sanity-check your first real import against a known Prohibited
+or Restricted area (P-56 is a common, well-documented reference point)
+before relying on this for anything safety-relevant.
+
+Also confirmed to exist under this same FAA ArcGIS org, but not built
+here: a "Pending_Part_Time_National_Security_UAS_Flight_Restrictions"
+layer -- the FAA's own published National Security UAS Flight
+Restrictions data (standing drone-specific flight restrictions around
+security-sensitive fixed sites), which would be a strong candidate for
+a fourth module in this package if genuinely needed; left out of this
+pass to avoid shipping a fourth source with even less field-schema
+confirmation than this one already has.
 """
 
 from __future__ import annotations
@@ -79,19 +99,21 @@ DEFAULT_FEATURE_SERVER_URL = (
 _NO_FLY_PREFIXES = ("P-", "R-")
 
 
-def classify_sua_type(name: str | None, type_field: str | None) -> ZoneType:
-    """Prefers the well-known designator-prefix convention on `name`
-    ("P-56", "R-4401", ...) over trusting `type_field`'s exact spelling --
-    see the module docstring for why. Falls back to `type_field` (a loose
-    substring match, not an exact enum comparison, for the same reason)
-    only when `name` doesn't start with a recognized prefix; defaults to
+def classify_sua_type(designator: str | None, name: str | None, type_field: str | None) -> ZoneType:
+    """Prefers the well-known designator-prefix convention ("P-56",
+    "R-4401", ...) over trusting `type_field`'s exact spelling -- see the
+    module docstring for why. Checks both `designator` (SUAS_IDENT, the
+    more likely home for a short designator) and `name` (NAME, in case
+    the live service populates it there instead) since which field
+    actually carries it wasn't confirmed. Falls back to `type_field` (a
+    loose substring match, not an exact enum comparison, for the same
+    reason) only when neither carries a recognized prefix; defaults to
     MONITORING (the less consequential of the two, not NO_FLY) when
-    neither field gives a confident answer, rather than guessing toward
-    the stricter classification from ambiguous data.
+    nothing gives a confident answer, rather than guessing toward the
+    stricter classification from ambiguous data.
     """
-    if name:
-        stripped = name.strip().upper()
-        if stripped.startswith(_NO_FLY_PREFIXES):
+    for candidate in (designator, name):
+        if candidate and candidate.strip().upper().startswith(_NO_FLY_PREFIXES):
             return ZoneType.NO_FLY
     if type_field:
         upper = type_field.strip().upper()
@@ -127,7 +149,7 @@ def _altitude_to_m(raw: object) -> float | None:
 def _query_url(min_lon: float, min_lat: float, max_lon: float, max_lat: float, feature_server_url: str) -> str:
     params = {
         "where": "1=1",
-        "outFields": "TYPE,NAME,LOWER_ALT,UPPER_ALT",
+        "outFields": "TYPE,NAME,SUAS_IDENT,LOWER_ALT,UPPER_ALT",
         "geometry": f"{min_lon},{min_lat},{max_lon},{max_lat}",
         "geometryType": "esriGeometryEnvelope",
         "inSR": "4326",
@@ -168,9 +190,10 @@ def geojson_to_zones(geojson: dict, name_prefix: str = "FAA SUA") -> list[Zone]:
         polygon = [(lat, lon) for lon, lat in rings[0]]
 
         props = feature.get("properties") or {}
+        designator = props.get("SUAS_IDENT")
         name = props.get("NAME")
-        label = name or f"#{i}"
-        zone_type = classify_sua_type(name, props.get("TYPE"))
+        label = f"{designator} ({name})" if designator and name else designator or name or f"#{i}"
+        zone_type = classify_sua_type(designator, name, props.get("TYPE"))
         min_altitude_m = _altitude_to_m(props.get("LOWER_ALT"))
         max_altitude_m = _altitude_to_m(props.get("UPPER_ALT"))
 

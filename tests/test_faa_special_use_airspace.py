@@ -15,16 +15,25 @@ SAMPLE_GEOJSON = {
     "type": "FeatureCollection",
     "features": [
         {
-            # A Prohibited area -- a real "P-" designator, surface to 18000ft.
+            # A Prohibited area -- a real "P-" designator in SUAS_IDENT
+            # (the more likely home for the short designator, see module
+            # docstring) with a longer descriptive NAME, surface to
+            # 18000ft.
             "type": "Feature",
-            "properties": {"TYPE": "PROHIBITED", "NAME": "P-56", "LOWER_ALT": "SFC", "UPPER_ALT": "18000"},
+            "properties": {
+                "TYPE": "PROHIBITED", "NAME": "WASHINGTON DC", "SUAS_IDENT": "P-56",
+                "LOWER_ALT": "SFC", "UPPER_ALT": "18000",
+            },
             "geometry": {
                 "type": "Polygon",
                 "coordinates": [[[-0.5, 51.3], [-0.4, 51.3], [-0.4, 51.4], [-0.5, 51.4], [-0.5, 51.3]]],
             },
         },
         {
-            # A Warning area with an unlimited ceiling.
+            # A Warning area with an unlimited ceiling, and no SUAS_IDENT
+            # at all -- the designator lands in NAME instead, since which
+            # field the live service actually uses wasn't confirmed (see
+            # module docstring).
             "type": "Feature",
             "properties": {"TYPE": "WARNING", "NAME": "W-237A", "LOWER_ALT": "SFC", "UPPER_ALT": "UNL"},
             "geometry": {
@@ -36,35 +45,40 @@ SAMPLE_GEOJSON = {
 }
 
 
-def test_classify_prohibited_prefix_is_no_fly():
-    assert classify_sua_type("P-56", None) == ZoneType.NO_FLY
+def test_classify_prohibited_prefix_on_designator_is_no_fly():
+    assert classify_sua_type("P-56", None, None) == ZoneType.NO_FLY
 
 
-def test_classify_restricted_prefix_is_no_fly():
-    assert classify_sua_type("R-4401", None) == ZoneType.NO_FLY
+def test_classify_restricted_prefix_on_designator_is_no_fly():
+    assert classify_sua_type("R-4401", None, None) == ZoneType.NO_FLY
+
+
+def test_classify_prohibited_prefix_on_name_is_no_fly():
+    # Same prefix convention, but landing in NAME instead of SUAS_IDENT --
+    # which field the live service actually populates wasn't confirmed,
+    # so both must be checked.
+    assert classify_sua_type(None, "P-40", None) == ZoneType.NO_FLY
 
 
 def test_classify_warning_prefix_is_monitoring():
-    assert classify_sua_type("W-237A", None) == ZoneType.MONITORING
+    assert classify_sua_type("W-237A", None, None) == ZoneType.MONITORING
 
 
 def test_classify_alert_prefix_is_monitoring():
-    assert classify_sua_type("A-211", None) == ZoneType.MONITORING
+    assert classify_sua_type("A-211", None, None) == ZoneType.MONITORING
 
 
-def test_classify_falls_back_to_type_field_when_name_has_no_recognized_prefix():
-    assert classify_sua_type("Some MOA", "Restricted Area") == ZoneType.NO_FLY
+def test_classify_falls_back_to_type_field_when_nothing_has_a_recognized_prefix():
+    assert classify_sua_type(None, "Some MOA", "Restricted Area") == ZoneType.NO_FLY
 
 
 def test_classify_defaults_to_monitoring_when_ambiguous():
-    assert classify_sua_type(None, None) == ZoneType.MONITORING
-    assert classify_sua_type("Bravo MOA", "Military Operations Area") == ZoneType.MONITORING
+    assert classify_sua_type(None, None, None) == ZoneType.MONITORING
+    assert classify_sua_type(None, "Bravo MOA", "Military Operations Area") == ZoneType.MONITORING
 
 
-def test_classify_name_prefix_wins_over_a_misleading_type_field():
-    # NAME's designator convention is the more reliable signal (see module
-    # docstring) -- a "P-" prefix must win even if TYPE says otherwise.
-    assert classify_sua_type("P-40", "Something else entirely") == ZoneType.NO_FLY
+def test_classify_designator_prefix_wins_over_a_misleading_type_field():
+    assert classify_sua_type("P-40", None, "Something else entirely") == ZoneType.NO_FLY
 
 
 def test_geojson_polygon_coordinates_are_swapped_to_lat_lon():
@@ -77,6 +91,17 @@ def test_prohibited_area_imports_as_no_fly():
     zones = geojson_to_zones(SAMPLE_GEOJSON)
     assert zones[0].zone_type == ZoneType.NO_FLY
     assert "P-56" in zones[0].name
+
+
+def test_zone_name_combines_designator_and_name_when_both_present():
+    zones = geojson_to_zones(SAMPLE_GEOJSON)
+    assert "P-56" in zones[0].name
+    assert "WASHINGTON DC" in zones[0].name
+
+
+def test_zone_name_falls_back_to_name_alone_without_a_designator():
+    zones = geojson_to_zones(SAMPLE_GEOJSON)
+    assert "W-237A" in zones[1].name
 
 
 def test_warning_area_imports_as_monitoring():
@@ -103,7 +128,7 @@ def test_non_polygon_features_are_skipped():
     geojson = {
         "type": "FeatureCollection",
         "features": [{
-            "type": "Feature", "properties": {"TYPE": "PROHIBITED", "NAME": "P-1"},
+            "type": "Feature", "properties": {"TYPE": "PROHIBITED", "SUAS_IDENT": "P-1"},
             "geometry": {"type": "Point", "coordinates": [-0.5, 51.3]},
         }],
     }
@@ -134,6 +159,7 @@ def test_fetch_builds_bbox_query_and_parses_response(monkeypatch):
     assert "geometry=-0.5%2C51.3%2C0.3%2C51.7" in captured_urls[0]
     assert "geometryType=esriGeometryEnvelope" in captured_urls[0]
     assert "f=geojson" in captured_urls[0]
+    assert "SUAS_IDENT" in captured_urls[0]
 
 
 def test_import_persists_zones_and_is_idempotent(site_id, monkeypatch):
