@@ -1791,6 +1791,13 @@ function initMap() {
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   const cartoAttr = osmAttr + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
   const esriAttr = "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS community";
+  // World_Topo_Map's real attribution differs from World_Imagery's above
+  // (a different blend of source providers) -- verified against Esri's
+  // own documented copyright text for this specific service, not reused
+  // from the satellite layer's.
+  const esriTopoAttr = "Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, "
+    + "GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), "
+    + '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community';
 
   const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
     attribution: cartoAttr, subdomains: "abcd", maxZoom: 19,
@@ -1806,11 +1813,15 @@ function initMap() {
     "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
     { attribution: esriAttr, maxZoom: 19 }
   );
+  const topoLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    { attribution: esriTopoAttr, maxZoom: 19 }
+  );
 
   darkLayer.addTo(leafletMap);
   const layersControl = L.control
     .layers(
-      { Dark: darkLayer, Road: roadLayer, Satellite: satelliteLayer },
+      { Dark: darkLayer, Road: roadLayer, Satellite: satelliteLayer, Topo: topoLayer },
       { "Satellite labels": satelliteLabels },
       { position: "topright", collapsed: true }
     )
@@ -1853,7 +1864,7 @@ function initMap() {
   let tileErrorStreak = 0;
   const showOfflineBanner = () => document.getElementById("map-offline-banner").classList.add("show");
   const hideOfflineBanner = () => document.getElementById("map-offline-banner").classList.remove("show");
-  [darkLayer, roadLayer, satelliteLayer, satelliteLabels].forEach((layer) => {
+  [darkLayer, roadLayer, satelliteLayer, satelliteLabels, topoLayer].forEach((layer) => {
     layer.on("tileerror", () => {
       tileErrorStreak += 1;
       if (tileErrorStreak >= 3) showOfflineBanner();
