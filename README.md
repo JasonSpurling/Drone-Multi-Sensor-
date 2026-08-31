@@ -1591,6 +1591,21 @@ can't set it to fake a position out of the signature's scope.
   Every channel is best-effort with a short timeout (`DRONE_ALERT_TIMEOUT_SECONDS`)
   -- a dead or misconfigured integration logs a warning and is skipped, it
   can't block incident handling or take the other channels down with it.
+- **Mitigation-system notification** (`app/mitigation.py`, optional, off by
+  default): a deliberate decision, not an omission -- this app is a
+  passive-detection/tracking tool and doesn't own, drive, or claim any
+  authority over mitigation hardware (an RF jammer, net gun, interdiction
+  platform, ...), but it can *tell* one a qualifying incident opened.
+  Structurally identical to the human-facing channels above (severity-
+  gated, best-effort, short-timeout webhook POST), just aimed at an
+  automated system instead of a person, and carrying what such a system
+  actually needs to act -- the offending track's current position,
+  classification, and heading/speed, not just "something happened."
+  Enable with `DRONE_MITIGATION_WEBHOOK_URL`; `DRONE_MITIGATION_MIN_SEVERITY`
+  (default `high`) gates it the same way the channels above do. What a
+  receiving system does with the notification -- jam, track-and-follow,
+  ignore -- is entirely its own decision and its own legal/operational
+  responsibility, not this app's.
 - **Message-queue fan-out** (`app/queue_publisher.py`, optional): set
   `DRONE_NATS_URL` (e.g. `nats://broker-host:4222`) to additionally publish
   a JSON copy of every ingested detection and opened incident onto a NATS
