@@ -35,6 +35,8 @@ section with the version and date, bump `__version__`, and start a fresh
 - Aircraft-category-based map markers: a quadcopter glyph for drone/unknown tracks, and a realistic airplane silhouette with altitude-based coloring for classified aircraft.
 - WiFi Beacon Remote ID reception (`app/adapters/astm_remote_id_wifi_bridge.py`): ASTM F3411's other broadcast transport, alongside the existing BLE bridge -- a drone transmitting only over WiFi was previously invisible to this app.
 - Acoustic classification scaffolding (`app/acoustic_features.py`'s MFCC extraction, `app/ml/train_acoustic.py`, `app/ml/acoustic_model.py`): `acoustic_array_bridge.py` can now optionally consult a trained classifier's opinion of the actual rotor/propeller acoustic signature instead of always reporting a flat, manually-estimated confidence -- same "ships no trained model" scaffolding-only posture as the existing `app/ml/` classifier.
+- Meshtastic off-grid alerting (`app/alerting.py`'s `notify_meshtastic`): a severity-routed alert channel over a Meshtastic node's LoRa mesh, for a deployment with no internet/cell connectivity at all -- the scenario every other alert channel (Slack, PagerDuty, SMS) assumes away.
+- Generic RF energy-detection sweep (`app/adapters/rf_sweep_bridge.py`): reads `hackrf_sweep`'s CSV output and flags any bin exceeding the noise floor by a configurable margin, independent of protocol -- catches an unknown or non-cooperative RF emitter none of the protocol-specific RF adapters would recognize.
 
 ### Fixed
 

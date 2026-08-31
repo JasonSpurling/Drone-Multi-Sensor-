@@ -1127,6 +1127,57 @@ independent reverse-engineering effort, not an official DJI
 specification, so exact fields available may vary by drone model/firmware.
 Sanity-check your first real decoded packet before relying on this.
 
+## Generic RF energy-detection sweep
+
+Every RF adapter above only sees a transmission it already knows how to
+decode (DJI OcuSync, MAVLink, ASTM F3411). `app/adapters/rf_sweep_bridge.py`
+is the odd one out: it doesn't decode anything, it just flags any
+frequency bin whose power exceeds the sweep's own noise floor by
+`--threshold-db` -- the same "energy detection" first pass real
+counter-drone RF systems run before any signal classification, useful for
+catching an unknown or non-cooperative emitter none of the protocol-
+specific adapters above would recognize.
+
+It reads [`hackrf_sweep`](https://github.com/greatscottgadgets/hackrf)'s
+CSV output from stdin (same stdin-piped shape as `dji_droneid_bridge.py`
+above -- no SDR dependency in this process itself):
+
+```bash
+# apt install hackrf, or build hackrf-tools from the repo above
+hackrf_sweep -f 2400:2500,5725:5875 -w 600000 \
+    | .venv/bin/python -m app.adapters.rf_sweep_bridge \
+        --sensor-id rf-sweep-1 --target-lat 51.50 --target-lon -0.10
+```
+
+**No protocol identification, no direction, no range.** A flagged bin
+could be a drone control link, a WiFi AP, a microwave oven, or a cordless
+phone -- this can only tell you *something* is transmitting there above
+the noise floor, not what. And an omnidirectional SDR sweep has no
+bearing or range at all, so every detection is reported at the sensor's
+own `--target-lat`/`--target-lon`, the same honest compromise
+`camera_motion.py` makes for a monocular camera's identical limitation.
+Best used as a coarse alert that a human or a more specific sensor then
+investigates, not as a standalone drone/not-drone classifier.
+
+The noise floor is each sweep's own median power by default -- robust to
+a handful of genuinely occupied bins, but a site with persistent in-band
+RF activity (a permanently-on WiFi AP, say) would skew it. Record a
+quiet-band baseline first and point `--baseline-csv` at it for a fixed
+reference instead:
+
+```bash
+hackrf_sweep -f 2400:2500,5725:5875 -w 600000 > control.csv   # ~1 minute, no drone present
+.venv/bin/python -m app.adapters.rf_sweep_bridge --baseline-csv control.csv \
+    --sensor-id rf-sweep-1 --target-lat 51.50 --target-lon -0.10
+```
+
+`hackrf_sweep`'s CSV line format (`date, time, hz_low, hz_high,
+hz_bin_width, num_samples, dB, dB, dB, ...`, with a single sweep split
+across several lines sharing one timestamp) was verified against
+`hackrf_sweep`'s actual documented output and
+[`tesorrells/RF-Drone-Detection`](https://github.com/tesorrells/RF-Drone-Detection)'s
+reference parsing of it, not guessed from a byte-offset diagram.
+
 ## Real ASTM F3411 Remote ID reception
 
 `app/remote_id.py` (see the Classification fusion section below) is a

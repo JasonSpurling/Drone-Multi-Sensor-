@@ -16,6 +16,10 @@ since the app's own API never talks to a sensor directly.
 - mavlink.py / mavlink_bridge.py -- MAVLink telemetry (friendly/
   cooperative drones)
 - dji_droneid.py / dji_droneid_bridge.py -- DJI DroneID payload decoding
+- rf_sweep.py / rf_sweep_bridge.py -- generic hackrf_sweep energy-
+  threshold detection (presence only, no protocol decode -- unlike every
+  other RF adapter here, which only sees a signal it already knows how
+  to decode)
 - astm_remote_id.py / astm_remote_id_ble_bridge.py /
   astm_remote_id_wifi_bridge.py -- ASTM F3411 Remote ID over BLE or WiFi
   Beacon (astm_remote_id.py is shared between both transports)
