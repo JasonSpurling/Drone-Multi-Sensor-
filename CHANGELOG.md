@@ -18,6 +18,8 @@ section with the version and date, bump `__version__`, and start a fresh
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-31
+
 ### Added
 
 - `POST /api/incidents/{id}/resolve` Resolve button in the dashboard's Alerts panel (the endpoint already existed; there was no way to reach it from the UI).
@@ -48,6 +50,11 @@ section with the version and date, bump `__version__`, and start a fresh
 - `update_incident` silently dropped a changed `severity` field.
 - SQLite now runs in WAL mode (was DELETE mode), and the dashboard surfaces non-auth API errors (e.g. a failed acknowledge) as a toast instead of only logging to the console.
 - `acoustic_array_bridge.py` now validates `--mic-positions`/`--assumed-range-m` upfront and surfaces a POST failure's actual error body, instead of failing deep inside a beamforming call or printing an unhelpful HTTP status line.
+- `faa_special_use_airspace.py`'s Prohibited/Restricted classification only checked the `NAME` field for the "P-"/"R-" designator prefix; a realistic response carrying the designator in `SUAS_IDENT` instead (with a longer descriptive `NAME`) would have silently landed as `monitoring` instead of `no_fly`. Now checks both fields.
+
+### Security
+
+None of this release's three new FAA ArcGIS airspace imports (Class Airspace, Special Use Airspace) or the pre-existing UAS Facility Map/NOTAM integrations, nor `astm_remote_id_wifi_bridge.py`, `dji_droneid_bridge.py`, `rf_sweep_bridge.py`, or Meshtastic alerting, were validated against a live endpoint, real hardware, or a live account in the environment this release was built in -- outbound network access there was restricted to a small allowlist that excluded every FAA/ArcGIS/aviation domain. Field names and query/protocol mechanics are confirmed from each source's own published documentation where possible; sanity-check your first real use of any of these against a known reference before relying on it for anything safety-relevant. See each module's own docstring for specifics.
 
 ## [0.1.0] - 2026-08-22
 
