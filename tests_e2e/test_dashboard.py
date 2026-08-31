@@ -486,7 +486,12 @@ def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server,
         live_server + "/api/detections", json={**near_edge, "longitude": -0.115}, timeout=5
     ).raise_for_status()
 
-    page.wait_for_function("state.incidents.some(i => i.status === 'resolved')", timeout=5000)
+    # 10s, not 5s: this waits on the dashboard's poll interval picking up
+    # the resolved incident, and 5s has shown intermittent timeouts on a
+    # loaded CI runner even though the same poll finishes well within that
+    # margin locally -- matches the 10s precedent used elsewhere in this
+    # file (see the .track-card wait above) for the same reason.
+    page.wait_for_function("state.incidents.some(i => i.status === 'resolved')", timeout=10000)
     assert page.locator('.alert-item .badge-outline:has-text("resolved")').count() == 1
     assert not page.locator("#alerts-badge").is_visible()
     description = page.evaluate("state.incidents.find(i => i.status === 'resolved').description")
