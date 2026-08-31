@@ -1708,6 +1708,28 @@ python scripts/replay_detections.py replay --url http://target:8000 \
 Like `load_test.py`, this isn't part of the pytest suite or CI -- it talks
 to a real running server, not a fixture.
 
+## Terminal admin client
+
+`scripts/drone_cli.py` is a terminal client for a running instance's HTTP
+API -- for the field-kit scenario where an operator needs to check tracks/
+incidents/sensors or acknowledge/resolve an incident but the dashboard's
+browser (or its Leaflet/CDN map tiles) isn't available, and for scripting
+routine checks without hand-rolling curl/jq. Every subcommand wraps one
+existing API endpoint; it adds no server-side behavior of its own:
+
+```bash
+python scripts/drone_cli.py --url http://127.0.0.1:8000 tracks list --status active
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents list --status open
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents acknowledge 42
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents resolve 42
+python scripts/drone_cli.py --url http://127.0.0.1:8000 sensors list
+python scripts/drone_cli.py --url http://127.0.0.1:8000 zones list
+```
+
+`--url`/`--api-key` can also come from `DRONE_URL`/`DRONE_API_KEY` env
+vars. Add `--json` to any command for raw JSON instead of a table (for
+piping into `jq` or another script).
+
 **Last recorded results** (this container's CPU, single instance, rate
 limiting raised via `DRONE_RATE_LIMIT_PER_SECOND`/`_BURST` to measure the
 actual processing ceiling rather than the deliberate per-sensor throttle --
