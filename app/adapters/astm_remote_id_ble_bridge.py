@@ -24,59 +24,17 @@ import argparse
 import time
 import urllib.error
 
-from app.adapters.astm_remote_id import build_detection_payload, merge_fields
+from app.adapters.astm_remote_id import (
+    DIRECT_REMOTE_ID_APPLICATION_CODE,
+    build_detection_payload,
+    extract_message_fields,
+    merge_fields,
+)
 from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 # The 16-bit UUID 0xFFFA ("ASTM International, ASTM Remote ID") expanded
 # to the full 128-bit form bleak reports service_data keys as.
 REMOTE_ID_SERVICE_UUID = "0000fffa-0000-1000-8000-00805f9b34fb"
-
-# Per the OpenDroneID Bluetooth Legacy Advertising Service Data layout:
-# byte 0 of the service data is this AD Application Code identifying Open
-# Drone ID within ASTM's assigned address space, byte 1 is an 8-bit
-# message counter, and the actual ODID message bytes start at byte 2.
-# Verified against opendroneid/transmitter-linux's reference C
-# implementation.
-_AD_APPLICATION_CODE = 0x0D
-
-
-def _extract_fields(message) -> dict | None:
-    """Pulls the fields this bridge cares about out of one decoded
-    dtpyodid message object, in the plain-dict shape
-    app.adapters.astm_remote_id.merge_fields expects. Returns None for a
-    message type this bridge doesn't use (Auth) or an unrecognized type.
-    """
-    from dtpyodid.messages.basicid import BasicID
-    from dtpyodid.messages.location import Location
-    from dtpyodid.messages.operatorid import OperatorID
-    from dtpyodid.messages.selfid import SelfID
-    from dtpyodid.messages.system import System
-
-    if isinstance(message, BasicID):
-        # A real upstream quirk: BasicID._parse's id_type/ua_type end up
-        # as 1-tuples, not plain ints, because of a trailing comma in
-        # dtpyodid's own source (`id_type = (...) >> 4,`). Unwrapped here
-        # rather than assumed fixed upstream.
-        ua_type = message.ua_type[0] if isinstance(message.ua_type, tuple) else message.ua_type
-        return {"uas_id": message.uas_id.rstrip("\0").strip(), "ua_type": ua_type}
-    if isinstance(message, Location):
-        return {
-            "latitude": message.latitude,
-            "longitude": message.longitude,
-            "height_m": message.height,
-            "altitude_geo_m": message.altitude_geo,
-            "altitude_baro_m": message.altitude_baro,
-            "speed_horizontal_mps": message.speed_horizontal,
-            "direction_deg": message.direction,
-            "status": message.status.name,
-        }
-    if isinstance(message, System):
-        return {"operator_latitude": message.latitude, "operator_longitude": message.longitude}
-    if isinstance(message, OperatorID):
-        return {"operator_id": message.operator_id.rstrip("\0").strip()}
-    if isinstance(message, SelfID):
-        return {"description": message.desc.rstrip("\0").strip()}
-    return None
 
 
 def watch(args: argparse.Namespace) -> None:
@@ -97,7 +55,7 @@ def watch(args: argparse.Namespace) -> None:
     def _handle_messages(address: str, messages: list) -> None:
         state = device_state.get(address, {})
         for message in messages:
-            fields = _extract_fields(message)
+            fields = extract_message_fields(message)
             if fields:
                 state = merge_fields(state, fields)
         device_state[address] = state
@@ -120,7 +78,7 @@ def watch(args: argparse.Namespace) -> None:
 
     def detection_callback(device, advertisement_data) -> None:
         service_data = advertisement_data.service_data.get(REMOTE_ID_SERVICE_UUID)
-        if not service_data or len(service_data) < 2 or service_data[0] != _AD_APPLICATION_CODE:
+        if not service_data or len(service_data) < 2 or service_data[0] != DIRECT_REMOTE_ID_APPLICATION_CODE:
             return
         decoded = parse_odid_message(service_data[2:])
         if decoded is None:

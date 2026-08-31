@@ -16,8 +16,9 @@ since the app's own API never talks to a sensor directly.
 - mavlink.py / mavlink_bridge.py -- MAVLink telemetry (friendly/
   cooperative drones)
 - dji_droneid.py / dji_droneid_bridge.py -- DJI DroneID payload decoding
-- astm_remote_id.py / astm_remote_id_ble_bridge.py -- ASTM F3411 Remote
-  ID over BLE
+- astm_remote_id.py / astm_remote_id_ble_bridge.py /
+  astm_remote_id_wifi_bridge.py -- ASTM F3411 Remote ID over BLE or WiFi
+  Beacon (astm_remote_id.py is shared between both transports)
 - onvif_ptz_bridge.py -- ONVIF PTZ camera slew-to-cue execution
 - lattice.py / lattice_bridge.py -- Anduril Lattice downstream sync
 - faa_notam_check.py / faa_zones_import.py -- one-off FAA airspace-data

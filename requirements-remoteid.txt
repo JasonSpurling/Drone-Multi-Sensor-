@@ -4,3 +4,6 @@ bleak==3.0.2
 # (dtpyodid) -- confirmed by installing it directly: pip reports its
 # declared project name as "firmware-pyodid".
 firmware-pyodid @ git+https://github.com/dronetag/python-odid@dronetag
+# For astm_remote_id_wifi_bridge.py -- the WiFi Beacon transport only;
+# the BLE bridge doesn't need this.
+scapy==2.6.1

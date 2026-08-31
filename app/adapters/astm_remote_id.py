@@ -36,12 +36,102 @@ A full picture (drone position + operator position + operator ID) needs
 correlating several separate advertisements from the same transmitting
 device over a short window; merge_fields does that accumulation, keyed by
 whatever device identifier the transport layer provides (a BLE MAC
-address for Bluetooth).
+address for Bluetooth, or the transmitting MAC in a WiFi Beacon frame --
+see app/adapters/astm_remote_id_wifi_bridge.py for that transport).
+
+extract_message_fields() and parse_wifi_vendor_ie() below are also
+transport-independent in the sense that matters here: which bytes to
+pull an already-decoded dtpyodid message's fields from, and how to find
+Open Drone ID's message-pack bytes inside a raw WiFi vendor-specific
+information element, don't depend on *how* those bytes reached this
+process (BLE GATT/advertising vs. an 802.11 monitor-mode capture).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+
+# Per the OpenDroneID Bluetooth Legacy Advertising Service Data layout
+# AND the WiFi Beacon vendor-specific element layout (verified against
+# opendroneid/opendroneid-core-c's actual source: libopendroneid/wifi.c's
+# odid_wifi_build_message_pack_beacon_frame sets vendor->oui_type = 0x0D;
+# libopendroneid/odid_wifi.h's struct ODID_service_info is {uint8_t
+# message_counter; ODID_MessagePack_encoded odid_message_pack[];}, packed)
+# -- this AD Application Code identifies Open Drone ID / Direct Remote ID
+# within ASTM's assigned address space, on both transports. What differs
+# per transport is only what comes before it: BLE's service data starts
+# with this byte directly (see astm_remote_id_ble_bridge.py); WiFi's
+# vendor element prefixes it with a 3-byte OUI (see
+# ASD_STAN_WIFI_VENDOR_OUI and parse_wifi_vendor_ie below).
+DIRECT_REMOTE_ID_APPLICATION_CODE = 0x0D
+
+# The OUI ASD-STAN (the European standards body co-defining Direct Remote
+# ID with ASTM) was assigned for this, per opendroneid-core-c's wifi.c
+# (`asd_stan_oui = {0xFA, 0x0B, 0xBC}` in odid_wifi_build_message_pack_beacon_frame).
+ASD_STAN_WIFI_VENDOR_OUI = b"\xfa\x0b\xbc"
+
+
+def parse_wifi_vendor_ie(info: bytes) -> bytes | None:
+    """Given one WiFi vendor-specific information element's payload bytes
+    (element ID 0xDD's contents -- the octets after the leading
+    element-id+length bytes any 802.11 frame parser, e.g. scapy's
+    Dot11Elt.info, already strips), returns the Open Drone ID
+    message-pack bytes if this IE matches Open Drone ID's real
+    over-the-air layout, or None if it's some other vendor's IE (WiFi
+    beacons routinely carry several -- WPS, vendor QoS extensions, ...)
+    or too short to be one at all.
+
+    Layout: 3-byte OUI, 1-byte application code, 1-byte message counter,
+    then the message-pack bytes themselves -- see
+    DIRECT_REMOTE_ID_APPLICATION_CODE's docstring for the source this was
+    verified against; not a byte offset guessed from memory.
+    """
+    if len(info) < 5:
+        return None
+    if info[0:3] != ASD_STAN_WIFI_VENDOR_OUI or info[3] != DIRECT_REMOTE_ID_APPLICATION_CODE:
+        return None
+    return info[5:]  # info[4] is the message_counter -- not needed by this bridge
+
+
+def extract_message_fields(message) -> dict | None:
+    """Pulls the fields this project cares about out of one decoded
+    dtpyodid message object, in the plain-dict shape merge_fields()
+    expects. Returns None for a message type not used here (Auth) or an
+    unrecognized type. Shared by every transport bridge (BLE, WiFi) --
+    dtpyodid's own message classes are transport-agnostic; only how the
+    bytes reached the decoder differs.
+    """
+    from dtpyodid.messages.basicid import BasicID
+    from dtpyodid.messages.location import Location
+    from dtpyodid.messages.operatorid import OperatorID
+    from dtpyodid.messages.selfid import SelfID
+    from dtpyodid.messages.system import System
+
+    if isinstance(message, BasicID):
+        # A real upstream quirk: BasicID._parse's id_type/ua_type end up
+        # as 1-tuples, not plain ints, because of a trailing comma in
+        # dtpyodid's own source (`id_type = (...) >> 4,`). Unwrapped here
+        # rather than assumed fixed upstream.
+        ua_type = message.ua_type[0] if isinstance(message.ua_type, tuple) else message.ua_type
+        return {"uas_id": message.uas_id.rstrip("\0").strip(), "ua_type": ua_type}
+    if isinstance(message, Location):
+        return {
+            "latitude": message.latitude,
+            "longitude": message.longitude,
+            "height_m": message.height,
+            "altitude_geo_m": message.altitude_geo,
+            "altitude_baro_m": message.altitude_baro,
+            "speed_horizontal_mps": message.speed_horizontal,
+            "direction_deg": message.direction,
+            "status": message.status.name,
+        }
+    if isinstance(message, System):
+        return {"operator_latitude": message.latitude, "operator_longitude": message.longitude}
+    if isinstance(message, OperatorID):
+        return {"operator_id": message.operator_id.rstrip("\0").strip()}
+    if isinstance(message, SelfID):
+        return {"description": message.desc.rstrip("\0").strip()}
+    return None
 
 
 def merge_fields(state: dict, fields: dict) -> dict:

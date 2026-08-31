@@ -1134,26 +1134,40 @@ signed-claim scheme this app defines -- verifying a cryptographic
 assertion, not anything a real drone actually broadcasts. Every drone
 over 250g sold in the US/EU is now separately required to broadcast real
 **ASTM F3411 Remote ID** over Bluetooth or Wi-Fi, and this app can receive
-that directly too, via `app/adapters/astm_remote_id_ble_bridge.py`:
+either transport:
 
 ```bash
 pip install -r requirements-remoteid.txt
+
+# Bluetooth Low Energy -- any standard Bluetooth adapter works, no SDR needed:
 sudo .venv/bin/python -m app.adapters.astm_remote_id_ble_bridge --sensor-id remote-id-1
+
+# WiFi Beacon -- needs a monitor-mode-capable WiFi adapter already switched
+# into monitor mode on the target channel (see the module's own docstring
+# for the iw/ip commands to set that up):
+sudo .venv/bin/python -m app.adapters.astm_remote_id_wifi_bridge \
+    --interface wlan0mon --sensor-id remote-id-wifi-1
 ```
 
-Any standard Bluetooth adapter works -- no SDR needed (unlike the DJI
-DroneID bridge above); Remote ID's whole design point is that anyone can
-passively receive it. Decoding uses
+Remote ID's whole design point is that anyone can passively receive it --
+neither transport needs the drone's cooperation beyond broadcasting what
+the standard already requires it to. Decoding uses
 [`dtpyodid`](https://github.com/dronetag/python-odid), a real Python
 implementation of the ASTM F3411 message formats from Dronetag (a
 commercial Remote ID hardware vendor), verified here by round-tripping
-real messages through the library's own encoder/decoder and cross-checking
-the Bluetooth framing against `opendroneid/transmitter-linux`'s reference
-implementation -- not a byte-offset parser guessed from memory. Over
-Bluetooth 4 Legacy Advertising a transmitter sends one message per
-broadcast (position, operator ID, serial number, ...), cycling through
-them, so this bridge accumulates a device's state across several
-broadcasts before it has enough to post a detection.
+real messages through the library's own encoder/decoder. The Bluetooth
+framing was cross-checked against `opendroneid/transmitter-linux`'s
+reference implementation, and the WiFi Beacon vendor-specific element
+layout (the 3-byte ASD-STAN OUI, application code, and message-counter
+byte preceding the actual message-pack bytes) against
+`opendroneid/opendroneid-core-c`'s reference C implementation -- neither
+is a byte-offset parser guessed from memory. Both transports send one
+message per broadcast (position, operator ID, serial number, ...),
+cycling through them, so both bridges accumulate a device's state across
+several broadcasts before there's enough to post a detection --
+`app/adapters/astm_remote_id.py` is the transport-independent logic
+(message-field extraction, state accumulation, payload building) both
+bridges share.
 
 **This is not authenticated.** Unlike `app/remote_id.py`'s signature
 scheme, ASTM F3411 itself has no cryptographic authentication of its
