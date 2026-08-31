@@ -239,6 +239,18 @@ TWILIO_FROM_NUMBER = os.getenv("DRONE_TWILIO_FROM_NUMBER", "")
 SMS_TO_NUMBERS = [n.strip() for n in os.getenv("DRONE_SMS_TO_NUMBERS", "").split(",") if n.strip()]
 SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
 
+# Meshtastic off-grid LoRa mesh alerting -- for a deployment with no
+# internet/cell connectivity at all, the scenario every channel above
+# assumes away. Talks to a Meshtastic node's TCP API (a node reachable on
+# the local network -- e.g. one bridged onto the LAN over WiFi, or a
+# Pi-attached radio -- not the node's own LoRa radio directly; no BLE or
+# serial transport here). Empty hostname (default) disables it, same
+# convention as every channel above.
+MESHTASTIC_HOSTNAME = os.getenv("DRONE_MESHTASTIC_HOSTNAME", "")
+MESHTASTIC_PORT = int(os.getenv("DRONE_MESHTASTIC_PORT", "4403"))
+MESHTASTIC_CHANNEL_INDEX = int(os.getenv("DRONE_MESHTASTIC_CHANNEL_INDEX", "0"))
+MESHTASTIC_MIN_SEVERITY = os.getenv("DRONE_MESHTASTIC_MIN_SEVERITY", "medium")
+
 # Mitigation system hook (app/mitigation.py): a generic webhook POST to a
 # downstream counter-UAS system (RF jammer, net gun, interdiction
 # platform, ...) carrying the track's current position/classification

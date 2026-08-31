@@ -1653,21 +1653,35 @@ can't set it to fake a position out of the signature's scope.
 - **Outbound alerting**: set `DRONE_WEBHOOK_URLS` (comma-separated) to POST
   each incident's JSON to one or more generic webhooks when it opens.
   On top of that, `app/alerting.py` adds severity-routed integrations for
-  Slack, PagerDuty, and SMS (via Twilio), each independently configured
-  (empty/unset = disabled) with its own minimum-severity threshold -- an
-  escalation policy, so e.g. every incident can reach Slack for situational
-  awareness while only `high`+ pages PagerDuty and only `critical` sends an
-  SMS, instead of one severity treatment for every channel:
+  Slack, PagerDuty, SMS (via Twilio), and Meshtastic, each independently
+  configured (empty/unset = disabled) with its own minimum-severity
+  threshold -- an escalation policy, so e.g. every incident can reach
+  Slack for situational awareness while only `high`+ pages PagerDuty and
+  only `critical` sends an SMS, instead of one severity treatment for
+  every channel:
 
   | Channel | Enable with | Threshold var (default) |
   |---|---|---|
   | Slack | `DRONE_SLACK_WEBHOOK_URL` | `DRONE_SLACK_MIN_SEVERITY` (`low`) |
   | PagerDuty | `DRONE_PAGERDUTY_ROUTING_KEY` | `DRONE_PAGERDUTY_MIN_SEVERITY` (`high`) |
   | SMS (Twilio) | `DRONE_TWILIO_ACCOUNT_SID`/`_AUTH_TOKEN`/`_FROM_NUMBER` + `DRONE_SMS_TO_NUMBERS` | `DRONE_SMS_MIN_SEVERITY` (`critical`) |
+  | Meshtastic | `DRONE_MESHTASTIC_HOSTNAME` | `DRONE_MESHTASTIC_MIN_SEVERITY` (`medium`) |
 
   Every channel is best-effort with a short timeout (`DRONE_ALERT_TIMEOUT_SECONDS`)
   -- a dead or misconfigured integration logs a warning and is skipped, it
   can't block incident handling or take the other channels down with it.
+
+  **Meshtastic** is the odd one out on purpose: every other channel above
+  needs internet or cell connectivity, which a genuinely off-grid
+  deployment doesn't have. It talks to a Meshtastic node's TCP API
+  (`meshtastic.tcp_interface.TCPInterface`) -- a node reachable on the
+  local network (bridged onto the LAN over WiFi, or a Pi-attached radio),
+  not the node's own LoRa radio directly:
+  ```bash
+  pip install -r requirements-meshtastic.txt
+  export DRONE_MESHTASTIC_HOSTNAME=192.168.1.50   # the node's LAN address
+  export DRONE_MESHTASTIC_CHANNEL_INDEX=0          # which mesh channel to send on
+  ```
 - **Mitigation-system notification** (`app/mitigation.py`, optional, off by
   default): a deliberate decision, not an omission -- this app is a
   passive-detection/tracking tool and doesn't own, drive, or claim any
@@ -1888,6 +1902,10 @@ needs to be set to run locally.
 | `DRONE_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM_NUMBER` | *(unset)* | Twilio credentials for SMS alerts |
 | `DRONE_SMS_TO_NUMBERS` | *(unset)* | Comma-separated destination numbers for SMS alerts |
 | `DRONE_SMS_MIN_SEVERITY` | `critical` | Minimum incident severity that sends an SMS |
+| `DRONE_MESHTASTIC_HOSTNAME` | *(unset)* | LAN address of a Meshtastic node's TCP API, for off-grid alerting |
+| `DRONE_MESHTASTIC_PORT` | `4403` | Meshtastic node's TCP API port |
+| `DRONE_MESHTASTIC_CHANNEL_INDEX` | `0` | Which mesh channel to send incident alerts on |
+| `DRONE_MESHTASTIC_MIN_SEVERITY` | `medium` | Minimum incident severity that sends a Meshtastic alert |
 | `DRONE_ALERT_TIMEOUT_SECONDS` | `5` | Per-request timeout for Slack/PagerDuty/SMS alerts |
 | `DRONE_NATS_URL` | *(unset)* | NATS broker URL to additionally publish detections/incidents to; unset disables it |
 | `DRONE_NATS_DETECTION_SUBJECT` | `drone.detections` | NATS subject each ingested detection is published to |

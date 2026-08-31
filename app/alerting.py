@@ -1,5 +1,6 @@
-"""Severity-routed alert integrations -- Slack, PagerDuty, and SMS (via
-Twilio) -- on top of the generic webhook fan-out in app/notifications.py.
+"""Severity-routed alert integrations -- Slack, PagerDuty, SMS (via
+Twilio), and Meshtastic (off-grid LoRa mesh) -- on top of the generic
+webhook fan-out in app/notifications.py.
 
 Each channel is independently configured (empty/unset = disabled) and has
 its own minimum-severity threshold: an escalation policy, so e.g. Slack can
@@ -26,6 +27,10 @@ import urllib.request
 
 from app.config import (
     ALERT_TIMEOUT_SECONDS,
+    MESHTASTIC_CHANNEL_INDEX,
+    MESHTASTIC_HOSTNAME,
+    MESHTASTIC_MIN_SEVERITY,
+    MESHTASTIC_PORT,
     PAGERDUTY_MIN_SEVERITY,
     PAGERDUTY_ROUTING_KEY,
     SLACK_MIN_SEVERITY,
@@ -134,6 +139,45 @@ def notify_sms(incident: Incident) -> None:
             logger.warning("SMS alert to %s failed: %s", to_number, exc)
 
 
+def _send_meshtastic_text(text: str) -> None:
+    """Isolated from notify_meshtastic() below purely so tests can
+    monkeypatch this one function instead of needing the real
+    (optional, requirements-meshtastic.txt) `meshtastic` package
+    installed -- the same reason every other lazy-imported optional
+    dependency in this app's adapters keeps its actual library call in
+    its own small function.
+    """
+    import meshtastic.tcp_interface
+
+    interface = meshtastic.tcp_interface.TCPInterface(MESHTASTIC_HOSTNAME, portNumber=MESHTASTIC_PORT)
+    try:
+        interface.sendText(text, channelIndex=MESHTASTIC_CHANNEL_INDEX)
+    finally:
+        interface.close()
+
+
+def notify_meshtastic(incident: Incident) -> None:
+    if not MESHTASTIC_HOSTNAME or not meets_severity_threshold(incident.severity, MESHTASTIC_MIN_SEVERITY):
+        return
+    # sendText's real cap (mesh_pb2.Constants.DATA_PAYLOAD_LEN, not a
+    # literal number in the library's own public docs) is short -- trimmed
+    # here rather than letting the library reject an over-length message
+    # outright and lose the alert entirely.
+    text = f"[{incident.severity.value.upper()}] {_summary(incident)}"[:200]
+    try:
+        _send_meshtastic_text(text)
+    except Exception as exc:  # noqa: BLE001 -- deliberately broad, see comment below
+        # meshtastic's own exception surface (MeshInterface.MeshInterfaceError
+        # for an over-length payload, plus whatever the underlying TCP
+        # connection to the node raises on failure/timeout) isn't narrow or
+        # fully documented -- same posture as app/adapters/asterix_bridge.py's
+        # identically broad except around a similarly under-documented
+        # third-party parser: a connectivity or library-internal failure
+        # here must not crash incident creation, and there's no safe
+        # narrower exception list to trust.
+        logger.warning("Meshtastic alert failed: %s", exc)
+
+
 def notify_escalations(incident: Incident) -> None:
     """Fan out to every configured severity-routed channel. Each channel
     independently no-ops if it isn't configured or the incident doesn't
@@ -142,3 +186,4 @@ def notify_escalations(incident: Incident) -> None:
     notify_slack(incident)
     notify_pagerduty(incident)
     notify_sms(incident)
+    notify_meshtastic(incident)
