@@ -15,7 +15,7 @@ import statistics
 from collections import Counter
 from datetime import datetime
 
-from app.models import Incident
+from app.models import Detection, Incident, Track, Zone
 
 
 def build_incident_report(incidents: list[Incident], start: datetime, end: datetime) -> dict:
@@ -47,4 +47,71 @@ def build_incident_report(incidents: list[Incident], start: datetime, end: datet
         },
         "unacknowledged_count": sum(1 for i in incidents if i.acknowledged_by is None),
         "daily_counts": dict(sorted(daily_counts.items())),
+    }
+
+
+def build_after_action_report(
+    incident: Incident, track: Track | None, zone: Zone | None, detections: list[Detection]
+) -> dict:
+    """A single incident's full story for post-incident review: what was
+    seen, when, by which sensors, how it was classified, and how it was
+    responded to -- everything GET /api/incidents' plain record has, plus
+    the track's fused trajectory summary and its raw detection history
+    (chronological, from app.db.list_detections -- unlike
+    list_recent_detections used for classification fusion, this is the
+    *complete* history for the record, not a capped recent window).
+
+    `track`/`zone` are None when the incident's track_id/zone_id no longer
+    resolves (e.g. purged by retention) -- the report still renders with
+    that section omitted rather than failing outright, since the incident
+    row itself (what/when/severity/response) is the part that must never
+    be lost to a later purge of the underlying track/detection rows.
+    """
+    response_seconds = (
+        (incident.closed_at - incident.opened_at).total_seconds() if incident.closed_at else None
+    )
+    sensors_involved = sorted({d.sensor_id for d in detections})
+
+    return {
+        "incident": {
+            "incident_uid": incident.incident_uid,
+            "incident_type": incident.incident_type.value,
+            "severity": incident.severity.value,
+            "status": incident.status.value,
+            "description": incident.description,
+            "opened_at": incident.opened_at.isoformat(),
+            "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
+            "response_time_seconds": response_seconds,
+            "acknowledged_by": incident.acknowledged_by,
+        },
+        "zone": {"name": zone.name, "zone_type": zone.zone_type.value} if zone else None,
+        "track": (
+            {
+                "track_uid": track.track_uid,
+                "classification": track.classification.value,
+                "first_seen": track.first_seen.isoformat(),
+                "last_seen": track.last_seen.isoformat(),
+                "final_position": (
+                    {"latitude": track.latitude, "longitude": track.longitude, "altitude_m": track.altitude_m}
+                ),
+                "final_speed_mps": track.speed_mps,
+                "final_heading_deg": track.heading_deg,
+            }
+            if track
+            else None
+        ),
+        "sensors_involved": sensors_involved,
+        "detection_count": len(detections),
+        "detections": [
+            {
+                "sensor_id": d.sensor_id,
+                "sensor_type": d.sensor_type.value,
+                "timestamp": d.timestamp.isoformat(),
+                "latitude": d.latitude,
+                "longitude": d.longitude,
+                "altitude_m": d.altitude_m,
+                "confidence": d.confidence,
+            }
+            for d in detections
+        ],
     }

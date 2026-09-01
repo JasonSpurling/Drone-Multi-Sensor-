@@ -4,9 +4,11 @@ from fastapi.responses import Response
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.db import get_sensor_registration, get_track, list_detections, list_tracks
 from app.export import to_csv, to_gpx, to_kml
+from app.fusion import decay_classification_confidence
 from app.models import Detection, Track, TrackStatus
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
+from app.util import utcnow
 
 router = APIRouter()
 
@@ -19,6 +21,19 @@ _EXPORT_CONTENT_TYPES = {
 }
 
 
+def _with_decayed_confidence(track: Track) -> Track:
+    """Applies read-time staleness decay to the raw, as-of-last-detection
+    classification_confidence app.tracking stored -- see
+    app.fusion.decay_classification_confidence's docstring for why this
+    happens here (at serve time) instead of being kept current by some
+    background job.
+    """
+    track.classification_confidence = decay_classification_confidence(
+        track.classification_confidence, track.last_seen, utcnow()
+    )
+    return track
+
+
 @router.get("/tracks", response_model=list[Track])
 def get_tracks(
     status: TrackStatus | None = Query(default=None),
@@ -27,9 +42,10 @@ def get_tracks(
     principal: Principal = Depends(require_role(*_viewer_roles)),
 ) -> list[Track]:
     expire_stale_tracks(principal.site_id)
-    return list_tracks(
+    tracks = list_tracks(
         site_id=principal.site_id, status=status.value if status else None, limit=limit, offset=offset
     )
+    return [_with_decayed_confidence(t) for t in tracks]
 
 
 @router.get("/tracks/{track_id}", response_model=Track)
@@ -38,7 +54,7 @@ def get_track_by_id(track_id: int, principal: Principal = Depends(require_role(*
     track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return track
+    return _with_decayed_confidence(track)
 
 
 @router.get("/tracks/{track_id}/history", response_model=list[Detection])

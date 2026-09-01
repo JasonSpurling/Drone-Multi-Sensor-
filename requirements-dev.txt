@@ -2,6 +2,10 @@
 psycopg2-binary==2.9.12
 pytest==9.1.1
 httpx==0.28.1
+# starlette.testclient prefers httpx2 over httpx when both are installed
+# (falls back to httpx with a StarletteDeprecationWarning otherwise) --
+# httpx2 is httpx's successor for exactly this ASGI-test-client role.
+httpx2==2.12.0
 ruff==0.16.3
 mypy==2.3.1
 bandit==1.9.4

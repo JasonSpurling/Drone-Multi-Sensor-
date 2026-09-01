@@ -143,3 +143,57 @@ def test_invalid_min_severity_env_value_disables_the_channel_safely(captured_req
     monkeypatch.setattr("app.alerting.SLACK_MIN_SEVERITY", "not-a-real-severity")
     alerting.notify_slack(make_incident(IncidentSeverity.CRITICAL))
     assert captured_requests == []
+
+
+@pytest.fixture
+def sent_meshtastic_texts(monkeypatch):
+    # _send_meshtastic_text is monkeypatched directly (not the real
+    # meshtastic.tcp_interface.TCPInterface) so these tests don't need the
+    # real (optional, requirements-meshtastic.txt) package installed --
+    # same reasoning as this file's own docstring on _send_meshtastic_text.
+    calls = []
+    monkeypatch.setattr(alerting, "_send_meshtastic_text", calls.append)
+    return calls
+
+
+def test_meshtastic_disabled_by_default_sends_nothing(sent_meshtastic_texts, monkeypatch):
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "")
+    alerting.notify_meshtastic(make_incident(IncidentSeverity.CRITICAL))
+    assert sent_meshtastic_texts == []
+
+
+def test_meshtastic_sends_when_configured_and_above_threshold(sent_meshtastic_texts, monkeypatch):
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+    monkeypatch.setattr("app.alerting.MESHTASTIC_MIN_SEVERITY", "low")
+    alerting.notify_meshtastic(make_incident(IncidentSeverity.HIGH))
+    assert len(sent_meshtastic_texts) == 1
+    assert "HIGH" in sent_meshtastic_texts[0]
+
+
+def test_meshtastic_skips_incidents_below_its_threshold(sent_meshtastic_texts, monkeypatch):
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+    monkeypatch.setattr("app.alerting.MESHTASTIC_MIN_SEVERITY", "high")
+    alerting.notify_meshtastic(make_incident(IncidentSeverity.MEDIUM))
+    assert sent_meshtastic_texts == []
+
+
+def test_meshtastic_truncates_an_overlong_message(sent_meshtastic_texts, monkeypatch):
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+    monkeypatch.setattr("app.alerting.MESHTASTIC_MIN_SEVERITY", "low")
+    incident = make_incident(IncidentSeverity.HIGH)
+    incident.description = "x" * 500
+    alerting.notify_meshtastic(incident)
+    assert len(sent_meshtastic_texts[0]) <= 200
+
+
+def test_meshtastic_send_failure_does_not_raise(monkeypatch):
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+    monkeypatch.setattr("app.alerting.MESHTASTIC_MIN_SEVERITY", "low")
+
+    def raising_send(text):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(alerting, "_send_meshtastic_text", raising_send)
+    # Must not raise -- a dead/unreachable Meshtastic node shouldn't crash
+    # incident handling, same contract as every other channel.
+    alerting.notify_meshtastic(make_incident(IncidentSeverity.HIGH))

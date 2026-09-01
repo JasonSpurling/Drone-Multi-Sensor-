@@ -94,6 +94,38 @@ def incidents_to_csv(incidents: list[Incident]) -> str:
     return buffer.getvalue()
 
 
+def labeled_detections_to_training_csv(detections: list[Detection]) -> str:
+    """Every human_label-tagged detection (see app.db.list_labeled_detections),
+    in exactly the CSV shape app/ml/train.py's load_csv expects -- point
+    `python -m app.ml.train --csv` straight at this endpoint's output
+    (GET /api/ml/training-data/export) to train from real labeled traffic
+    once there's enough of it. RF fields are pulled out of raw_data the
+    same way app.ml.features.extract_features does for a live Detection,
+    keeping this export and that inference-time extraction from drifting
+    into two different ideas of what "the RF fields" are.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "sensor_type", "confidence", "altitude_m",
+            "rf_center_frequency_mhz", "rf_bandwidth_mhz", "rf_frequency_hopping", "label",
+        ]
+    )
+    for d in detections:
+        raw = d.raw_data or {}
+        writer.writerow([
+            d.sensor_type.value,
+            d.confidence,
+            d.altitude_m if d.altitude_m is not None else "",
+            raw.get("center_frequency_mhz", ""),
+            raw.get("bandwidth_mhz", ""),
+            "true" if raw.get("frequency_hopping") else "",
+            d.human_label.value if d.human_label is not None else "",
+        ])
+    return buffer.getvalue()
+
+
 def to_csv(detections: list[Detection]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)

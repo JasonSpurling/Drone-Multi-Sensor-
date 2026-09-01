@@ -1,0 +1,5 @@
+# Only needed if DRONE_MESHTASTIC_HOSTNAME is set (see app/alerting.py's
+# notify_meshtastic) -- a deployment that never enables Meshtastic
+# alerting never needs this installed.
+-r requirements.txt
+meshtastic==2.7.11

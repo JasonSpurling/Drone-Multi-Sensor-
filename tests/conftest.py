@@ -16,10 +16,16 @@ from sqlalchemy import create_engine, event, text
 def _make_engine(url: str):
     test_engine = create_engine(url, future=True)
     if test_engine.dialect.name == "sqlite":
+        # Mirrors app.db._configure_sqlite_connection's own "connect" hook
+        # (foreign keys + WAL journal mode) -- this fixture builds its own
+        # separate test Engine rather than exercising app.db's module-level
+        # one directly, so without this a real behavior difference between
+        # test and production SQLite connections would go untested.
         @event.listens_for(test_engine, "connect")
-        def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
+        def _configure_sqlite_connection(dbapi_connection, connection_record) -> None:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys = ON")
+            cursor.execute("PRAGMA journal_mode = WAL")
             cursor.close()
     return test_engine
 

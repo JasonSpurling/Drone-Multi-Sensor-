@@ -18,6 +18,16 @@ Also requires the sensor's mounting position to be registered (see the
 README's "Georeferencing" section) -- an azimuth_deg/range_m detection
 with no registered sensor position is silently dropped.
 
+--confidence stays a flat manual estimate by default, exactly as always
+-- but if DRONE_ACOUSTIC_ML_MODEL_PATH is configured (see
+app/ml/acoustic_model.py, app/ml/train_acoustic.py), a trained
+classifier's opinion (MFCC features of the recorded audio -- an actual
+rotor/propeller acoustic signature, not a fixed number) takes over
+whenever it's confident enough, falling back to --confidence otherwise.
+This app ships no such trained model (see app/ml/__init__.py for why);
+it's opt-in scaffolding for a deployment with real labeled recordings to
+train on, not a claim that acoustic classification works out of the box.
+
 Usage:
     pip install -r requirements-acoustic.txt
     .venv/bin/python -m app.adapters.acoustic_array_bridge \\
@@ -30,24 +40,32 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 
 import numpy as np
 
 from app.acoustic_beamforming import estimate_bearing
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
+from app.ml.acoustic_model import classify_audio
 
 
-def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
+def parse_mic_positions(raw_json: str) -> list[tuple[float, float]]:
+    """Parses --mic-positions and validates it upfront -- at least 2
+    microphones, app.acoustic_beamforming.estimate_bearing's own minimum
+    for bearing estimation -- so a misconfigured array fails immediately
+    with a clear message instead of after already opening the audio
+    device and recording a full block, deep inside that module's own
+    ValueError. json.loads gives back a list of lists, not the tuples
+    estimate_bearing's signature expects -- converted here so callers
+    always get the type its own docstring promises.
+    """
+    positions = json.loads(raw_json)
+    if len(positions) < 2:
+        raise SystemExit(
+            f"--mic-positions must list at least 2 microphones for bearing estimation, got {len(positions)}"
+        )
+    return [(float(x), float(y)) for x, y in positions]
 
 
 def build_detection_payload(
@@ -75,7 +93,7 @@ def build_detection_payload(
 def watch(args: argparse.Namespace) -> None:
     import sounddevice as sd
 
-    mic_positions = json.loads(args.mic_positions)
+    mic_positions = parse_mic_positions(args.mic_positions)
     n_mics = len(mic_positions)
     block_frames = int(args.block_seconds * args.sample_rate)
 
@@ -91,22 +109,39 @@ def watch(args: argparse.Namespace) -> None:
         azimuth_deg, bearing_confidence = estimate_bearing(
             np.ascontiguousarray(channels), mic_positions, args.sample_rate, args.azimuth_resolution_deg
         )
+
+        # An optional trained classifier's opinion (see app/ml/acoustic_model.py
+        # and app/ml/train_acoustic.py) takes over from the manual --confidence
+        # estimate when DRONE_ACOUSTIC_ML_MODEL_PATH is configured and the
+        # model is confident enough -- None (unconfigured, missing model
+        # file, not confident enough) falls straight back to args.confidence,
+        # so this bridge's behavior is unchanged from before this classifier
+        # existed unless an operator opts in. MFCC extraction doesn't need
+        # the array's spatial info, only its combined spectral content, so
+        # every mic channel is averaged into one signal first.
+        ml_confidence = classify_audio(channels.mean(axis=0), args.sample_rate)
+        confidence = ml_confidence if ml_confidence is not None else args.confidence
+
         payload = build_detection_payload(
-            azimuth_deg, bearing_confidence, args.sensor_id, args.assumed_range_m, args.confidence
+            azimuth_deg, bearing_confidence, args.sensor_id, args.assumed_range_m, confidence
         )
         try:
-            result = post_detection(args.api_url, payload, args.api_key)
+            result = post_detection(
+                args.api_url, payload, args.api_key,
+                max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+            )
+            source = "ml" if ml_confidence is not None else "manual"
             print(
                 f"-> azimuth={azimuth_deg:.1f} bearing_confidence={bearing_confidence:.2f} "
-                f"track {result.get('track_id')}"
+                f"confidence={confidence:.2f} ({source}) track {result.get('track_id')}"
             )
         except urllib.error.URLError as exc:
-            print(f"ERROR posting detection: {exc}")
+            print(f"ERROR posting detection: {format_post_error(exc)}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--sensor-id", default="acoustic-array-1")
+    add_common_post_args(parser, default_sensor_id="acoustic-array-1")
     parser.add_argument(
         "--mic-positions", required=True,
         help='JSON list of [x_east_m, y_north_m] mic positions relative to the array center, '
@@ -125,9 +160,9 @@ def main() -> None:
         "(separate from bearing_confidence, which reflects only how sharp the DIRECTION estimate is)",
     )
     parser.add_argument("--device", default=None, help="sounddevice input device index or name")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
+    if args.assumed_range_m <= 0:
+        parser.error("--assumed-range-m must be positive")
     watch(args)
 
 

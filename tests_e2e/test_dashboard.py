@@ -101,6 +101,14 @@ def test_selecting_a_track_shows_details_and_playback_scrubber(live_server, page
     live_btn = page.locator("#live-btn")
     assert live_btn.is_disabled()  # starts in "live" mode, not scrubbing
 
+    # Must be scrolled into view before reading its bounding box: unlike
+    # locator.click(), raw page.mouse coordinates below don't auto-scroll,
+    # so a bounding box taken before this could point at a screen position
+    # outside the (scrollable) details panel's visible area -- the actual
+    # cause of this test's previous flakiness, not a real drag-simulation
+    # limitation. document.elementFromPoint at the pre-scroll coordinates
+    # returned null, confirming the click was landing nowhere at all.
+    scrub.scroll_into_view_if_needed()
     box = scrub.bounding_box()
     page.mouse.move(box["x"] + 5, box["y"] + box["height"] / 2)
     page.mouse.down()
@@ -201,6 +209,31 @@ def test_empty_sensors_panel_shows_a_connection_checklist(live_server, page):
     text = page.locator("#sensors-table").inner_text()
     assert "No sensors connected" in text
     assert "/api/detections" in text
+
+
+def test_registered_but_silent_sensor_shows_as_missing(live_server, page):
+    """Regression test: a sensor with a registered position (a known
+    mounting point, see app/api/sensor_registry.py) but zero detections
+    ever used to be entirely absent from both the Sensor Health panel and
+    the map -- indistinguishable from a sensor nobody had configured at
+    all. It should now show up as a distinct "missing" status.
+    """
+    requests.put(
+        f"{live_server}/api/sensor-registrations/radar-ghost",
+        json={"sensor_type": "radar", "latitude": 51.51, "longitude": -0.12, "azimuth_reference_deg": 0},
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=sensors]")
+    page.wait_for_selector("#sensors-table table")
+    row_text = page.locator("#sensors-table tbody tr").inner_text()
+    assert "radar-ghost" in row_text
+    assert "missing" in row_text
+
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+    popup_html = page.evaluate("sensorLayer.getLayers()[0].getPopup().getContent()")
+    assert "never reported a detection" in popup_html
 
 
 def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zones, page):
@@ -362,6 +395,9 @@ def test_icon_only_buttons_have_accessible_names(live_server, page):
         '.rail-btn[data-panel="tracks"]',
         '.rail-btn[data-panel="alerts"]',
         '.rail-btn[data-panel="sensors"]',
+        '.rail-btn[data-panel="zones"]',
+        '.rail-btn[data-panel="reports"]',
+        "#theme-toggle",
     ):
         label = page.locator(selector).get_attribute("aria-label")
         assert label, f"{selector} has no accessible name"
@@ -376,3 +412,585 @@ def test_icon_only_buttons_have_accessible_names(live_server, page):
 
     assert page.locator("#details-back").get_attribute("aria-label")
     assert page.locator("#details-close").get_attribute("aria-label")
+
+
+INSIDE_RESTRICTED_ZONE = {
+    "sensor_id": "radar-1", "sensor_type": "radar",
+    "latitude": 51.50, "longitude": -0.10, "confidence": 0.9,
+}
+
+
+def test_theme_toggle_switches_and_persists_across_reload(live_server, page):
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#theme-toggle")
+
+    assert page.evaluate("document.documentElement.dataset.theme") in (None, "")
+    page.click("#theme-toggle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+
+    page.reload(wait_until="networkidle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "light"
+
+    page.click("#theme-toggle")
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+
+def test_alerts_panel_can_acknowledge_and_resolve_an_incident(live_server, page):
+    """POST /api/incidents/{id}/resolve has always existed server-side
+    (app/api/incidents.py), but the dashboard never had a button that
+    called it -- an incident could be acknowledged from the UI and then
+    sat "acknowledged" forever, with no way to actually mark it resolved.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    assert page.locator('.alert-item .badge-outline:has-text("open")').count() == 1
+    assert page.locator("#alerts-badge").inner_text() == "1"
+
+    page.click("button[data-ack-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
+    # Acknowledging doesn't resolve it -- still counts as active.
+    assert page.locator("#alerts-badge").inner_text() == "1"
+    assert page.locator("button[data-ack-id]").count() == 0
+    assert page.locator("button[data-resolve-id]").count() == 1
+
+    page.click("button[data-resolve-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("resolved")')
+    assert page.locator("button[data-resolve-id]").count() == 0
+    # Resolved incidents stay listed for after-action review, but no
+    # longer count toward the active-alerts badge.
+    assert not page.locator("#alerts-badge").is_visible()
+    assert page.evaluate("state.incidents.find(i => i.status === 'resolved').closed_at") is not None
+
+
+def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server, page):
+    """check_zone_incidents() only ever opened an incident on entry --
+    nothing closed it back out once the track's position left again.
+    A track that flew straight through the zone and out the other side
+    should show its incident auto-resolve in the dashboard without any
+    operator action, distinct from a manually-Acknowledged/Resolved one.
+    """
+    # Near the restricted zone's west edge (zone: lat 51.49-51.51,
+    # lon -0.11--0.09, see app/zones.seed.json) rather than dead-center --
+    # the next detection just past the edge needs to stay well inside
+    # app.tracking's ~500m default association gate to be recognized as
+    # the *same* track leaving, not a new one spawning outside the zone.
+    # Only ~138m from the edge (not right at it): the original ~485m move
+    # left just ~15m of gate margin, which the tighter Mahalanobis check
+    # (not just the coarse distance gate) could occasionally reject under
+    # normal timing jitter between the two POSTs below, intermittently
+    # failing to associate the second point with the same track at all --
+    # no amount of extra wait_for_function timeout fixes a resolution
+    # that structurally never happens. ~138m total move keeps a wide,
+    # reliable margin under the gate while still crossing the boundary.
+    near_edge = {
+        "sensor_id": "radar-1", "sensor_type": "radar",
+        "latitude": 51.50, "longitude": -0.109, "confidence": 0.9,
+    }
+    requests.post(live_server + "/api/detections", json=near_edge, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    assert page.locator('.alert-item .badge-outline:has-text("open")').count() == 1
+
+    # Same sensor_id (associates with the same track), ~138m further
+    # west -- now outside the zone, comfortably inside the association gate.
+    requests.post(
+        live_server + "/api/detections", json={**near_edge, "longitude": -0.111}, timeout=5
+    ).raise_for_status()
+
+    # 10s, not 5s, as extra headroom for the websocket-push-triggered
+    # refresh -- matches the 10s precedent used elsewhere in this file
+    # (see the .track-card wait above).
+    page.wait_for_function("state.incidents.some(i => i.status === 'resolved')", timeout=10000)
+    assert page.locator('.alert-item .badge-outline:has-text("resolved")').count() == 1
+    assert not page.locator("#alerts-badge").is_visible()
+    description = page.evaluate("state.incidents.find(i => i.status === 'resolved').description")
+    assert "auto-closed" in description
+    assert page.evaluate("state.incidents.find(i => i.status === 'resolved').acknowledged_by") is None
+
+
+def test_incident_reports_panel_shows_a_rollup_for_a_seeded_incident(live_server, page):
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="reports"]')
+    page.wait_for_selector(".report-stat-tile")
+
+    assert "1" in page.locator(".report-stat-tile .value").first.inner_text()
+    assert "zone incursion" in page.locator("#report-body").inner_text().lower()
+
+
+def test_after_action_report_button_populates_a_printable_summary(live_server, page):
+    # window.print() would otherwise pop a real print dialog under a real
+    # browser -- stub it before the page's own scripts run so clicking
+    # Report still runs openIncidentReport() but doesn't try to print.
+    page.add_init_script("window.print = () => {};")
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector("button[data-report-id]")
+    page.click("button[data-report-id]")
+    page.wait_for_function("document.getElementById('print-report').innerHTML.length > 0")
+
+    report_text = page.locator("#print-report").inner_text()
+    assert "After-Action Report" in report_text
+    assert "zone incursion" in report_text.lower()
+    assert "radar-1" in report_text
+
+
+def test_map_offline_banner_appears_after_repeated_tile_failures_and_clears_on_recovery(live_server, page):
+    """Map tile imagery comes from an external CDN (unlike the vendored
+    Leaflet library itself) -- a deployment with no internet access would
+    otherwise just show a permanently blank map background with no
+    indication why, even though tracking/alerting all still works fine
+    without it. Drives the exact Leaflet events the app listens for
+    (see initMap()'s tileerror/tileload wiring) rather than depending on
+    real network access, which test environments can't rely on.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#map")
+
+    result = page.evaluate("""
+        () => {
+            const layers = [];
+            leafletMap.eachLayer((l) => { if (l instanceof L.TileLayer) layers.push(l); });
+            const activeLayer = layers[0];
+            const banner = document.getElementById('map-offline-banner');
+            // Real tile requests may already have failed a few times
+            // before this runs (this test environment has no route to the
+            // real tile CDN either) -- a tileload resets the app's error
+            // streak to a known 0 before the synthetic sequence below.
+            activeLayer.fire('tileload');
+            activeLayer.fire('tileerror');
+            activeLayer.fire('tileerror');
+            const shownAfterTwo = banner.classList.contains('show');
+            activeLayer.fire('tileerror');
+            const shownAfterThree = banner.classList.contains('show');
+            activeLayer.fire('tileload');
+            const hiddenAfterLoad = !banner.classList.contains('show');
+            return { shownAfterTwo, shownAfterThree, hiddenAfterLoad };
+        }
+    """)
+    assert result["shownAfterTwo"] is False  # below the 3-failure threshold
+    assert result["shownAfterThree"] is True
+    assert result["hiddenAfterLoad"] is True
+
+
+def test_labeling_a_detection_from_the_track_details_panel(live_server, page):
+    """Real browser click-through of the labeling workflow (see
+    app/api/ml_training.py, app/models.py's Detection.human_label) -- turns
+    real accumulated sensor traffic into training data for app/ml/train.py
+    without hand-editing a CSV.
+    """
+    requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".label-row")
+
+    assert page.locator(".label-chip").count() == 4  # drone/bird/aircraft/unknown
+    row = page.locator(".label-row").first
+    row.locator('.label-chip[data-label="drone"]').click()
+    page.wait_for_selector('.label-row .label-chip[data-label="drone"].active')
+
+    # Clicking the same chip again clears it (undo a mis-click).
+    row.locator('.label-chip[data-label="drone"]').click()
+    page.wait_for_function(
+        "!document.querySelector('.label-row .label-chip.active')"
+    )
+
+
+def test_labeled_detection_appears_in_the_ml_training_export(live_server, page):
+    r = requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5)
+    r.raise_for_status()
+    detection_id = r.json()["id"]
+
+    requests.put(
+        f"{live_server}/api/detections/{detection_id}/label", json={"label": "drone"}, timeout=5
+    ).raise_for_status()
+
+    export = requests.get(f"{live_server}/api/ml/training-data/export", timeout=5)
+    assert export.status_code == 200
+    assert "drone" in export.text
+
+
+def test_map_marker_renders_a_distinct_symbol_per_aircraft_category(live_server, page):
+    """The point of Track.aircraft_category (real ICAO ADS-B emitter
+    category, see app/adapters/dump1090_bridge.py): a rotorcraft-category
+    track gets a genuinely different on-map symbol than the generic
+    aircraft triangle, not just a different color.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb", "latitude": 51.5, "longitude": -0.1,
+            "confidence": 0.99, "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-2", "sensor_type": "adsb", "latitude": 51.6, "longitude": -0.2,
+            "confidence": 0.99, "raw_data": {"hex_ident": "aabbcc"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    shapes = page.evaluate("""
+        () => {
+            const rotor = state.tracks.find(t => t.aircraft_category === "A7");
+            const generic = state.tracks.find(t => t.classification === "aircraft" && t.aircraft_category == null);
+            return {
+                rotor: markerIcon(rotor, false).options.html,
+                generic: markerIcon(generic, false).options.html,
+            };
+        }
+    """)
+    assert "<line" in shapes["rotor"]  # rotor cross, not the triangle
+    assert "<path" in shapes["generic"]  # the realistic airplane silhouette fallback
+    assert shapes["rotor"] != shapes["generic"]
+
+
+def test_map_shows_registered_sensor_positions_and_scale_bar(live_server, page):
+    """Registered sensor positions (app/api/sensor_registry.py) show up as
+    their own markers on the map, colored by health status -- not just
+    listed in the Sensor Health side panel -- so an operator can see at a
+    glance where sensors actually are and whether any have gone quiet.
+    """
+    requests.put(
+        f"{live_server}/api/sensor-registrations/radar-1",
+        json={
+            "sensor_type": "radar", "latitude": 51.51, "longitude": -0.12,
+            "altitude_m": 15, "azimuth_reference_deg": 0,
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={"sensor_id": "radar-1", "sensor_type": "radar", "azimuth_deg": 10, "range_m": 500, "confidence": 0.9},
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+
+    assert page.locator(".leaflet-control-scale").count() == 1
+
+    # The Sensors toggle actually controls this layer, not just a label.
+    page.click("#toggle-sensors")
+    page.wait_for_function("sensorLayer.getLayers().length === 0")
+    page.click("#toggle-sensors")
+    page.wait_for_function("sensorLayer.getLayers().length === 1")
+
+
+def test_recenter_control_fits_all_tracks_zones_and_sensors(live_server, page):
+    requests.post(live_server + "/api/detections", json=DETECTION_BODY, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    recenter = page.locator('.leaflet-bar a[aria-label*="Fit all"]')
+    assert recenter.count() == 1
+
+    # Pan away, then confirm the recenter control brings the seeded
+    # detection's position back into view.
+    page.evaluate("leafletMap.setView([0, 0], 3)")
+    recenter.click()
+    page.wait_for_function(
+        f"leafletMap.getBounds().contains([{DETECTION_BODY['latitude']}, {DETECTION_BODY['longitude']}])"
+    )
+
+
+def test_aircraft_marker_uses_realistic_silhouette_and_altitude_color(live_server, page):
+    """markerIcon() draws the same airplane silhouette classIcon() already
+    uses for the sidebar thumbnail (not the old flat triangle), colored by
+    real altitude data (like most real flight trackers) when known, with
+    an honest fallback to the flat classification color when it isn't.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-low", "sensor_type": "adsb", "latitude": 51.5, "longitude": -0.1,
+            "altitude_m": 200, "confidence": 0.99, "raw_data": {"hex_ident": "111111"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-high", "sensor_type": "adsb", "latitude": 51.6, "longitude": -0.2,
+            "altitude_m": 10000, "confidence": 0.99, "raw_data": {"hex_ident": "222222"},
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-unknown", "sensor_type": "adsb", "latitude": 51.7, "longitude": -0.3,
+            "confidence": 0.99, "raw_data": {"hex_ident": "333333"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    result = page.evaluate("""
+        () => {
+            const low = state.tracks.find(t => t.altitude_m === 200);
+            const high = state.tracks.find(t => t.altitude_m === 10000);
+            const unknown = state.tracks.find(t => t.altitude_m == null && t.classification === "aircraft");
+            return {
+                low: markerIcon(low, false).options.html,
+                high: markerIcon(high, false).options.html,
+                unknown: markerIcon(unknown, false).options.html,
+            };
+        }
+    """)
+    # A distinctive substring of AIRCRAFT_SILHOUETTE_PATH (dashboard.html)
+    # -- confirms the real airplane silhouette rendered, not the old flat
+    # triangle polygon.
+    for html in result.values():
+        assert "M21 16v-2l-8-5" in html
+
+    assert "hsl(" in result["low"]
+    assert "hsl(" in result["high"]
+    assert result["low"] != result["high"]  # different altitudes, genuinely different colors
+    assert "hsl(" not in result["unknown"]  # no altitude known -> flat classification color, not a guess
+
+
+def test_drone_marker_uses_quadcopter_glyph_not_a_plain_dot(live_server, page):
+    """markerIcon() draws the same quadcopter glyph classIcon() already uses
+    for the sidebar thumbnail for drone (and unclassified) tracks on the map
+    itself, instead of the old plain circle.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.5, "longitude": -0.1, "confidence": 0.95,
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    html = page.evaluate("""
+        () => {
+            const drone = state.tracks.find(t => t.classification === "drone");
+            return markerIcon(drone, false).options.html;
+        }
+    """)
+    # The quadcopter glyph (droneGlyphMarkup): four rotor circles plus a
+    # body rect, not the old flat `<circle ... r="${half - 2}"` dot.
+    assert html.count("<circle") == 4
+    assert "<rect" in html
+
+
+def test_search_matches_classification_and_status_not_just_id(live_server, page):
+    """visibleTracks()/trackMatchesSearch() search more than the numeric ID
+    or track_uid substring -- classification and status too -- so typing
+    "drone" or "lost" actually finds tracks, not just a UID fragment.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.5, "longitude": -0.1, "confidence": 0.95,
+        },
+        timeout=5,
+    ).raise_for_status()
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb",
+            "latitude": 51.6, "longitude": -0.2, "confidence": 0.99,
+            "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    assert page.locator(".track-card[data-id]").count() == 2
+
+    page.fill("#search-input", "drone")
+    page.wait_for_function("visibleTracks().length === 1")
+    assert page.locator(".track-card[data-id]").count() == 1
+    assert page.locator("#search-clear").is_visible()
+
+    # Category label match ("rotor" is a substring of "rotorcraft", the
+    # human-readable label for the A7 code, not the raw code itself).
+    page.fill("#search-input", "rotor")
+    page.wait_for_function("visibleTracks().length === 1")
+    assert page.evaluate("visibleTracks()[0].aircraft_category") == "A7"
+
+    # Clear button empties the box and restores every track.
+    page.click("#search-clear")
+    page.wait_for_function("visibleTracks().length === 2")
+    assert page.input_value("#search-input") == ""
+    assert not page.locator("#search-clear").is_visible()
+
+    # "/" focuses the search box from anywhere on the page.
+    page.click("body")
+    page.keyboard.press("/")
+    assert page.evaluate("document.activeElement.id") == "search-input"
+
+
+def test_track_card_shows_alert_dot_and_sort_reorders_the_list(live_server, page):
+    """The Tracks list surfaces an at-a-glance alert indicator (no need to
+    switch to the Alerts panel to see which track triggered it) and a real
+    sort control -- "Alerts first" actually moves the alerting track above
+    a more-recently-seen track *in the same classification group*
+    (TRACK_SORT_COMPARATORS sorts within a group, never across groups --
+    the classification grouping itself stays the primary ordering),
+    "Altitude" actually reorders by that field.
+    """
+    # Inside the seeded "Central London Restricted Zone" (see conftest.py's
+    # live_server fixture) -- a real zone-incursion incident, not a
+    # fabricated one. High-confidence radar -> classified DRONE (see
+    # app/classification.py), altitude unknown.
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    # A second, also-DRONE-classified track (same group), seeded after --
+    # so it's more recent and would sort first under the default "Most
+    # recent" order despite having no alert.
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.9, "longitude": -0.5, "altitude_m": 5000, "confidence": 0.9,
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_function("state.incidents.length > 0")
+    page.wait_for_selector(".track-alert-dot")
+    assert page.locator(".track-alert-dot").count() == 1
+
+    alerting_track_id = page.evaluate("state.incidents[0].track_id")
+    assert page.evaluate(f"state.tracks.find(t => t.id === {alerting_track_id}).classification") == "drone"
+
+    # Default "Most recent" sort: the alert-free, more-recently-seen track
+    # leads its group.
+    first_id = page.eval_on_selector(".track-card", "el => Number(el.dataset.id)")
+    assert first_id != alerting_track_id
+
+    page.select_option("#track-sort", "alerts")
+    page.wait_for_function(f"Number(document.querySelector('.track-card').dataset.id) === {alerting_track_id}")
+
+    page.select_option("#track-sort", "altitude")
+    page.wait_for_function("""
+        () => {
+            const cards = [...document.querySelectorAll('.track-card')].map(c => Number(c.dataset.id));
+            const track = (id) => state.tracks.find(t => t.id === id);
+            // Every altitude-known track sorted before every altitude-unknown
+            // one, high to low among the known ones -- not just "some order".
+            for (let i = 1; i < cards.length; i++) {
+                const prev = track(cards[i - 1]).altitude_m, cur = track(cards[i]).altitude_m;
+                if (prev == null && cur != null) return false;
+                if (prev != null && cur != null && prev < cur) return false;
+            }
+            return true;
+        }
+    """)
+
+    # The choice survives a reload (persisted like the theme toggle).
+    page.reload(wait_until="networkidle")
+    assert page.eval_on_selector("#track-sort", "el => el.value") == "altitude"
+
+
+def test_track_details_copy_and_export_use_real_track_data(live_server, page):
+    """The details panel's Copy button puts real, currently-selected-track
+    data on the clipboard (not a stub), and Export actually downloads the
+    already-existing GET /api/tracks/{id}/history/export endpoint (CSV by
+    default), which had no dashboard UI before this.
+    """
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "adsb-1", "sensor_type": "adsb",
+            "latitude": 51.5, "longitude": -0.1, "altitude_m": 3000, "confidence": 0.99,
+            "raw_data": {"hex_ident": "4ca593", "category": "A7"},
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#copy-btn")
+
+    track_id = page.evaluate("state.selectedTrackId")
+    assert page.locator(".kv-section:has-text('Identity')").inner_text().find("rotorcraft") != -1
+
+    page.click("#copy-btn")
+    page.wait_for_function("document.getElementById('copy-btn').textContent === 'Copied!'")
+    clipboard_text = page.evaluate("navigator.clipboard.readText()")
+    assert f"Track {track_id}" in clipboard_text
+    assert "rotorcraft" in clipboard_text
+    assert "3000 m" in clipboard_text or "3000" in clipboard_text
+
+    with page.expect_download() as download_info:
+        page.click("#export-btn")
+    download = download_info.value
+    assert download.suggested_filename.startswith("track-")
+    assert download.suggested_filename.endswith(".csv")
+
+
+def test_track_details_shows_classification_confidence_meter(live_server, page):
+    """A track's classification_confidence (app/fusion.py -- distinct from
+    the classification label itself, which only ever upgrades) shows as
+    its own meter in the details panel's Track quality section, in the
+    Copy summary, and is a real percentage from the API, not a stub.
+    """
+    requests.post(
+        live_server + "/api/detections",
+        json={
+            "sensor_id": "camera-1", "sensor_type": "camera",
+            "latitude": 51.5, "longitude": -0.1, "confidence": 0.95,
+        },
+        timeout=5,
+    ).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".kv-section:has-text('Track quality')")
+
+    confidence_pct = page.evaluate("Math.round(state.tracks[0].classification_confidence * 100)")
+    assert confidence_pct == 100  # single fresh detection agreeing with itself
+
+    quality_text = page.locator(".kv-section:has-text('Track quality')").inner_text()
+    assert "Confidence" in quality_text
+    assert f"{confidence_pct}%" in quality_text
+
+
+def test_a_failed_action_shows_a_visible_error_toast_not_just_console(live_server, page):
+    """A non-auth action failure (acknowledge/resolve/label/...) used to
+    only ever reach console.error -- invisible to anyone not watching
+    devtools, so a click that silently failed looked identical to one
+    that succeeded.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+    assert not page.locator("#error-toast").is_visible()
+
+    # A nonexistent incident id -> a real 404 from the API, not a stub.
+    page.evaluate("acknowledge(999999)")
+    page.wait_for_selector("#error-toast.show")
+    assert "couldn't acknowledge" in page.locator("#error-toast").inner_text().lower()

@@ -1,4 +1,10 @@
-from app.adapters.astm_remote_id import build_detection_payload, merge_fields
+from app.adapters.astm_remote_id import (
+    ASD_STAN_WIFI_VENDOR_OUI,
+    DIRECT_REMOTE_ID_APPLICATION_CODE,
+    build_detection_payload,
+    merge_fields,
+    parse_wifi_vendor_ie,
+)
 
 
 def test_merge_accumulates_across_multiple_messages():
@@ -64,3 +70,38 @@ def test_no_authorized_operator_field_that_would_imply_trust():
     state = merge_fields({}, {"latitude": 51.5, "longitude": -0.1, "operator_id": "OP12345678"})
     payload = build_detection_payload(state, sensor_id="remote-id-1")
     assert "signature" not in payload["raw_data"]
+
+
+def _wifi_vendor_ie(oui: bytes, app_code: int, counter: int, message_pack: bytes) -> bytes:
+    return oui + bytes([app_code]) + bytes([counter]) + message_pack
+
+
+def test_parse_wifi_vendor_ie_extracts_the_message_pack_from_a_real_odid_ie():
+    message_pack = b"\x0d" + b"\xaa" * 25  # one ODID message header byte + a fake 25-byte message
+    info = _wifi_vendor_ie(
+        ASD_STAN_WIFI_VENDOR_OUI, DIRECT_REMOTE_ID_APPLICATION_CODE, counter=7, message_pack=message_pack
+    )
+    assert parse_wifi_vendor_ie(info) == message_pack
+
+
+def test_parse_wifi_vendor_ie_rejects_a_different_vendors_oui():
+    # WiFi beacons routinely carry other vendors' vendor-specific IEs
+    # (WPS, QoS extensions, ...) -- this must not mistake one for Open
+    # Drone ID just because it happens to be IE 0xDD too.
+    info = _wifi_vendor_ie(b"\x00\x50\xf2", DIRECT_REMOTE_ID_APPLICATION_CODE, counter=0, message_pack=b"\x00" * 26)
+    assert parse_wifi_vendor_ie(info) is None
+
+
+def test_parse_wifi_vendor_ie_rejects_the_right_oui_with_a_different_application_code():
+    info = _wifi_vendor_ie(ASD_STAN_WIFI_VENDOR_OUI, app_code=0xFF, counter=0, message_pack=b"\x00" * 26)
+    assert parse_wifi_vendor_ie(info) is None
+
+
+def test_parse_wifi_vendor_ie_rejects_too_short_a_payload():
+    # Fewer than 5 bytes can't even contain oui(3) + app_code(1) + counter(1).
+    assert parse_wifi_vendor_ie(ASD_STAN_WIFI_VENDOR_OUI + b"\x0d") is None
+
+
+def test_parse_wifi_vendor_ie_handles_an_empty_message_pack():
+    info = _wifi_vendor_ie(ASD_STAN_WIFI_VENDOR_OUI, DIRECT_REMOTE_ID_APPLICATION_CODE, counter=0, message_pack=b"")
+    assert parse_wifi_vendor_ie(info) == b""

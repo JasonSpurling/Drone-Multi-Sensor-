@@ -74,6 +74,30 @@ RF_SIGNATURES_PATH = Path(os.environ["DRONE_RF_SIGNATURES_PATH"]) if os.getenv("
 # only, not a claim that a trained model exists.
 ML_MODEL_PATH = os.getenv("DRONE_ML_MODEL_PATH", "")
 
+# A configured model's own predict_proba() top-class probability must meet
+# this bar before app.ml.model.predict() trusts it enough to override the
+# rule-based classifier at all -- otherwise a barely-better-than-random
+# opinion (e.g. 0.3 on a 4-class problem) would unconditionally win over
+# well-tested rule-based logic just because *some* model file is
+# configured. Below this, predict() returns None, the same "no opinion"
+# result as an unconfigured model, falling through to the rule-based
+# classifier exactly as if ML weren't involved at all.
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_ML_CONFIDENCE_THRESHOLD", "0.6"))
+
+# Same reasoning and same "unset by default, zero behavior change" contract
+# as ML_MODEL_PATH above, for a separate, audio-specific model:
+# app/adapters/acoustic_array_bridge.py currently reports a single manual,
+# operator-supplied --confidence for every detection -- no classification
+# of the actual rotor/propeller acoustic signature. Point this at a model
+# produced by `python -m app.ml.train_acoustic` (your own labeled
+# recordings) to have that bridge consult it instead; unset, or pointing
+# at a missing file, and the bridge behaves exactly as it always has. See
+# app/ml/acoustic_model.py and app/acoustic_features.py.
+ACOUSTIC_ML_MODEL_PATH = os.getenv("DRONE_ACOUSTIC_ML_MODEL_PATH", "")
+
+# Same role as ML_CONFIDENCE_THRESHOLD, for the acoustic model.
+ACOUSTIC_ML_CONFIDENCE_THRESHOLD = float(os.getenv("DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD", "0.6"))
+
 # SQLite by default (zero setup). Point this at a PostgreSQL instance for
 # production deployments that need concurrent-write throughput SQLite can't
 # offer, e.g. postgresql+psycopg2://user:pass@host:5432/dbname
@@ -214,6 +238,18 @@ TWILIO_AUTH_TOKEN = _read_secret("DRONE_TWILIO_AUTH_TOKEN")
 TWILIO_FROM_NUMBER = os.getenv("DRONE_TWILIO_FROM_NUMBER", "")
 SMS_TO_NUMBERS = [n.strip() for n in os.getenv("DRONE_SMS_TO_NUMBERS", "").split(",") if n.strip()]
 SMS_MIN_SEVERITY = os.getenv("DRONE_SMS_MIN_SEVERITY", "critical")
+
+# Meshtastic off-grid LoRa mesh alerting -- for a deployment with no
+# internet/cell connectivity at all, the scenario every channel above
+# assumes away. Talks to a Meshtastic node's TCP API (a node reachable on
+# the local network -- e.g. one bridged onto the LAN over WiFi, or a
+# Pi-attached radio -- not the node's own LoRa radio directly; no BLE or
+# serial transport here). Empty hostname (default) disables it, same
+# convention as every channel above.
+MESHTASTIC_HOSTNAME = os.getenv("DRONE_MESHTASTIC_HOSTNAME", "")
+MESHTASTIC_PORT = int(os.getenv("DRONE_MESHTASTIC_PORT", "4403"))
+MESHTASTIC_CHANNEL_INDEX = int(os.getenv("DRONE_MESHTASTIC_CHANNEL_INDEX", "0"))
+MESHTASTIC_MIN_SEVERITY = os.getenv("DRONE_MESHTASTIC_MIN_SEVERITY", "medium")
 
 # Mitigation system hook (app/mitigation.py): a generic webhook POST to a
 # downstream counter-UAS system (RF jammer, net gun, interdiction
@@ -390,6 +426,29 @@ BEHAVIOR_SWEEP_INTERVAL_SECONDS = float(os.getenv("DRONE_BEHAVIOR_SWEEP_INTERVAL
 # (app/fusion.py). Bounds the cost of fusing a long-lived track's history
 # on every new detection.
 FUSION_HISTORY_LIMIT = int(os.getenv("DRONE_FUSION_HISTORY_LIMIT", "50"))
+
+# A zone-incursion/predicted-incursion or behavioral incident's severity
+# escalates one level (app/incidents.py) when the opening track's recent
+# evidence comes from at least this many distinct sensor types -- a
+# multi-sensor-corroborated DRONE reading is more actionable than one
+# from a single acoustic sensor, even though both fuse to the same
+# classification label.
+INCIDENT_CORROBORATION_MIN_SENSOR_TYPES = int(os.getenv("DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES", "2"))
+
+# How long, in seconds, a track's classification_confidence (app/fusion.py's
+# fused vote-share for whatever label is actually stored -- NOT the
+# classification label itself, which only ever upgrades, never downgrades,
+# see app/tracking.py's _commit_detection) takes to decay from its
+# as-of-last-detection value down to CLASSIFICATION_CONFIDENCE_FLOOR once
+# no new detections arrive. Linear decay, applied at read time
+# (app/api/tracks.py) so it's always current without a background job.
+CLASSIFICATION_CONFIDENCE_DECAY_SECONDS = float(
+    os.getenv("DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS", "300")
+)
+# Confidence never decays below this -- real evidence did once support
+# the stored classification; going quiet doesn't erase that it happened,
+# it just means it's no longer fresh.
+CLASSIFICATION_CONFIDENCE_FLOOR = float(os.getenv("DRONE_CLASSIFICATION_CONFIDENCE_FLOOR", "0.3"))
 
 
 def get_api_key() -> str:

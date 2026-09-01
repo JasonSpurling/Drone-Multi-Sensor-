@@ -170,3 +170,38 @@ def test_zone_mutations_are_recorded_in_the_audit_log(admin_key):
         actions = [e["action"] for e in entries]
         assert "zone.create" in actions
         assert "zone.update" in actions
+
+
+def test_create_zone_race_still_gets_a_clean_409(admin_key, monkeypatch):
+    # Simulates two concurrent POSTs both passing create_new_zone's own
+    # get_zone_by_name pre-check before either has inserted -- bypass the
+    # pre-check to prove the DB-level unique constraint (idx_zone_site_id_name)
+    # is what actually stops the second insert, surfaced as the same clean
+    # 409 rather than a raw 500 from an uncaught IntegrityError.
+    monkeypatch.setattr("app.api.zones.get_zone_by_name", lambda name, site_id: None)
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        body = {"name": "race-zone", "zone_type": "restricted", "polygon": SQUARE}
+        assert client.post("/api/zones", json=body, headers=headers).status_code == 201
+        r = client.post("/api/zones", json=body, headers=headers)
+        assert r.status_code == 409
+
+
+def test_renaming_a_zone_to_an_existing_name_is_rejected(admin_key):
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        client.post(
+            "/api/zones", json={"name": "taken-name", "zone_type": "restricted", "polygon": SQUARE},
+            headers=headers,
+        )
+        other = client.post(
+            "/api/zones", json={"name": "renameable", "zone_type": "restricted", "polygon": SQUARE},
+            headers=headers,
+        ).json()
+
+        r = client.put(
+            f"/api/zones/{other['id']}",
+            json={"name": "taken-name", "zone_type": "restricted", "polygon": SQUARE},
+            headers=headers,
+        )
+        assert r.status_code == 409

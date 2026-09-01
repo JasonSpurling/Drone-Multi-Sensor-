@@ -37,7 +37,15 @@ zone = Table(
     Column("min_altitude_m", Float),
     Column("max_altitude_m", Float),
     Column("active", Integer, nullable=False, server_default="1"),  # 0/1
-    Index("idx_zone_site_id", "site_id"),
+    # Unique per site (not globally -- two different sites may reasonably
+    # each have their own "Restricted Zone"), and covers plain
+    # site_id-only lookups too (leftmost-prefix), so this replaces what
+    # was a separate non-unique idx_zone_site_id. Backs app.api.zones'
+    # create_new_zone's own get_zone_by_name pre-check at the DB layer --
+    # without this, two concurrent POST /api/zones requests for the same
+    # name could both pass that check and both insert, a real TOCTOU race
+    # the application-level check alone can't close.
+    Index("idx_zone_site_id_name", "site_id", "name", unique=True),
 )
 
 track = Table(
@@ -57,6 +65,15 @@ track = Table(
     Column("speed_mps", Float),
     Column("position_uncertainty_m", Float),
     Column("maneuver_probability", Float),
+    # The real ICAO ADS-B emitter category (e.g. "A7" rotorcraft, "B1"
+    # glider) most recently reported for this track -- see
+    # app.models.Track.aircraft_category's docstring.
+    Column("aircraft_category", String(2)),
+    # Fused vote-share (0-1) for the stored `classification` as of this
+    # track's last detection -- see app.models.Track.classification_confidence's
+    # docstring. Read-time staleness decay is applied in app/api/tracks.py,
+    # not stored here.
+    Column("classification_confidence", Float),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --
@@ -111,6 +128,12 @@ detection = Table(
     # for an azimuth/range-only sensor) rather than the position
     # georeferencing later filled in -- see canonical_message().
     Column("georeferenced", Integer, nullable=False, server_default="0"),
+    # An operator's ground-truth label (PUT /api/detections/{id}/label),
+    # feeding GET /api/ml/training-data/export -- see app.models.Detection
+    # .human_label's docstring. Independent of this detection's *track*'s
+    # classification (the system's own best guess), and nullable/unset for
+    # the overwhelming majority of detections that are never labeled.
+    Column("human_label", String(20)),
     Index("idx_detection_track_id", "track_id"),
     Index("idx_detection_timestamp", "timestamp"),
     Index("idx_detection_site_id", "site_id"),
@@ -140,6 +163,14 @@ incident = Table(
     Index("idx_incident_zone_id", "zone_id"),
     Index("idx_incident_site_id", "site_id"),
     Index("idx_incident_related_track_id", "related_track_id"),
+    # Every status-filtered incident query (list_incidents(status=...),
+    # get_open_incident, get_open_behavioral_incident,
+    # list_open_incidents_for_track) already scopes by site_id too --
+    # this composite, leading with site_id, serves both that combination
+    # and a plain site_id-only query (making idx_incident_site_id above
+    # redundant for new rows, but it's left in place rather than removed
+    # as part of an unrelated change).
+    Index("idx_incident_site_status", "site_id", "status"),
 )
 
 # A registered sensor's fixed mounting position/orientation, used to

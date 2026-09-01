@@ -1,11 +1,22 @@
 import math
+import uuid
 from datetime import datetime, timedelta
 
 import pytest
 
-from app.db import list_tracks
-from app.models import Classification, Detection, SensorType, TrackStatus
-from app.tracking import associate_detection, haversine_distance_m
+from app.db import create_incident, create_track, get_incident, list_tracks
+from app.models import (
+    Classification,
+    Detection,
+    Incident,
+    IncidentSeverity,
+    IncidentStatus,
+    IncidentType,
+    SensorType,
+    Track,
+    TrackStatus,
+)
+from app.tracking import associate_detection, expire_stale_tracks, haversine_distance_m
 
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -252,3 +263,107 @@ def test_confident_classification_does_not_decay_back_to_bird(site_id):
     )
     track = list_tracks(site_id=site_id)[0]
     assert track.classification == Classification.DRONE
+
+
+def test_classification_confidence_falls_as_contradicting_evidence_accumulates_without_downgrading(site_id):
+    # The label stays DRONE (the upgrade-only ratchet, see the test just
+    # above) even as more recent evidence increasingly looks like BIRD --
+    # but confidence in that stored DRONE label should honestly fall,
+    # rather than staying pinned at whatever it was on the first detection.
+    associate_detection(make_detection(site_id, sensor_type=SensorType.CAMERA, confidence=0.95))  # -> DRONE
+    first_confidence = list_tracks(site_id=site_id)[0].classification_confidence
+    assert first_confidence == 1.0
+
+    for i in range(5):
+        associate_detection(
+            make_detection(
+                site_id, timestamp=BASE_TIME + timedelta(seconds=5 * (i + 1)),
+                sensor_type=SensorType.CAMERA, confidence=0.1,  # BIRD-ish on its own
+            )
+        )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.classification == Classification.DRONE  # never downgraded
+    assert track.classification_confidence < first_confidence  # but less confident in it now
+
+
+def test_aircraft_category_is_carried_from_detection_to_track(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"
+
+
+def test_aircraft_category_defaults_to_none_when_never_reported(site_id):
+    associate_detection(make_detection(site_id, sensor_type=SensorType.RADAR))
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category is None
+
+
+def test_aircraft_category_updates_to_the_latest_report(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A3"},
+        )
+    )
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            timestamp=BASE_TIME + timedelta(seconds=5),
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"
+
+
+def test_track_closing_auto_closes_its_still_open_incidents(site_id):
+    # Regression test: a track that simply flew out of sensor range (no
+    # more detections, so app.incidents.check_zone_incident_resolutions'
+    # position-based check never runs again for it) previously left every
+    # incident it opened stuck open/acknowledged forever -- the track
+    # itself going stale -> lost -> closed had nothing wired to it at all.
+    old_time = BASE_TIME - timedelta(seconds=10_000)
+    track = create_track(
+        Track(
+            site_id=site_id, track_uid="stale-track", first_seen=old_time, last_seen=old_time,
+            status=TrackStatus.LOST, classification=Classification.DRONE, latitude=51.5, longitude=-0.1,
+        )
+    )
+    incident = create_incident(
+        Incident(
+            site_id=site_id, incident_uid=str(uuid.uuid4()), incident_type=IncidentType.ZONE_INCURSION,
+            severity=IncidentSeverity.HIGH, status=IncidentStatus.OPEN, track_id=track.id,
+            opened_at=old_time, description="entered restricted zone",
+        )
+    )
+
+    expire_stale_tracks(site_id, now=BASE_TIME)
+
+    assert list_tracks(site_id=site_id, status=TrackStatus.CLOSED.value)[0].id == track.id
+    closed_incident = get_incident(incident.id, site_id)
+    assert closed_incident.status == IncidentStatus.RESOLVED
+    assert closed_incident.closed_at is not None
+    assert "auto-closed" in closed_incident.description
+
+
+def test_aircraft_category_is_not_cleared_by_a_later_detection_without_one(site_id):
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            raw_data={"hex_ident": "4ca593", "category": "A7"},
+        )
+    )
+    associate_detection(
+        make_detection(
+            site_id, sensor_type=SensorType.ADSB, confidence=0.99,
+            timestamp=BASE_TIME + timedelta(seconds=5),
+            raw_data={"hex_ident": "4ca593"},
+        )
+    )
+    track = list_tracks(site_id=site_id)[0]
+    assert track.aircraft_category == "A7"

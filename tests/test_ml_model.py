@@ -128,3 +128,25 @@ def test_reset_cache_for_tests_forces_a_reload(tmp_path, monkeypatch):
     ml_model.reset_cache_for_tests()
     ml_model.predict(_detection())
     assert len(calls) == 2
+
+
+def test_predict_returns_none_when_top_class_probability_is_below_threshold(tmp_path, monkeypatch):
+    # An impossible-to-clear threshold (max probability is 1.0) proves the
+    # gate itself works regardless of exactly how confident this
+    # particular model/input happens to be -- see ML_CONFIDENCE_THRESHOLD's
+    # docstring in app/config.py for why this exists at all.
+    model_path = _train_a_real_model(tmp_path)
+    monkeypatch.setattr(ml_model, "ML_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(ml_model, "ML_CONFIDENCE_THRESHOLD", 1.01)
+
+    assert ml_model.predict(_detection(confidence=0.97)) is None
+    assert ml_model.predict(_detection(confidence=0.02)) is None
+
+
+def test_predict_returns_a_label_when_threshold_is_permissive(tmp_path, monkeypatch):
+    model_path = _train_a_real_model(tmp_path)
+    monkeypatch.setattr(ml_model, "ML_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(ml_model, "ML_CONFIDENCE_THRESHOLD", 0.0)
+
+    assert ml_model.predict(_detection(confidence=0.97)) == Classification.DRONE
+    assert ml_model.predict(_detection(confidence=0.02)) == Classification.BIRD

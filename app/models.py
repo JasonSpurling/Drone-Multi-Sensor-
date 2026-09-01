@@ -23,6 +23,14 @@ class SensorStatus(StrEnum):
     ONLINE = "online"
     STALE = "stale"
     OFFLINE = "offline"
+    # Registered (app/api/sensor_registry.py -- a known mounting position
+    # exists) but has never actually posted a single detection -- distinct
+    # from OFFLINE, which means "was seen before, has since gone quiet."
+    # Without this status, an operator has no way to tell "the sensor
+    # nobody bothered to hook up yet" apart from "the sensor that just
+    # went down" -- both looked identical (simply absent from
+    # GET /api/sensors) before this.
+    MISSING = "missing"
 
 
 class TrackStatus(StrEnum):
@@ -37,6 +45,21 @@ class Classification(StrEnum):
     BIRD = "bird"
     AIRCRAFT = "aircraft"
     FRIENDLY = "friendly"
+
+
+class TrainableLabel(StrEnum):
+    """The subset of Classification an operator can assign as ground truth
+    for ML training (app/ml/train.py) -- deliberately excludes FRIENDLY,
+    same reasoning as app.ml.train's own docstring: FRIENDLY comes from a
+    cryptographically verified authorized-operator signature
+    (app/allowlist.py), not a feature to train a classifier on, so it's
+    not a label a human ever assigns here either.
+    """
+
+    UNKNOWN = "unknown"
+    DRONE = "drone"
+    BIRD = "bird"
+    AIRCRAFT = "aircraft"
 
 
 class IncidentType(StrEnum):
@@ -110,6 +133,23 @@ class Detection(BaseModel):
         "value is discarded on ingest (see app/api/detections.py) -- a signed detection's signature "
         "must verify against what the sensor actually signed, not a claim the client controls.",
     )
+    human_label: TrainableLabel | None = Field(
+        default=None,
+        description="An operator's ground-truth label for this detection (PUT "
+        "/api/detections/{id}/label), independent of and never overwritten by track.classification "
+        "(the system's own fused/ML-assisted best guess). Building up a set of these is what turns "
+        "GET /api/ml/training-data/export from empty into something app.ml.train can actually learn "
+        "from -- see app/ml/__init__.py for why this repo ships no such data itself.",
+    )
+
+
+class DetectionLabelInput(BaseModel):
+    """Body for PUT /api/detections/{id}/label. label=None clears a
+    previously-set human_label (e.g. correcting a mis-click) rather than
+    only ever being able to set one.
+    """
+
+    label: TrainableLabel | None = None
 
 
 class Track(BaseModel):
@@ -136,6 +176,30 @@ class Track(BaseModel):
         default=None,
         description="IMM MANEUVER-mode probability (0-1): how confident the tracker is that "
         "this object is currently maneuvering (turning/accelerating) rather than flying straight",
+    )
+    aircraft_category: str | None = Field(
+        default=None,
+        max_length=2,
+        description="The real ICAO ADS-B 'emitter category' code (DO-260B Table 2-36) this track's "
+        "most recent category-reporting detection carried, e.g. 'A7' (rotorcraft), 'B1' (glider), "
+        "'B2' (lighter-than-air), 'B6' (unmanned aerial vehicle), 'A1'/'A2' (light/small fixed-wing), "
+        "'A3'-'A6' (large/heavy/high-performance fixed-wing) -- see app/adapters/dump1090_bridge.py "
+        "for where this is actually decoded from a live ADS-B feed. None whenever no detection has "
+        "reported one (most sensors don't carry this at all), in which case the dashboard falls back "
+        "to a generic aircraft glyph rather than guessing.",
+    )
+    classification_confidence: float | None = Field(
+        default=None,
+        description="How strongly current evidence backs this track's stored `classification` "
+        "specifically (0-1) -- see app.fusion.classification_confidence. Distinct from the "
+        "classification label itself, which app.tracking's upgrade-only ratchet never downgrades "
+        "(never re-flagging a real drone as a bird is the failure mode that avoids); this can "
+        "still fall as contradicting evidence accumulates or the track goes stale, so a DRONE "
+        "track nobody's heard from in a while reads honestly as low-confidence DRONE rather than "
+        "either silently downgrading or looking exactly as certain as a freshly-confirmed one. "
+        "GET /api/tracks applies read-time staleness decay (app.fusion.decay_classification_confidence) "
+        "on top of the as-of-last-detection value stored here. None for an UNKNOWN track -- there's "
+        "no meaningful confidence in not knowing.",
     )
 
 
@@ -198,11 +262,15 @@ class ZoneInput(BaseModel):
 
 
 class SensorHealth(BaseModel):
-    """Derived liveness status for a sensor, based on its most recent detection."""
+    """Derived liveness status for a sensor, based on its most recent
+    detection -- except status=MISSING, which has no detection to derive
+    from at all (last_seen is None in that case: never fabricated as a
+    real timestamp).
+    """
 
     sensor_id: str
     sensor_type: SensorType
-    last_seen: datetime
+    last_seen: datetime | None
     status: SensorStatus
 
 

@@ -1,7 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import pytest
+
+from app.config import CLASSIFICATION_CONFIDENCE_DECAY_SECONDS, CLASSIFICATION_CONFIDENCE_FLOOR
 from app.db import upsert_authorized_operator
-from app.fusion import fuse_classification
+from app.fusion import classification_confidence, decay_classification_confidence, fuse_classification
 from app.models import Classification, Detection, SensorType
 from app.remote_id import generate_keypair, sign_detection
 
@@ -178,3 +181,64 @@ def test_authorized_operator_still_wins_over_an_ml_opinion(site_id, monkeypatch)
     detection.raw_data["signature"] = signature
 
     assert fuse_classification([detection]) == Classification.FRIENDLY
+
+
+def test_classification_confidence_is_full_when_all_evidence_agrees():
+    detections = [make_detection(sensor_type=SensorType.RADAR, confidence=0.9) for _ in range(3)]
+    assert classification_confidence(detections, Classification.DRONE) == 1.0
+
+
+def test_classification_confidence_reflects_a_specific_label_not_just_the_winner():
+    # Mostly DRONE evidence with one dissenting AIRCRAFT vote (ADS-B, high
+    # trust) -- confidence in DRONE specifically should be well under 1.0,
+    # and confidence in the *losing* label (AIRCRAFT) should still be a
+    # real, nonzero number, not just discarded because it didn't win.
+    detections = [
+        make_detection(sensor_type=SensorType.RADAR, confidence=0.9),
+        make_detection(sensor_type=SensorType.RADAR, confidence=0.9),
+        make_detection(sensor_type=SensorType.RADAR, confidence=0.9),
+        make_detection(sensor_type=SensorType.ADSB, confidence=0.95),
+    ]
+    assert fuse_classification(detections) == Classification.DRONE  # accumulated radar weight still wins
+    drone_confidence = classification_confidence(detections, Classification.DRONE)
+    aircraft_confidence = classification_confidence(detections, Classification.AIRCRAFT)
+    assert 0.0 < drone_confidence < 1.0
+    assert 0.0 < aircraft_confidence < 1.0
+    assert drone_confidence + aircraft_confidence == 1.0
+
+
+def test_classification_confidence_is_none_for_unknown():
+    assert classification_confidence([], Classification.UNKNOWN) is None
+    detections = [make_detection(sensor_type=SensorType.CAMERA, confidence=0.5)]  # UNKNOWN, no vote
+    assert classification_confidence(detections, Classification.UNKNOWN) is None
+
+
+def test_decay_classification_confidence_is_unchanged_at_zero_age():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    assert decay_classification_confidence(0.9, now, now) == 0.9
+
+
+def test_decay_classification_confidence_reaches_the_floor_at_the_configured_window():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    stale = now + timedelta(seconds=CLASSIFICATION_CONFIDENCE_DECAY_SECONDS)
+    assert decay_classification_confidence(0.9, now, stale) == pytest.approx(CLASSIFICATION_CONFIDENCE_FLOOR)
+
+
+def test_decay_classification_confidence_never_overshoots_the_floor():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    way_past = now + timedelta(seconds=CLASSIFICATION_CONFIDENCE_DECAY_SECONDS * 10)
+    assert decay_classification_confidence(0.9, now, way_past) == pytest.approx(CLASSIFICATION_CONFIDENCE_FLOOR)
+
+
+def test_decay_classification_confidence_is_monotonic_with_age():
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    half_stale = now + timedelta(seconds=CLASSIFICATION_CONFIDENCE_DECAY_SECONDS / 2)
+    fully_stale = now + timedelta(seconds=CLASSIFICATION_CONFIDENCE_DECAY_SECONDS)
+    fresh_value = decay_classification_confidence(0.9, now, now)
+    half_value = decay_classification_confidence(0.9, now, half_stale)
+    stale_value = decay_classification_confidence(0.9, now, fully_stale)
+    assert fresh_value > half_value > stale_value
+
+
+def test_decay_classification_confidence_passes_through_none():
+    assert decay_classification_confidence(None, datetime(2026, 1, 1), datetime(2026, 1, 2)) is None

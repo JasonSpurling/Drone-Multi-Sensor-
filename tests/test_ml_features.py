@@ -58,3 +58,33 @@ def test_omits_all_rf_features_when_raw_data_is_none():
     assert "rf_center_frequency_mhz" not in features
     assert "rf_bandwidth_mhz" not in features
     assert "rf_frequency_hopping" not in features
+
+
+def test_includes_rf_signature_match_confidence_when_a_known_signature_matches():
+    # 2440 MHz / 10 MHz bandwidth / hopping matches the same built-in
+    # drone-control-link signature app/fusion.py's RF confidence boost
+    # (test_fusion.py's test_rf_signature_match_boosts_...) relies on.
+    features = extract_features(
+        _detection(
+            sensor_type=SensorType.RF,
+            raw_data={"center_frequency_mhz": 2440.0, "bandwidth_mhz": 10.0, "frequency_hopping": True},
+        )
+    )
+    assert features["rf_signature_match_confidence"] == 0.9
+
+
+def test_omits_rf_signature_match_confidence_when_nothing_matches():
+    features = extract_features(
+        _detection(
+            sensor_type=SensorType.RF,
+            raw_data={"center_frequency_mhz": 900.0, "bandwidth_mhz": 10.0},
+        )
+    )
+    assert "rf_signature_match_confidence" not in features
+
+
+def test_omits_rf_signature_match_confidence_for_a_non_rf_detection():
+    features = extract_features(
+        _detection(sensor_type=SensorType.CAMERA, raw_data={"center_frequency_mhz": 2440.0, "bandwidth_mhz": 10.0})
+    )
+    assert "rf_signature_match_confidence" not in features

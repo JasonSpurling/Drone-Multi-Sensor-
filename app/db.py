@@ -8,17 +8,22 @@ verify against both backends.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import bindparam, create_engine, event, inspect, text
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import IntegrityError
 
 from app.config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
 from app.models import AuditLogEntry, Detection, Incident, Site, Track, Zone
 from app.schema import metadata
 from app.util import utcnow
+
+logger = logging.getLogger(__name__)
 
 # pool_size/max_overflow are QueuePool-specific -- SQLite doesn't use
 # QueuePool (SQLAlchemy defaults it to NullPool/SingletonThreadPool
@@ -30,14 +35,42 @@ if not DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["pool_size"] = DB_POOL_SIZE
     _engine_kwargs["max_overflow"] = DB_MAX_OVERFLOW
 
+def ensure_sqlite_directory_exists(database_url: str) -> None:
+    """SQLite opens the database file itself but never creates a missing
+    *parent* directory (unlike most "just works" expectations) -- on a
+    completely fresh checkout, the default data/ directory doesn't exist
+    yet (it's gitignored, and git doesn't track empty directories even if
+    it weren't), so the very first connection attempt fails with "unable
+    to open database file" before init_db() ever gets a chance to run.
+    A no-op for a non-sqlite URL (nothing to create) or an in-memory
+    database (":memory:", used by the test suite -- no file/directory at
+    all).
+    """
+    if database_url.startswith("sqlite:///") and ":memory:" not in database_url:
+        Path(database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+
+
+ensure_sqlite_directory_exists(DATABASE_URL)
 engine: Engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
 @event.listens_for(engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record) -> None:
+def _configure_sqlite_connection(dbapi_connection, connection_record) -> None:
     if engine.dialect.name == "sqlite":
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
+        # WAL instead of SQLite's default rollback-journal mode: readers
+        # (GET /api/tracks etc., polled every few seconds by every
+        # connected dashboard) no longer block behind a writer (a
+        # detection POST, which this app ingests continuously) or vice
+        # versa -- the two only ever briefly contend at the moment a
+        # writer commits, not for the writer's whole transaction. A
+        # no-op, not an error, for an in-memory (":memory:") database,
+        # which SQLite always keeps in-memory journal mode for regardless
+        # of this pragma -- harmless to still set it there (the test
+        # suite's isolated_db fixture uses on-disk SQLite files, not
+        # :memory:, so this is the real behavior under test too).
+        cursor.execute("PRAGMA journal_mode = WAL")
         cursor.close()
 
 
@@ -57,6 +90,8 @@ _TABLE_MIGRATION_COLUMNS = {
         "position_uncertainty_m": "REAL",
         "maneuver_probability": "REAL",
         "site_id": "INTEGER",
+        "aircraft_category": "VARCHAR(2)",
+        "classification_confidence": "REAL",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
@@ -65,6 +100,7 @@ _TABLE_MIGRATION_COLUMNS = {
     "detection": {
         "georeferenced": "INTEGER DEFAULT 0",
         "site_id": "INTEGER",
+        "human_label": "VARCHAR(20)",
     },
     "zone": {"site_id": "INTEGER"},
     "incident": {"site_id": "INTEGER", "related_track_id": "INTEGER"},
@@ -119,6 +155,37 @@ def _migrate_indexes() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_incident_related_track_id "
                 "ON incident (related_track_id)"
             )
+        )
+        # Every status-filtered incident query (list_incidents(status=...),
+        # get_open_incident, get_open_behavioral_incident,
+        # list_open_incidents_for_track) already scopes by site_id too --
+        # a composite leading with site_id serves both that combination
+        # and a plain site_id-only query, matching the same convention
+        # idx_track_site_status_last_seen already uses for tracks.
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_incident_site_status ON incident (site_id, status)")
+        )
+    # A separate transaction, and allowed to fail without taking startup
+    # down with it: unlike the indexes above, this one is UNIQUE, and a
+    # database that already has duplicate (site_id, name) zone rows from
+    # before this constraint existed (schema.py's zone Table only just
+    # started declaring it) genuinely can't have it created without first
+    # deduplicating those rows -- an existing data-quality issue this
+    # migration surfaces, not one it caused. Failing the whole app's
+    # startup over it would be a worse outcome than leaving the
+    # create-zone race unfixed until an operator cleans it up.
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS idx_zone_site_id_name ON zone (site_id, name)")
+            )
+    except IntegrityError:
+        logger.warning(
+            "Could not create the unique zone(site_id, name) index -- this database likely already "
+            "has two zones with the same name in the same site. New zone names are still checked for "
+            "collisions at the application layer (app/api/zones.py), just without the database-level "
+            "guarantee against a race between two simultaneous requests until the existing duplicates "
+            "are resolved and the app is restarted."
         )
 
 
@@ -359,19 +426,81 @@ def get_detection(detection_id: int, site_id: int) -> Detection | None:
     return _row_to_detection(row) if row else None
 
 
-def list_detections(
-    site_id: int, track_id: int | None = None, limit: int | None = None, offset: int = 0
-) -> list[Detection]:
+def set_detection_human_label(detection_id: int, site_id: int, label: str | None) -> Detection | None:
+    """Sets (or, with label=None, clears) an operator's ground-truth label
+    for one detection -- see app.models.Detection.human_label. Returns
+    None (no-op) if the detection doesn't exist in this site, the same
+    "not found" contract as get_detection.
+    """
     with db_session() as conn:
-        if track_id is not None:
-            query = "SELECT * FROM detection WHERE site_id = :site_id AND track_id = :track_id ORDER BY timestamp"
-            params: dict = {"site_id": site_id, "track_id": track_id}
-        else:
-            query = "SELECT * FROM detection WHERE site_id = :site_id ORDER BY timestamp"
-            params = {"site_id": site_id}
-        if limit is not None:
-            query += " LIMIT :limit OFFSET :offset"
-            params.update(limit=limit, offset=offset)
+        row = conn.execute(
+            text(
+                "UPDATE detection SET human_label = :label WHERE id = :id AND site_id = :site_id "
+                "RETURNING *"
+            ),
+            {"label": label, "id": detection_id, "site_id": site_id},
+        ).mappings().fetchone()
+    return _row_to_detection(row) if row else None
+
+
+def list_labeled_detections(site_id: int) -> list[Detection]:
+    """Every detection an operator has assigned a human_label to, for
+    GET /api/ml/training-data/export -- the CSV app.ml.train actually
+    trains from is built out of these.
+    """
+    with db_session() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT * FROM detection WHERE site_id = :site_id AND human_label IS NOT NULL "
+                "ORDER BY timestamp"
+            ),
+            {"site_id": site_id},
+        ).mappings().all()
+    return [_row_to_detection(row) for row in rows]
+
+
+def list_detections(
+    site_id: int,
+    track_id: int | None = None,
+    sensor_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[Detection]:
+    """track_id narrows to one track's history (app.api.tracks' /history
+    endpoints); sensor_id/start/end narrow independently of any track at
+    all (GET /api/detections, app.api.detections) -- raw ingest data for
+    sensor-level QA/debugging that isn't naturally scoped to a single
+    track (e.g. "everything this sensor reported in the last hour",
+    across however many tracks that spans). All filters are optional and
+    compose freely with each other.
+    """
+    # Each optional filter appends its own literal SQL fragment (like
+    # get_open_behavioral_incident above), rather than joining a
+    # runtime-built list into the query -- every value is still a bound
+    # :param either way, but this also keeps bandit's B608 (string-built
+    # query) check, which can't tell a `.join()` of hardcoded fragments
+    # apart from actually-unsafe interpolation, from flagging it.
+    query = "SELECT * FROM detection WHERE site_id = :site_id"
+    params: dict = {"site_id": site_id}
+    if track_id is not None:
+        query += " AND track_id = :track_id"
+        params["track_id"] = track_id
+    if sensor_id is not None:
+        query += " AND sensor_id = :sensor_id"
+        params["sensor_id"] = sensor_id
+    if start is not None:
+        query += " AND timestamp >= :start"
+        params["start"] = start.isoformat()
+    if end is not None:
+        query += " AND timestamp < :end"
+        params["end"] = end.isoformat()
+    query += " ORDER BY timestamp"
+    if limit is not None:
+        query += " LIMIT :limit OFFSET :offset"
+        params.update(limit=limit, offset=offset)
+    with db_session() as conn:
         rows = conn.execute(text(query), params).mappings().all()
     return [_row_to_detection(row) for row in rows]
 
@@ -483,6 +612,7 @@ def _row_to_detection(row) -> Detection:
         confidence=row["confidence"],
         raw_data=json.loads(row["raw_data"]) if row["raw_data"] else None,
         georeferenced=bool(row["georeferenced"]),
+        human_label=row["human_label"],
     )
 
 
@@ -498,10 +628,12 @@ def create_track(track: Track) -> Track:
                 INSERT INTO track
                     (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
-                     position_uncertainty_m, maneuver_probability)
+                     position_uncertainty_m, maneuver_probability, aircraft_category,
+                     classification_confidence)
                 VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
-                        :position_uncertainty_m, :maneuver_probability)
+                        :position_uncertainty_m, :maneuver_probability, :aircraft_category,
+                        :classification_confidence)
                 RETURNING id
                 """
             ),
@@ -519,6 +651,8 @@ def create_track(track: Track) -> Track:
                 "speed_mps": track.speed_mps,
                 "position_uncertainty_m": track.position_uncertainty_m,
                 "maneuver_probability": track.maneuver_probability,
+                "aircraft_category": track.aircraft_category,
+                "classification_confidence": track.classification_confidence,
             },
         ).one()
         track.id = row.id
@@ -535,7 +669,8 @@ def update_track(track: Track) -> Track:
                     latitude = :latitude, longitude = :longitude, altitude_m = :altitude_m,
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
                     position_uncertainty_m = :position_uncertainty_m,
-                    maneuver_probability = :maneuver_probability
+                    maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category,
+                    classification_confidence = :classification_confidence
                 WHERE id = :id
                 """
             ),
@@ -550,6 +685,8 @@ def update_track(track: Track) -> Track:
                 "speed_mps": track.speed_mps,
                 "position_uncertainty_m": track.position_uncertainty_m,
                 "maneuver_probability": track.maneuver_probability,
+                "aircraft_category": track.aircraft_category,
+                "classification_confidence": track.classification_confidence,
                 "id": track.id,
             },
         )
@@ -598,6 +735,8 @@ def _row_to_track(row) -> Track:
         speed_mps=row["speed_mps"],
         position_uncertainty_m=row["position_uncertainty_m"],
         maneuver_probability=row["maneuver_probability"],
+        aircraft_category=row["aircraft_category"],
+        classification_confidence=row["classification_confidence"],
     )
 
 
@@ -719,13 +858,14 @@ def update_incident(incident: Incident) -> Incident:
             text(
                 """
                 UPDATE incident
-                SET status = :status, closed_at = :closed_at, description = :description,
-                    acknowledged_by = :acknowledged_by
+                SET status = :status, severity = :severity, closed_at = :closed_at,
+                    description = :description, acknowledged_by = :acknowledged_by
                 WHERE id = :id
                 """
             ),
             {
                 "status": incident.status.value,
+                "severity": incident.severity.value,
                 "closed_at": incident.closed_at.isoformat() if incident.closed_at else None,
                 "description": incident.description,
                 "acknowledged_by": incident.acknowledged_by,
@@ -783,6 +923,26 @@ def get_open_behavioral_incident(
     with db_session() as conn:
         row = conn.execute(text(query), params).mappings().fetchone()
     return _row_to_incident(row) if row else None
+
+
+def list_open_incidents_for_track(
+    track_id: int, site_id: int, incident_type: str | None = None
+) -> list[Incident]:
+    """Every still-open (open or acknowledged) incident for one track --
+    unlike get_open_incident/get_open_behavioral_incident, which each look
+    up at most one specific (track, zone/pair, type) combination to dedup
+    against before opening a new incident, this is app/incidents.py's
+    auto-close path: "what does this track currently have open, so I can
+    check whether each one's trigger condition still holds."
+    """
+    query = "SELECT * FROM incident WHERE track_id = :track_id AND site_id = :site_id AND status != 'resolved'"
+    params: dict = {"track_id": track_id, "site_id": site_id}
+    if incident_type is not None:
+        query += " AND incident_type = :incident_type"
+        params["incident_type"] = incident_type
+    with db_session() as conn:
+        rows = conn.execute(text(query), params).mappings().all()
+    return [_row_to_incident(row) for row in rows]
 
 
 def list_incidents(

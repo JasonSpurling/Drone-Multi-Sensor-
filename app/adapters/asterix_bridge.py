@@ -17,23 +17,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import socket
 import urllib.error
-import urllib.request
 
 from app.adapters.asterix import build_detection_payload
-
-
-def post_detection(url: str, payload: dict, api_key: str = "") -> None:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5):
-        pass
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 
 def watch(args: argparse.Namespace) -> None:
@@ -67,20 +55,21 @@ def watch(args: argparse.Namespace) -> None:
             if payload is None:
                 continue
             try:
-                post_detection(args.api_url, payload, args.api_key)
+                post_detection(
+                    args.api_url, payload, args.api_key,
+                    max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+                )
                 print(f"-> az={payload['azimuth_deg']:.1f} range={payload['range_m']:.0f}m")
             except urllib.error.URLError as exc:
-                print(f"ERROR posting detection: {exc}")
+                print(f"ERROR posting detection: {format_post_error(exc)}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--listen-host", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=8600)
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--sensor-id", default="asterix-radar-1")
+    add_common_post_args(parser, default_sensor_id="asterix-radar-1")
     parser.add_argument("--confidence", type=float, default=0.9)
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     args = parser.parse_args()
     watch(args)
 

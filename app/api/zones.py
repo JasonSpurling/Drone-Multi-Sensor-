@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.db import create_zone, get_zone, get_zone_by_name, list_zones, record_audit, update_zone
@@ -25,20 +26,27 @@ def create_new_zone(body: ZoneInput, principal: Principal = Depends(require_role
     # Same reasoning as app/api/sites.py's create_new_site: a name collision
     # here is a caller mistake (probably meant to edit the existing zone
     # via PUT), not a valid way to have two zones share a name within one
-    # site.
+    # site. This check alone can't close the race between two simultaneous
+    # requests for the same new name (both could pass it before either
+    # inserts) -- idx_zone_site_id_name (schema.py) is the actual
+    # guarantee; the except below turns that constraint violation into
+    # the same clean 409 this pre-check already gives the common case.
     if get_zone_by_name(body.name, principal.site_id) is not None:
         raise HTTPException(status_code=409, detail=f"Zone '{body.name}' already exists")
-    created = create_zone(
-        Zone(
-            site_id=principal.site_id,
-            name=body.name,
-            zone_type=body.zone_type,
-            polygon=body.polygon,
-            min_altitude_m=body.min_altitude_m,
-            max_altitude_m=body.max_altitude_m,
-            active=body.active,
+    try:
+        created = create_zone(
+            Zone(
+                site_id=principal.site_id,
+                name=body.name,
+                zone_type=body.zone_type,
+                polygon=body.polygon,
+                min_altitude_m=body.min_altitude_m,
+                max_altitude_m=body.max_altitude_m,
+                active=body.active,
+            )
         )
-    )
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail=f"Zone '{body.name}' already exists") from exc
     record_audit(site_id=principal.site_id, actor=principal.name, action="zone.create", target=body.name)
     return created
 
@@ -53,17 +61,22 @@ def edit_zone(
         # some other site) -- the same 404-not-403 pattern every other
         # site-scoped lookup in this app follows.
         raise HTTPException(status_code=404, detail="Zone not found")
-    updated = update_zone(
-        Zone(
-            id=zone_id,
-            site_id=principal.site_id,
-            name=body.name,
-            zone_type=body.zone_type,
-            polygon=body.polygon,
-            min_altitude_m=body.min_altitude_m,
-            max_altitude_m=body.max_altitude_m,
-            active=body.active,
+    try:
+        updated = update_zone(
+            Zone(
+                id=zone_id,
+                site_id=principal.site_id,
+                name=body.name,
+                zone_type=body.zone_type,
+                polygon=body.polygon,
+                min_altitude_m=body.min_altitude_m,
+                max_altitude_m=body.max_altitude_m,
+                active=body.active,
+            )
         )
-    )
+    except IntegrityError as exc:
+        # Renaming to a name another zone in this site already has --
+        # same idx_zone_site_id_name constraint as create above.
+        raise HTTPException(status_code=409, detail=f"Zone '{body.name}' already exists") from exc
     record_audit(site_id=principal.site_id, actor=principal.name, action="zone.update", target=str(zone_id))
     return updated

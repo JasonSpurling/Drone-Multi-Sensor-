@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
-from app.db import get_incident, list_incidents, record_audit, update_incident
+from app.db import get_incident, get_track, get_zone, list_detections, list_incidents, record_audit, update_incident
 from app.models import Incident, IncidentStatus
+from app.reporting import build_after_action_report
 from app.util import utcnow
 
 router = APIRouter()
@@ -18,6 +19,24 @@ def get_incidents(
     return list_incidents(
         site_id=principal.site_id, status=status.value if status else None, limit=limit, offset=offset
     )
+
+
+@router.get("/incidents/{incident_id}/report")
+def get_incident_after_action_report(
+    incident_id: int, principal: Principal = Depends(require_role(ROLE_VIEWER, ROLE_OPERATOR, ROLE_ADMIN))
+) -> dict:
+    """Full single-incident after-action summary -- what was seen, when,
+    by which sensors, how it was classified, and how it was responded to.
+    See app.reporting.build_after_action_report for the shape; the
+    dashboard renders this as a printable report (window.print()).
+    """
+    incident = get_incident(incident_id, principal.site_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    track = get_track(incident.track_id, principal.site_id) if incident.track_id else None
+    zone = get_zone(incident.zone_id, principal.site_id) if incident.zone_id else None
+    detections = list_detections(principal.site_id, track_id=incident.track_id) if incident.track_id else []
+    return build_after_action_report(incident, track, zone, detections)
 
 
 @router.post("/incidents/{incident_id}/acknowledge", response_model=Incident)

@@ -45,11 +45,17 @@ from app.db import (
     update_track,
     upsert_kalman_state,
 )
-from app.fusion import fuse_classification
+from app.fusion import classification_confidence, fuse_classification
 from app.geo import haversine_distance_m, latlon_to_local_m, local_m_to_latlon
 from app.georeference import georeference
 from app.imm import IMMFilter
-from app.incidents import check_loitering_incident, check_predicted_incursions, check_zone_incidents
+from app.incidents import (
+    check_loitering_incident,
+    check_predicted_incursions,
+    check_zone_incident_resolutions,
+    check_zone_incidents,
+    close_incidents_for_closed_track,
+)
 from app.kalman import ConstantVelocityKalmanFilter
 from app.live import publish as publish_live_event
 from app.models import Classification, Detection, Track, TrackStatus
@@ -142,6 +148,7 @@ def expire_stale_tracks(site_id: int, now: datetime | None = None) -> None:
             track.status = TrackStatus.CLOSED
             update_track(track)
             logger.info("Track %s -> closed (last seen %s)", track.track_uid, track.last_seen)
+            close_incidents_for_closed_track(track)
 
 
 def _coarse_distance_gate_m(track: Track, elapsed_s: float) -> float:
@@ -299,11 +306,28 @@ def _commit_detection(detection: Detection, track: Track) -> Detection:
     fills_in_unknown = track.classification == Classification.UNKNOWN and fused_label != Classification.UNKNOWN
     if upgrades_to_drone or fills_in_unknown:
         track.classification = fused_label
+    # How strongly *current* evidence backs whatever ended up stored above
+    # (app.fusion.classification_confidence's docstring) -- deliberately
+    # decoupled from the upgrade-only ratchet just above: the label can
+    # only ever move toward DRONE/fill in from UNKNOWN, but confidence in
+    # it is free to rise and fall with the actual evidence, e.g. a track
+    # that's DRONE from an early high-confidence reading but has since
+    # only gathered bird-like evidence shows falling confidence without
+    # ever silently losing its DRONE label.
+    track.classification_confidence = classification_confidence(history, track.classification)
+    # A real ADS-B emitter category (app.models.Track.aircraft_category's
+    # docstring) is a transponder-reported fact, not a threat judgment --
+    # unlike classification above, the latest report simply wins rather
+    # than needing an "upgrade only" guard.
+    reported_category = (detection.raw_data or {}).get("category")
+    if reported_category:
+        track.aircraft_category = reported_category
     update_track(track)
     publish_track_cot(track)
     publish_live_event(track.site_id, {"type": "track_update", "track": track.model_dump(mode="json")})
 
     check_zone_incidents(track)
+    check_zone_incident_resolutions(track)
     check_predicted_incursions(track)
     check_loitering_incident(track)
 

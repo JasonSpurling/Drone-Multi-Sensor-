@@ -4,4 +4,4 @@
 # the running process, not by comparing it against git history. Bump this
 # by hand alongside a new CHANGELOG.md entry -- see that file's header and
 # README.md's "Versioning" section for the policy.
-__version__ = "0.1.0"
+__version__ = "0.2.0"

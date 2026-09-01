@@ -31,12 +31,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import time
 import urllib.error
-import urllib.request
 from datetime import UTC, datetime
+
+from app.adapters.sdk import add_common_post_args, format_post_error, post_detection
 
 # Classes confidently NOT an aerial object of interest -- skipped outright,
 # unlike plain motion detection which can't tell a car from a drone.
@@ -98,16 +98,6 @@ def build_detection_payload(
     }
 
 
-def post_detection(url: str, payload: dict, api_key: str = "") -> dict:
-    data = json.dumps(payload).encode()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def watch(args: argparse.Namespace) -> None:
     import cv2
     from ultralytics import YOLO
@@ -152,10 +142,13 @@ def watch(args: argparse.Namespace) -> None:
                     if payload is None:
                         continue
                     try:
-                        result_json = post_detection(args.api_url, payload, args.api_key)
+                        result_json = post_detection(
+                            args.api_url, payload, args.api_key,
+                            max_retries=args.max_retries, retry_backoff_s=args.retry_backoff,
+                        )
                         print(f"-> {class_name} (conf={model_confidence:.2f}) track {result_json['track_id']}")
                     except urllib.error.URLError as exc:
-                        print(f"ERROR posting detection: {exc}")
+                        print(f"ERROR posting detection: {format_post_error(exc)}")
                     last_post = now
     finally:
         capture.release()
@@ -165,13 +158,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source", default="0", help="cv2.VideoCapture source: camera index or RTSP/file URL")
     parser.add_argument("--model", default="yolov8n.pt", help="YOLO model path/name (ultralytics format)")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8000/api/detections")
-    parser.add_argument("--sensor-id", default="camera-yolo-1")
+    add_common_post_args(parser, default_sensor_id="camera-yolo-1")
     parser.add_argument("--target-lat", type=float, required=True)
     parser.add_argument("--target-lon", type=float, required=True)
     parser.add_argument("--min-model-confidence", type=float, default=0.4)
     parser.add_argument("--min-interval", type=float, default=1.0, help="Seconds between processed frames")
-    parser.add_argument("--api-key", default=os.getenv("DRONE_API_KEY", ""))
     parser.add_argument(
         "--snapshot-dir", default=None,
         help="If set, save a JPEG of each posted detection's frame here and record its path in "

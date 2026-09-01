@@ -36,8 +36,9 @@ macOS / Linux:
 
 This starts the API + dashboard at **http://127.0.0.1:8000** (auto-reload
 enabled) and creates a SQLite database at `data/drone_sensor.db` on first
-run. Open the URL in a browser for the dashboard, or `/docs` for interactive
-API docs.
+run -- including the `data/` directory itself if it doesn't exist yet
+(it's gitignored, so a fresh clone/download never has it). Open the URL
+in a browser for the dashboard, or `/docs` for interactive API docs.
 
 > **Windows note:** `--reload` spawns a separate child process to actually
 > serve requests. If you stop the app with Ctrl+C and a later run seems to
@@ -318,6 +319,7 @@ replica so the product still fits.
 | `GET /api/metrics` | Prometheus metrics (unauthenticated) |
 | `POST /api/detections` | Ingest one detection; runs georeferencing, IMM track association, classification fusion, and zone-incident checks |
 | `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
+| `GET /api/detections` | Raw ingested detections (`?sensor_id=`, `?track_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`, freely combined) -- for sensor-level QA/debugging without a track id in hand already, or a bounded time slice once you do; see `GET /api/tracks/{id}/history` below for one track's own full path |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
 | `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
@@ -325,14 +327,107 @@ replica so the product still fits.
 | `GET /api/zones` | List active zones (`?include_inactive=true` for the zone-management UI, which also needs to find and reactivate a deactivated one) |
 | `POST /api/zones` | Create a zone (admin) |
 | `PUT /api/zones/{id}` | Update a zone -- polygon, type, altitude band, active state (admin) |
-| `GET /api/sensors` | Per-sensor health, derived from each sensor's most recent detection |
+| `GET /api/sensors` | Per-sensor health: online/stale/offline derived from each sensor's most recent detection, plus a `missing` entry for any registered sensor that's never actually reported one |
 | `GET /api/sensor-registrations` | List registered sensors (position/orientation used for georeferencing) |
 | `PUT /api/sensor-registrations/{sensor_id}` | Register/update a sensor's fixed position and orientation (admin) |
 | `GET /api/authorized-operators` | List authorized ("friendly") drone operators (admin) |
 | `PUT /api/authorized-operators/{operator_id}` | Register/update an authorized operator (admin) |
 | `GET /api/audit-log` | Who did what admin action, when (admin) |
+| `GET /api/reports/incidents` | Aggregate rollup (counts by type/severity/status, resolution-time stats, daily trend) over `?start=`/`?end=` |
+| `GET /api/reports/incidents/export` | The same date range's incidents as a downloadable CSV |
+| `PUT /api/detections/{id}/label` | Set (or, with `{"label":null}`, clear) an operator's ground-truth label for one detection (operator/admin) |
+| `GET /api/ml/training-data/export` | Every labeled detection in this site as a CSV, in the exact shape `app/ml/train.py --csv` expects |
+| `GET /api/incidents/{id}/report` | One incident's full after-action story -- what was seen, when, by which sensors, how classified, how responded to (see "Incident reporting" below) |
 | `GET /api/admin/keys` | Every configured key's label/role/site/expiry plus last-used time and use count, never the raw key (admin) |
 | `GET /ws/live` | WebSocket: pushes `track_update`/`incident_opened` events in near-real-time (`?api_key=` for a key-authenticated deployment; see "Live updates" below) |
+
+### Theme
+
+The dashboard defaults to dark (unchanged regardless of OS/browser theme
+preference -- a deliberate choice for a monitoring UI meant to be watched
+for long stretches). The sun/moon toggle in the top bar switches to a
+light theme instead, remembered per-browser via `localStorage` so it
+persists across reloads. The map/track-visualization layer itself always
+stays dark in either theme, matching how most mapping dashboards keep
+plotted symbology legible against a fixed dark base rather than flipping
+it with the surrounding chrome.
+
+### Track search
+
+The Tracks panel's search box matches more than the track's numeric ID or
+UID -- also its classification (`drone`, `aircraft`, ...), status
+(`active`/`lost`/`closed`), and, when the sensor data actually reported
+one, the aircraft category (both the raw ICAO code and its human-readable
+label, e.g. `A7` or `rotor` both match a rotorcraft track). Multiple
+space-separated terms are ANDed ("drone lost" finds a lost drone without
+needing the terms in any particular order), and it combines with the
+classification chips above it rather than replacing them. Press `/` from
+anywhere on the page to jump straight to the search box, `Esc` while it
+has focus to clear it, or click the &times; button that appears once
+there's something to clear.
+
+### Track list: alert indicator and sort
+
+A track with an active (non-resolved) incident now shows a small colored
+dot on its thumbnail in the Tracks list, colored by that incident's
+severity (hovering it names the incident count/severity) -- an operator
+can see which track triggered an alert without switching to the Alerts
+panel. A "Sort" control next to the classification chips reorders each
+classification group by "Most recent" (default), "Alerts first",
+"Altitude: high to low", or "Speed: fastest first"; a track with no
+altitude/speed known always sorts after every track that has one, never
+implied to be on the ground or stationary just to fit a sort. Sorting
+only ever reorders *within* a classification group, never across groups
+-- the drone/aircraft/bird/... grouping is the primary, deliberate
+ordering for a counter-drone operator, so an alerting or fast-moving
+track never jumps into a different group's position and gets mistaken
+for a different kind of object. The choice is remembered per-browser
+(like the theme toggle) so it persists across reloads.
+
+### Map imagery vs. tracking data
+
+The map background (dark/road/satellite tiles) always comes from an
+external tile CDN -- unlike the vendored Leaflet library itself (see
+`static/vendor/`), there's no offline/self-hosted tile source by default.
+None of the actual tracking/classification/alerting pipeline depends on
+it, so a deployment with no internet access (a real possibility for a
+field-sited sensor) still works correctly -- it just has a blank map
+background, which used to give no indication of why. Three consecutive
+tile load failures now shows a small "Map imagery unavailable" banner
+(clearing again once tiles start loading) so that's never mistaken for
+the dashboard itself being broken.
+
+### Sensor positions on the map
+
+Every registered sensor position (`PUT /api/sensor-registrations/{id}`,
+see "Georeferencing" above) shows up on the map as its own small square
+marker -- not just listed in the Sensor Health side panel -- colored by
+that sensor's real health status (online/stale/offline/missing, the same
+signal `GET /api/sensors` already computes) so a sensor that's gone
+quiet is visible at a glance on the map itself, not buried in a side
+panel you have to go looking in. A sensor that's never been registered
+(most GPS-tagged sensors -- cameras, ADS-B receivers -- never need to be)
+simply isn't plotted, rather than guessing a position for it. Toggle
+with the **Sensors** checkbox alongside Trails/Vectors/Uncertainty.
+
+**"Missing" status**: a sensor with a registered position but zero
+detections ever shows a distinct `missing` status (violet), not just
+absence from the list -- `app.sensors.get_sensor_health` cross-references
+`sensor_registry` for exactly this. Without it, "the sensor nobody
+bothered to wire up yet" and "the sensor that just went down" were
+indistinguishable: both were simply absent from `GET /api/sensors`,
+whether the registration was five minutes or five months old. A
+deactivated registration is never flagged this way -- a deliberately
+decommissioned sensor isn't a gap to surface.
+
+Two smaller additions alongside it: a scale bar (bottom-right, next to
+the zoom controls) for real distance context, and a "fit all" control
+(the small square-corners icon above the scale bar) that re-centers the
+map on every visible track, zone, and sensor on demand -- useful after
+panning away, since the automatic fit-to-bounds only ever runs once, the
+first time anything appears, by design (an operator actively looking at
+one area shouldn't have the view yanked out from under them every time a
+new detection arrives elsewhere).
 
 ### Live updates
 
@@ -357,6 +452,49 @@ behind a load balancer" above), a detection processed by replica B never
 pushes to a dashboard client connected to replica A; that client still
 gets it, just at the next poll rather than instantly. Single-replica
 deployments (the common case) don't have this gap at all.
+
+### Incident reporting
+
+Two different questions, two different endpoints. "How are we doing over
+this period" is `GET /api/reports/incidents` -- a rollup (counts by type/
+severity/status, resolution-time stats, a per-day trend) over a date
+range, aggregated in `app/reporting.py`'s `build_incident_report`, with a
+CSV of the underlying incidents at `GET /api/reports/incidents/export`
+for a compliance officer who needs the list an aggregate count
+summarizes. The dashboard's **Incident Reports** panel (rail icon, or
+Alt+5) surfaces this: pick a date range, see the breakdown, or click
+"Export CSV".
+
+"What actually happened on this one incident" is
+`GET /api/incidents/{id}/report` -- a single incident's full story
+(`build_after_action_report`): what was seen, when, by which sensors, the
+track's fused classification and final position/speed, and how it was
+responded to (acknowledged by whom, resolution time). Every incident in
+the dashboard's **Alerts** panel (including resolved ones, not just
+active alerts) has a **Report** button that fetches this and renders it
+as a printable page (`window.print()`) -- useful for after-action review
+or an incident record you want on paper/PDF rather than just on screen.
+
+An open incident's card also has **Acknowledge** and **Resolve** buttons
+(driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
+an acknowledged one keeps just **Resolve**, for a deliberate operator
+judgment call -- "we reviewed this and it's handled."
+
+The system also auto-closes an incident once its own trigger condition
+is confirmed gone, so it never sits open/acknowledged indefinitely after
+the fact that caused it no longer holds: a zone-incursion incident closes
+as soon as a later detection places the track outside that zone again
+(`app.incidents.check_zone_incident_resolutions`, run on every detection
+alongside the check that opens one), and closing a track (active -> lost
+-> closed once it's gone quiet too long, see `app.tracking
+.expire_stale_tracks`) closes every incident type still open for it
+(`close_incidents_for_closed_track`) -- there'd otherwise be no signal
+left to resolve a zone-based one against, and nothing was tracking a
+behavioral one (loitering/formation/shadowing) either. An auto-closed
+incident is never mistaken for a reviewed one: its description is
+suffixed `(auto-closed: ...)` with the reason, and `acknowledged_by`
+is left exactly as it was (`null` if no operator ever acknowledged it) --
+never fabricated as if someone signed off on it.
 
 ## Tracking core
 
@@ -495,6 +633,15 @@ same code path -- the full test suite passes unmodified against either
 picked up automatically on startup via a lightweight migration check --
 no manual step, no separate tool, for that class of change.
 
+Every SQLite connection uses **WAL** (write-ahead logging) instead of
+SQLite's default rollback-journal mode (`app.db._configure_sqlite_connection`)
+-- a reader (`GET /api/tracks`, polled every few seconds by every connected
+dashboard) no longer blocks behind a writer (a continuously-ingesting
+`POST /api/detections`) or vice versa; the two only briefly contend at the
+moment a writer actually commits, not for its whole transaction. Not
+applicable to PostgreSQL, which handles concurrent readers/writers with
+MVCC regardless.
+
 **Alembic** (`migrations/`) is available for the migrations that
 startup-time approach structurally can't do safely -- renaming/dropping a
 column, changing a column's type, or a real data migration. It's optional
@@ -575,6 +722,46 @@ you.
 
 ## Sensor realism
 
+**Getting your first real sensor talking to this**: before wiring any
+adapter below into the API, verify the sensor hardware itself works in
+isolation -- it isolates hardware/driver problems from application-layer
+ones. For the cheapest and most common starting point, an RTL-SDR dongle
+doing ADS-B reception:
+
+1. If running on WSL2 rather than native Linux, the dongle needs USB
+   passthrough first (WSL2 has no native USB access):
+   ```powershell
+   # Windows side (PowerShell, as Administrator):
+   usbipd list                      # find the RTL-SDR's BUSID
+   usbipd bind --busid <BUSID>
+   usbipd attach --wsl --busid <BUSID>
+   ```
+   ```bash
+   # WSL side -- confirm it's visible before going further:
+   lsusb   # expect "Realtek Semiconductor Corp. RTL2838 DVB-T"
+   ```
+   On a Raspberry Pi or other native Linux host, the dongle is already a
+   normal USB device -- skip straight to step 2.
+2. Install and run a real ADS-B decoder -- this project's own
+   `dump1090_bridge.py` (below) is a *bridge*, not a decoder; it consumes
+   dump1090's SBS-1 output rather than talking to the SDR directly:
+   ```bash
+   sudo apt install -y dump1090-fa   # FlightAware's maintained fork
+   dump1090-fa --device-index 0 --net --net-sbs-port 30003
+   ```
+3. Check `http://<host>:8080` (dump1090-fa's own built-in map). If
+   aircraft are within range, blips should appear within a minute or two.
+   This step alone confirms the dongle, antenna, and placement are working
+   correctly, before this tracker enters the picture at all.
+4. Only once step 3 shows real traffic, point this app's bridge at
+   dump1090 as described below.
+
+The same "confirm the raw sensor/decoder output first, then bridge it in"
+order applies to every adapter in this section -- a radar's ASTERIX feed,
+a camera's RTSP stream, a Bluetooth Remote ID scan -- since a bridge
+script can't distinguish "no detections because the sky is empty" from
+"no detections because the upstream feed is misconfigured."
+
 **Georeferencing** (`app/georeference.py`): a detection that reports
 `azimuth_deg`/`range_m` (typical of a fixed radar or RF direction-finder)
 instead of `latitude`/`longitude` is converted to an absolute position
@@ -592,6 +779,18 @@ curl -X PUT http://127.0.0.1:8000/api/sensor-registrations/radar-1 \
 Detections that already carry lat/lon (GPS-tagged cameras, ADS-B, etc.)
 skip this entirely.
 
+`range_m` from an azimuth/range sensor is *slant range* -- straight-line
+distance to the target, not horizontal ground distance -- since that's
+what radars actually report (e.g. ASTERIX CAT048's RHO field, see
+`app/adapters/asterix.py`). Georeferencing corrects this to ground range
+using the target's and sensor's altitude difference whenever both are
+known (`app/geo.py`'s `slant_range_to_ground_range_m`), which matters most
+at close range/steep look angles -- a target 150m above a radar at 500m
+slant range is really only ~477m away over the ground, a ~5% position
+error left uncorrected. Falls back to using `range_m` unadjusted when the
+detection carries no altitude of its own (bearing-only acoustic arrays,
+many RF direction finders), same as before this correction existed.
+
 **ADS-B via dump1090** (`app/adapters/`): the most common real-world way
 to get ADS-B into this tracker is an RTL-SDR dongle (~$20) running
 [dump1090](https://github.com/flightaware/dump1090) or similar, which
@@ -601,6 +800,42 @@ format. A small bridge script parses that feed and posts it to the API:
 ```bash
 .venv/bin/python -m app.adapters.dump1090_bridge --sbs-host 127.0.0.1 --sbs-port 30003
 ```
+
+**Distinct map symbols per aircraft type**: the SBS-1 text feed above only
+carries position/altitude, not aircraft type -- but dump1090-fa (and
+similar forks) also serve a richer `aircraft.json` on their web UI port
+(default 8080) that includes the real ICAO ADS-B *emitter category*
+(DO-260B Table 2-36: light/heavy fixed-wing, rotorcraft, glider,
+lighter-than-air, UAV, ...). The bridge polls this automatically
+(`--aircraft-json-url` to override its location, `--no-category-lookup`
+to disable) and merges the category into each detection; `app.tracking`
+carries it onto the track (`Track.aircraft_category`), and the dashboard
+map renders a genuinely different symbol per category group -- a rotor
+cross for rotorcraft, a wing bowtie for gliders, a balloon envelope for
+lighter-than-air, a diamond for UAVs, a realistic airplane silhouette
+(the same one the sidebar/details thumbnail already uses) for fixed-wing
+aircraft -- instead of one generic shape for every aircraft. Falls back
+to that same silhouette whenever no category is known (most GA aircraft
+with older transponders never report one), never a guess. If
+`aircraft.json` isn't reachable at all (a minimal dump1090 install
+without its web server running), detections keep flowing normally, just
+without category enrichment.
+
+An aircraft-classified marker is also colored by **altitude** (real,
+already-tracked `Track.altitude_m` data), low (orange) to high (purple)
+-- the same convention most real flight trackers (FlightRadar24, OpenSky)
+use, with a gradient swatch in the map legend. Every other classification
+(drone/bird/friendly/unknown) stays colored by *what kind of object it
+is*, not altitude -- for a counter-drone system, that's the more
+operationally important signal to color by at a glance, and altitude
+coloring would wash it out. Falls back to the flat classification color
+when altitude isn't known, same "never guess" rule as the category
+symbols above.
+
+Drone and unknown tracks likewise get a real symbol on the map, not a
+plain dot -- the same quadcopter glyph (four rotors and a body) already
+used for the sidebar/details thumbnail, so a drone reads as a drone at a
+glance instead of just a colored circle.
 
 **Radar via ASTERIX CAT048** (`app/adapters/asterix_bridge.py`): the
 protocol most commercial primary/secondary surveillance radars actually
@@ -634,7 +869,16 @@ pip install -r requirements-mavlink.txt
 
 **Camera motion cueing** (`app/adapters/camera_motion.py`): watches a
 webcam or RTSP camera stream with OpenCV background subtraction and posts
-a `camera` detection whenever it sees motion above a threshold.
+a `camera` detection whenever it sees motion above a threshold. Like every
+other detection-posting adapter in this package, it's built on
+`app/adapters/sdk.py` -- the shared POST-to-`/api/detections` +
+`--api-url`/`--api-key`/`--sensor-id` argparse wiring that used to be
+duplicated independently in each one. New adapters should use it directly
+rather than re-copying the pattern; it also adds `--max-retries`/
+`--retry-backoff` for a transient network blip, and a `format_post_error`
+helper that surfaces the server's actual JSON error detail (e.g. a
+misconfigured `--api-key`) instead of just an HTTP status line -- neither
+of which any hand-rolled adapter had before.
 
 ```bash
 pip install -r requirements-camera.txt
@@ -883,6 +1127,57 @@ independent reverse-engineering effort, not an official DJI
 specification, so exact fields available may vary by drone model/firmware.
 Sanity-check your first real decoded packet before relying on this.
 
+## Generic RF energy-detection sweep
+
+Every RF adapter above only sees a transmission it already knows how to
+decode (DJI OcuSync, MAVLink, ASTM F3411). `app/adapters/rf_sweep_bridge.py`
+is the odd one out: it doesn't decode anything, it just flags any
+frequency bin whose power exceeds the sweep's own noise floor by
+`--threshold-db` -- the same "energy detection" first pass real
+counter-drone RF systems run before any signal classification, useful for
+catching an unknown or non-cooperative emitter none of the protocol-
+specific adapters above would recognize.
+
+It reads [`hackrf_sweep`](https://github.com/greatscottgadgets/hackrf)'s
+CSV output from stdin (same stdin-piped shape as `dji_droneid_bridge.py`
+above -- no SDR dependency in this process itself):
+
+```bash
+# apt install hackrf, or build hackrf-tools from the repo above
+hackrf_sweep -f 2400:2500,5725:5875 -w 600000 \
+    | .venv/bin/python -m app.adapters.rf_sweep_bridge \
+        --sensor-id rf-sweep-1 --target-lat 51.50 --target-lon -0.10
+```
+
+**No protocol identification, no direction, no range.** A flagged bin
+could be a drone control link, a WiFi AP, a microwave oven, or a cordless
+phone -- this can only tell you *something* is transmitting there above
+the noise floor, not what. And an omnidirectional SDR sweep has no
+bearing or range at all, so every detection is reported at the sensor's
+own `--target-lat`/`--target-lon`, the same honest compromise
+`camera_motion.py` makes for a monocular camera's identical limitation.
+Best used as a coarse alert that a human or a more specific sensor then
+investigates, not as a standalone drone/not-drone classifier.
+
+The noise floor is each sweep's own median power by default -- robust to
+a handful of genuinely occupied bins, but a site with persistent in-band
+RF activity (a permanently-on WiFi AP, say) would skew it. Record a
+quiet-band baseline first and point `--baseline-csv` at it for a fixed
+reference instead:
+
+```bash
+hackrf_sweep -f 2400:2500,5725:5875 -w 600000 > control.csv   # ~1 minute, no drone present
+.venv/bin/python -m app.adapters.rf_sweep_bridge --baseline-csv control.csv \
+    --sensor-id rf-sweep-1 --target-lat 51.50 --target-lon -0.10
+```
+
+`hackrf_sweep`'s CSV line format (`date, time, hz_low, hz_high,
+hz_bin_width, num_samples, dB, dB, dB, ...`, with a single sweep split
+across several lines sharing one timestamp) was verified against
+`hackrf_sweep`'s actual documented output and
+[`tesorrells/RF-Drone-Detection`](https://github.com/tesorrells/RF-Drone-Detection)'s
+reference parsing of it, not guessed from a byte-offset diagram.
+
 ## Real ASTM F3411 Remote ID reception
 
 `app/remote_id.py` (see the Classification fusion section below) is a
@@ -890,26 +1185,40 @@ signed-claim scheme this app defines -- verifying a cryptographic
 assertion, not anything a real drone actually broadcasts. Every drone
 over 250g sold in the US/EU is now separately required to broadcast real
 **ASTM F3411 Remote ID** over Bluetooth or Wi-Fi, and this app can receive
-that directly too, via `app/adapters/astm_remote_id_ble_bridge.py`:
+either transport:
 
 ```bash
 pip install -r requirements-remoteid.txt
+
+# Bluetooth Low Energy -- any standard Bluetooth adapter works, no SDR needed:
 sudo .venv/bin/python -m app.adapters.astm_remote_id_ble_bridge --sensor-id remote-id-1
+
+# WiFi Beacon -- needs a monitor-mode-capable WiFi adapter already switched
+# into monitor mode on the target channel (see the module's own docstring
+# for the iw/ip commands to set that up):
+sudo .venv/bin/python -m app.adapters.astm_remote_id_wifi_bridge \
+    --interface wlan0mon --sensor-id remote-id-wifi-1
 ```
 
-Any standard Bluetooth adapter works -- no SDR needed (unlike the DJI
-DroneID bridge above); Remote ID's whole design point is that anyone can
-passively receive it. Decoding uses
+Remote ID's whole design point is that anyone can passively receive it --
+neither transport needs the drone's cooperation beyond broadcasting what
+the standard already requires it to. Decoding uses
 [`dtpyodid`](https://github.com/dronetag/python-odid), a real Python
 implementation of the ASTM F3411 message formats from Dronetag (a
 commercial Remote ID hardware vendor), verified here by round-tripping
-real messages through the library's own encoder/decoder and cross-checking
-the Bluetooth framing against `opendroneid/transmitter-linux`'s reference
-implementation -- not a byte-offset parser guessed from memory. Over
-Bluetooth 4 Legacy Advertising a transmitter sends one message per
-broadcast (position, operator ID, serial number, ...), cycling through
-them, so this bridge accumulates a device's state across several
-broadcasts before it has enough to post a detection.
+real messages through the library's own encoder/decoder. The Bluetooth
+framing was cross-checked against `opendroneid/transmitter-linux`'s
+reference implementation, and the WiFi Beacon vendor-specific element
+layout (the 3-byte ASD-STAN OUI, application code, and message-counter
+byte preceding the actual message-pack bytes) against
+`opendroneid/opendroneid-core-c`'s reference C implementation -- neither
+is a byte-offset parser guessed from memory. Both transports send one
+message per broadcast (position, operator ID, serial number, ...),
+cycling through them, so both bridges accumulate a device's state across
+several broadcasts before there's enough to post a detection --
+`app/adapters/astm_remote_id.py` is the transport-independent logic
+(message-field extraction, state accumulation, payload building) both
+bridges share.
 
 **This is not authenticated.** Unlike `app/remote_id.py`'s signature
 scheme, ASTM F3411 itself has no cryptographic authentication of its
@@ -995,13 +1304,38 @@ curl -X POST http://127.0.0.1:8000/api/zones \
        "polygon": [[51.49, -0.11], [51.49, -0.09], [51.51, -0.09], [51.51, -0.11]]}'
 ```
 
+A zone's name is unique per site (not globally -- two different sites may
+each reasonably have their own "Restricted Zone"), enforced at the
+database layer (`idx_zone_site_id_name`, `app/schema.py`), not just as an
+application-level check -- two concurrent `POST /api/zones` requests for
+the same new name can't both succeed.
+
 **`app/zones.seed.json`** (or `DRONE_ZONES_SEED_PATH`), loaded at every
 startup -- still the right place for a zone that should exist by default
 in every fresh deployment (what ships with this repo), not for zones an
 operator adds afterward; those belong in the database via the two options
 above, not in a file a deploy might overwrite.
 
-Two real, publicly published FAA data sources can supplement or
+A hand-edited seed file has no validation beyond Pydantic's field-level
+checks (each vertex is a float pair) -- a self-intersecting polygon
+doesn't error, `app.zones.point_in_polygon`'s ray-casting test just
+silently gives a wrong inside/outside answer near the crossing.
+`app/adapters/validate_zone.py` checks the actual geometry (at least 3
+vertices, real lat/lon range, no self-intersection) before a polygon goes
+in:
+
+```bash
+# Check a new polygon, or append it once it's valid:
+.venv/bin/python -m app.adapters.validate_zone check --polygon '[[51.49,-0.11],[51.49,-0.09],[51.51,-0.09],[51.51,-0.11]]'
+.venv/bin/python -m app.adapters.validate_zone add --name "New Zone" --zone-type restricted \
+  --polygon '[[51.49,-0.11],[51.49,-0.09],[51.51,-0.09],[51.51,-0.11]]' --write app/zones.seed.json
+
+# Re-validate everything already in a seed file (catches a polygon that
+# was hand-edited badly after the fact):
+.venv/bin/python -m app.adapters.validate_zone check-file app/zones.seed.json
+```
+
+Four real, publicly published FAA data sources can supplement or
 replace it:
 
 **FAA UAS Facility Map** (`app/airspace/faa_uas_facility_map.py`): the
@@ -1024,6 +1358,66 @@ outbound access to arcgis.com wasn't available from the environment this
 was built in to run a live import end-to-end -- sanity-check your first
 real import against a known airport's published facility map.
 
+**FAA Class Airspace** (`app/airspace/faa_class_airspace.py`): the
+permanent Class B/C/D/E controlled-airspace surface areas drawn on every
+VFR sectional chart -- a different, longer-lived kind of restriction than
+either the facility map's altitude ceilings or a NOTAM's temporary one.
+Same unauthenticated ArcGIS FeatureServer mechanics as the facility map
+above (same FAA ArcGIS org), via the same import CLI with `--source
+class-airspace`:
+
+```bash
+.venv/bin/python -m app.adapters.faa_zones_import --source class-airspace \
+  --min-lon -0.5 --min-lat 51.3 --max-lon 0.3 --max-lat 51.7
+```
+
+Each surface area is imported as a `monitoring` zone (the same reasoning
+as the facility map's: entering Class B/C/D/E means real-world ATC
+authorization is needed, not that an intrusion just happened), named with
+its class and airport identifier and carrying its real floor/ceiling
+(`SFC` -- surface -- becomes a real `min_altitude_m` of `0`, `UNLTD`
+becomes no `max_altitude_m` cap at all, not a fabricated number). The
+field names (`CLASS`, `LOWER_VAL`/`LOWER_UOM`/`LOWER_CODE`,
+`UPPER_VAL`/`UPPER_UOM`/`UPPER_CODE`, ...) are confirmed from the FAA's
+own published AIS Open Data Dictionary, but -- like the facility map
+above -- outbound access to every FAA/ArcGIS domain (including the Data
+Dictionary PDF itself and the FeatureServer) wasn't available from the
+environment this was built in, so `DEFAULT_FEATURE_SERVER_URL` is
+inferred from the same org/naming convention the facility map's already-
+confirmed URL uses, not itself confirmed by a live request. Sanity-check
+your first real import against a known Class B/C/D airport's published
+airspace, and pass your own `--feature-server-url` if it's moved.
+
+**FAA Special Use Airspace** (`app/airspace/faa_special_use_airspace.py`):
+Prohibited, Restricted, Warning, Alert, Military Operations, and National
+Security Areas -- the most directly relevant of these four sources for a
+drone-detection deployment specifically, since Prohibited/Restricted
+areas are genuinely not permitted to fly in without specific clearance
+(P-56 over the White House/Capitol is the textbook example), not just
+"needs ATC coordination" the way Class Airspace above is. Same
+unauthenticated ArcGIS FeatureServer mechanics, via `--source
+special-use`:
+
+```bash
+.venv/bin/python -m app.adapters.faa_zones_import --source special-use \
+  --min-lon -0.5 --min-lat 51.3 --max-lon 0.3 --max-lat 51.7
+```
+
+Prohibited and Restricted areas import as `no_fly` zones (this app's
+closest match to "genuinely not permitted"); Warning/Alert/MOA/National
+Security Areas import as `monitoring`, the same "be aware, not an
+automatic intrusion" reasoning as the other two sources above. The
+classification is deliberately **not** a trust in one field's exact,
+unconfirmed spelling: it keys off the well-known chart designator prefix
+on the area's own name (`P-`/`R-` for Prohibited/Restricted, per the
+same convention every sectional chart and aviation reference uses),
+falling back to a loose match on the `TYPE` field only when the name
+doesn't start with a recognized prefix. Same caveat as the other two
+sources -- outbound access to every FAA/ArcGIS domain wasn't available
+to validate a live response, so sanity-check your first real import
+against a known Prohibited or Restricted area before relying on this for
+anything safety-relevant.
+
 **FAA NOTAMs** (`app/airspace/faa_notam.py`, `app/adapters/faa_notam_check.py`):
 Notices to Air Missions cover the kind of temporary/event-driven airspace
 restriction a static zone file or the facility map's fixed grid can't --
@@ -1032,21 +1426,38 @@ TFRs, a stadium event, a UAS area closed for the day. Requires a free
 developer portal:
 
 ```bash
+# Print only, for situational awareness:
 .venv/bin/python -m app.adapters.faa_notam_check \
   --client-id "$DRONE_FAA_NOTAM_CLIENT_ID" --client-secret "$DRONE_FAA_NOTAM_CLIENT_SECRET" \
   --lat 51.5 --lon -0.1 --radius-nm 50
+
+# Also import each as a zone into site 1 -- safe to re-run periodically
+# (e.g. from cron): a NOTAM still active from a previous run is skipped,
+# not duplicated.
+.venv/bin/python -m app.adapters.faa_notam_check \
+  --client-id "$DRONE_FAA_NOTAM_CLIENT_ID" --client-secret "$DRONE_FAA_NOTAM_CLIENT_SECRET" \
+  --lat 51.5 --lon -0.1 --radius-nm 50 --site-id 1
 ```
+
+Each imported NOTAM becomes a `restricted` zone shaped as the **search
+circle actually queried to find it** (`center_lat`/`center_lon`/`radius_nm`,
+turned into a 16-vertex polygon), not a guess at that NOTAM's own real
+footprint: NOTAM geometry, when present at all, isn't reliably a clean
+polygon the way the facility map's is, and a wrong guessed shape is worse
+than no zone. Every NOTAM found in one fetch shares the identical circle
+-- what distinguishes them is the zone name (`NOTAM <number> (<ICAO
+location>)`), not the shape. This is a deliberate, honest approximation
+("something is active somewhere within this circle"), not the NOTAM's
+precise boundary -- for any NOTAM whose real geometry you actually know
+(e.g. parsed from its raw text), create that zone by hand via
+`POST /api/zones` instead of relying on this one.
 
 **This one genuinely hasn't been validated against a live account** --
 both `api.faa.gov` and its developer-registration flow were unreachable
 from this environment's network, so unlike every other real-protocol
 integration in this README, the request/response shape here is
 documented-but-unverified; treat it as a starting point to confirm against
-your own registered account, not a proven integration. It also
-deliberately returns NOTAMs as a plain list for a human to review rather
-than auto-converting them into zones -- NOTAM geometry, when present at
-all, isn't reliably a clean polygon the way the facility map's is, and a
-wrong guessed restricted-zone shape is worse than no zone.
+your own registered account, not a proven integration.
 
 ## Classification fusion & friendly allowlist
 
@@ -1060,6 +1471,57 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 `drone` from a lower-confidence label (never silently downgraded away from
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
+
+**Classification confidence, distinct from the label**: `Track.classification_confidence`
+(0-1) is how strongly *current* evidence backs whatever label is actually
+stored -- not the winning label, if the two have diverged, since the
+upgrade-only rule above means the stored label can outlive contradicting
+evidence by design. It can fall even while the label itself never
+downgrades: a track marked `drone` early on whose more recent detections
+increasingly look like `bird` keeps its `drone` label but shows falling
+confidence in it, an honest signal instead of either silently downgrading
+or looking exactly as certain as a freshly-reconfirmed track. `GET
+/api/tracks`/`GET /api/tracks/{id}` additionally apply read-time
+staleness decay on top of the as-of-last-detection value `app/tracking.py`
+stores -- a track nobody's heard from in a while decays linearly toward
+`DRONE_CLASSIFICATION_CONFIDENCE_FLOOR` (default `0.3`, never fully zero:
+real evidence did once support it) over `DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS`
+(default `300`), computed fresh on every request rather than kept current
+by a background job. The dashboard's track details panel shows it as a
+**Confidence** meter alongside Maneuvering/Uncertainty in Track quality.
+
+**Severity escalates with sensor-type corroboration**: fusing multiple
+sensors into one classification (above) doesn't by itself change how
+*actionable* an incident is -- a `drone` reading from a single acoustic
+sensor previously got the same severity as one independently confirmed by
+radar+RF+camera together. `app/incidents.py` now escalates a zone-incursion
+or behavioral incident's severity one level (capped at `critical`) once at
+least `DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES` (default `2`)
+distinct sensor types have reported on the opening track, using the same
+recent-detection window classification fusion itself considers
+(`DRONE_FUSION_HISTORY_LIMIT`). The incident's description gets an
+`(escalated: corroborated by N sensor types)` suffix when this fires, so
+it's visible in the Alerts panel and after-action reports why severity is
+higher than the classification alone would suggest.
+
+**Labeling real detections for training**: the missing piece between "no
+labeled dataset" and being able to train a real model is real labeled
+data -- this doesn't create any, but gives you a way to build it up as
+real sensor traffic arrives, rather than hand-editing a CSV. In the
+dashboard, select any track and its **Label training data** section shows
+its most recent detections with four quick-label buttons (drone/bird/
+aircraft/unknown); clicking one calls `PUT /api/detections/{id}/label`,
+and clicking the same one again clears it (undoing a mis-click). This is
+a human's ground-truth label, stored independently of and never
+overwriting the track's own system-derived `classification` -- see
+`app/models.py`'s `Detection.human_label` docstring. Once you've labeled
+enough real detections, `GET /api/ml/training-data/export` returns them
+as a CSV in exactly the shape `app/ml/train.py --csv` expects:
+
+```bash
+curl -o labeled.csv http://127.0.0.1:8000/api/ml/training-data/export
+python -m app.ml.train --csv labeled.csv --out model.joblib
+```
 
 **ML-based classification (optional, `app/ml/`)**: each detection's label
 is currently decided by `app/classification.py`'s rule (sensor type +
@@ -1075,14 +1537,70 @@ export DRONE_ML_MODEL_PATH=model.joblib
 ```
 
 Once configured, `app/fusion.py` consults the trained model as a first
-opinion for each detection, falling back to the rule-based classifier only
-when unconfigured (the default) or the model has no opinion. `app/ml/train.py`'s
-own docstring documents the expected CSV columns. **Only ever point
-`DRONE_ML_MODEL_PATH` at a model file you trained yourself or otherwise
-fully trust** -- loading a model file deserializes it via `joblib`
-(pickle under the hood), which can execute arbitrary code for a
-maliciously crafted file, the same risk class as unpickling any other
-untrusted data.
+opinion for each detection, falling back to the rule-based classifier when
+unconfigured (the default), the model has no opinion, **or the model's own
+top-class probability is below `DRONE_ML_CONFIDENCE_THRESHOLD`** (default
+`0.6`) -- a genuinely uncertain prediction (e.g. 0.3 for the winning class
+in a 4-class problem, barely better than a coin flip) doesn't get to
+silently override well-tested rule-based logic just because *some* model
+file happens to be configured. `app/ml/train.py`'s own docstring documents
+the expected CSV columns. **Only ever point `DRONE_ML_MODEL_PATH` at a
+model file you trained yourself or otherwise fully trust** -- loading a
+model file deserializes it via `joblib` (pickle under the hood), which can
+execute arbitrary code for a maliciously crafted file, the same risk class
+as unpickling any other untrusted data.
+
+Training itself (`python -m app.ml.train`) does more than fit-and-save:
+it reports `k`-fold cross-validation accuracy alongside the single
+held-out split (a single split's accuracy is noisy, especially on the
+small datasets a first real labeled set is likely to be), prints feature
+importances so you can see what the model actually learned, trains with
+`class_weight="balanced"` (real labeled detections won't arrive evenly
+split across drone/bird/aircraft/unknown -- without this a classifier can
+score deceptively well on accuracy alone by mostly predicting whichever
+class is most common), and rejects any label with fewer than 2 rows with
+a clear error up front rather than crashing deep inside scikit-learn.
+Feature extraction (`app/ml/features.py`) also derives an
+`rf_signature_match_confidence` feature from the same known-drone-
+control-link RF envelope matching (`app/rf_signatures.py`) that
+`app/fusion.py` already uses to boost confidence for a rule-based RF
+classification -- real, already-computed domain signal, not anything
+fabricated, given to the model as an additional feature to learn from.
+
+**Acoustic classification (optional, `app/ml/train_acoustic.py` +
+`app/ml/acoustic_model.py`)**: a separate, parallel piece of scaffolding
+for `app/adapters/acoustic_array_bridge.py`, which otherwise reports a
+single flat, manually-estimated `--confidence` for every detection --
+no classification of the actual rotor/propeller acoustic signature, only
+beamforming's real bearing estimate. `app/acoustic_features.py` extracts
+MFCCs (Mel-Frequency Cepstral Coefficients, the standard spectral
+features for this) from a recorded audio block via textbook DSP (framing
++ Hamming window -> power spectrum -> triangular mel filterbank -> log ->
+DCT-II) -- pure numpy, no new dependency for that step:
+
+```bash
+pip install -r requirements-ml.txt   # same scikit-learn/joblib as above
+
+# One subdirectory per label, each full of your own labeled .wav
+# recordings -- same trainable label set as app.ml.train (not "friendly"):
+#   data/acoustic/drone/*.wav
+#   data/acoustic/bird/*.wav
+#   data/acoustic/aircraft/*.wav
+#   data/acoustic/unknown/*.wav
+python -m app.ml.train_acoustic --data-dir data/acoustic --out acoustic_model.joblib
+export DRONE_ACOUSTIC_ML_MODEL_PATH=acoustic_model.joblib
+```
+
+Once configured, `acoustic_array_bridge.py`'s `watch()` consults the
+trained model for each recorded block, using its predicted DRONE-class
+probability as `--confidence` instead of the manual value -- falling back
+to `--confidence` exactly as before whenever the model has no opinion (the
+same "no opinion below `DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD`" gating
+`app/ml/model.py` already uses, default `0.6`) or isn't configured at all.
+Every array channel is averaged into one signal before MFCC extraction --
+classification doesn't need the array's spatial information, only its
+combined spectral content, unlike beamforming's own bearing estimate.
+Same joblib/pickle security note as above applies here too.
 
 A detection votes `friendly` only if its `raw_data` carries an
 `operator_id` matching a registered authorized operator **and** a valid
@@ -1219,8 +1737,14 @@ can't set it to fake a position out of the signature's scope.
 - **Track history export**: `GET /api/tracks/{track_id}/history/export?format=gpx|kml|csv`
   returns the same history as a downloadable file for an external tool --
   GPX or KML for a GIS/mapping application (Google Earth, QGIS, ...), CSV
-  for a spreadsheet -- instead of only being usable from this app's own
-  API/dashboard.
+  for a spreadsheet. The track details panel's Export button drives this
+  directly (format picker, downloads as `track-<uid>.<format>`) -- an
+  operator doesn't need to know the endpoint exists. A Copy button next
+  to it copies a plain-text summary of the selected track (classification,
+  category, position, altitude, heading, speed, last seen) to the
+  clipboard, for pasting into a chat/radio-log/incident note -- only
+  fields the track actually has data for, "unknown" for the rest, never a
+  guess.
 - **Structured logging**: `DRONE_LOG_FORMAT=json` emits one JSON object per
   log line instead of human-readable text, for log aggregators.
 - **Metrics**: `GET /api/metrics` in Prometheus exposition format -- two
@@ -1240,21 +1764,50 @@ can't set it to fake a position out of the signature's scope.
 - **Outbound alerting**: set `DRONE_WEBHOOK_URLS` (comma-separated) to POST
   each incident's JSON to one or more generic webhooks when it opens.
   On top of that, `app/alerting.py` adds severity-routed integrations for
-  Slack, PagerDuty, and SMS (via Twilio), each independently configured
-  (empty/unset = disabled) with its own minimum-severity threshold -- an
-  escalation policy, so e.g. every incident can reach Slack for situational
-  awareness while only `high`+ pages PagerDuty and only `critical` sends an
-  SMS, instead of one severity treatment for every channel:
+  Slack, PagerDuty, SMS (via Twilio), and Meshtastic, each independently
+  configured (empty/unset = disabled) with its own minimum-severity
+  threshold -- an escalation policy, so e.g. every incident can reach
+  Slack for situational awareness while only `high`+ pages PagerDuty and
+  only `critical` sends an SMS, instead of one severity treatment for
+  every channel:
 
   | Channel | Enable with | Threshold var (default) |
   |---|---|---|
   | Slack | `DRONE_SLACK_WEBHOOK_URL` | `DRONE_SLACK_MIN_SEVERITY` (`low`) |
   | PagerDuty | `DRONE_PAGERDUTY_ROUTING_KEY` | `DRONE_PAGERDUTY_MIN_SEVERITY` (`high`) |
   | SMS (Twilio) | `DRONE_TWILIO_ACCOUNT_SID`/`_AUTH_TOKEN`/`_FROM_NUMBER` + `DRONE_SMS_TO_NUMBERS` | `DRONE_SMS_MIN_SEVERITY` (`critical`) |
+  | Meshtastic | `DRONE_MESHTASTIC_HOSTNAME` | `DRONE_MESHTASTIC_MIN_SEVERITY` (`medium`) |
 
   Every channel is best-effort with a short timeout (`DRONE_ALERT_TIMEOUT_SECONDS`)
   -- a dead or misconfigured integration logs a warning and is skipped, it
   can't block incident handling or take the other channels down with it.
+
+  **Meshtastic** is the odd one out on purpose: every other channel above
+  needs internet or cell connectivity, which a genuinely off-grid
+  deployment doesn't have. It talks to a Meshtastic node's TCP API
+  (`meshtastic.tcp_interface.TCPInterface`) -- a node reachable on the
+  local network (bridged onto the LAN over WiFi, or a Pi-attached radio),
+  not the node's own LoRa radio directly:
+  ```bash
+  pip install -r requirements-meshtastic.txt
+  export DRONE_MESHTASTIC_HOSTNAME=192.168.1.50   # the node's LAN address
+  export DRONE_MESHTASTIC_CHANNEL_INDEX=0          # which mesh channel to send on
+  ```
+- **Mitigation-system notification** (`app/mitigation.py`, optional, off by
+  default): a deliberate decision, not an omission -- this app is a
+  passive-detection/tracking tool and doesn't own, drive, or claim any
+  authority over mitigation hardware (an RF jammer, net gun, interdiction
+  platform, ...), but it can *tell* one a qualifying incident opened.
+  Structurally identical to the human-facing channels above (severity-
+  gated, best-effort, short-timeout webhook POST), just aimed at an
+  automated system instead of a person, and carrying what such a system
+  actually needs to act -- the offending track's current position,
+  classification, and heading/speed, not just "something happened."
+  Enable with `DRONE_MITIGATION_WEBHOOK_URL`; `DRONE_MITIGATION_MIN_SEVERITY`
+  (default `high`) gates it the same way the channels above do. What a
+  receiving system does with the notification -- jam, track-and-follow,
+  ignore -- is entirely its own decision and its own legal/operational
+  responsibility, not this app's.
 - **Message-queue fan-out** (`app/queue_publisher.py`, optional): set
   `DRONE_NATS_URL` (e.g. `nats://broker-host:4222`) to additionally publish
   a JSON copy of every ingested detection and opened incident onto a NATS
@@ -1311,6 +1864,54 @@ request that never completed) only, not on an ordinary 429 -- the rate
 limiter correctly rejecting excess load under this script's intentionally
 saturating traffic is expected, not a regression, and would otherwise make
 this job flaky for a reason that has nothing to do with correctness.
+
+## Recording and replaying detection traffic
+
+`scripts/replay_detections.py` records real detection traffic from a
+running instance's `GET /api/detections` and replays it against another
+(or the same, later) instance -- useful for reproducing a tracking/
+incident bug against a fresh DB without waiting for it to recur live, or
+for feeding a demo/staging deployment realistic-looking traffic without
+sensors attached:
+
+```bash
+# Save an hour of traffic from a source server to a file:
+python scripts/replay_detections.py record --url http://source:8000 \
+    --start 2026-01-01T00:00:00 --end 2026-01-01T01:00:00 --out captured.jsonl
+
+# Replay it against a target server at 4x speed, timestamps rewritten to
+# "now" (a stale timestamp would just be rejected -- see
+# DRONE_MAX_DETECTION_CLOCK_SKEW_SECONDS above) with the recorded
+# inter-detection spacing preserved so a track's motion looks like it did
+# the first time instead of arriving all at once:
+python scripts/replay_detections.py replay --url http://target:8000 \
+    --in captured.jsonl --speed 4 --api-key $DRONE_API_KEY
+```
+
+Like `load_test.py`, this isn't part of the pytest suite or CI -- it talks
+to a real running server, not a fixture.
+
+## Terminal admin client
+
+`scripts/drone_cli.py` is a terminal client for a running instance's HTTP
+API -- for the field-kit scenario where an operator needs to check tracks/
+incidents/sensors or acknowledge/resolve an incident but the dashboard's
+browser (or its Leaflet/CDN map tiles) isn't available, and for scripting
+routine checks without hand-rolling curl/jq. Every subcommand wraps one
+existing API endpoint; it adds no server-side behavior of its own:
+
+```bash
+python scripts/drone_cli.py --url http://127.0.0.1:8000 tracks list --status active
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents list --status open
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents acknowledge 42
+python scripts/drone_cli.py --url http://127.0.0.1:8000 incidents resolve 42
+python scripts/drone_cli.py --url http://127.0.0.1:8000 sensors list
+python scripts/drone_cli.py --url http://127.0.0.1:8000 zones list
+```
+
+`--url`/`--api-key` can also come from `DRONE_URL`/`DRONE_API_KEY` env
+vars. Add `--json` to any command for raw JSON instead of a table (for
+piping into `jq` or another script).
 
 **Last recorded results** (this container's CPU, single instance, rate
 limiting raised via `DRONE_RATE_LIMIT_PER_SECOND`/`_BURST` to measure the
@@ -1385,6 +1986,9 @@ needs to be set to run locally.
 | `DRONE_ZONES_SEED_PATH` | `app/zones.seed.json` | Zone seed file, loaded at startup |
 | `DRONE_RF_SIGNATURES_PATH` | unset | Operator-supplied RF signatures JSON file (see "RF signature fingerprinting" below); no default -- unlike zones, this app ships no bundled file since it has no real per-model data to bundle |
 | `DRONE_ML_MODEL_PATH` | unset | Trained model file (see "ML-based classification" above); no default -- this app ships no trained model |
+| `DRONE_ML_CONFIDENCE_THRESHOLD` | `0.6` | Minimum top-class probability before a configured model's prediction is trusted over the rule-based classifier |
+| `DRONE_ACOUSTIC_ML_MODEL_PATH` | unset | Trained acoustic model file (see "Acoustic classification" above); no default -- this app ships no trained model |
+| `DRONE_ACOUSTIC_ML_CONFIDENCE_THRESHOLD` | `0.6` | Same role as `DRONE_ML_CONFIDENCE_THRESHOLD`, for the acoustic model |
 | `DRONE_LOG_LEVEL` | `INFO` | Logging level |
 | `DRONE_LOG_FORMAT` | `text` | `text` or `json` (structured, one object per line) |
 | `DRONE_API_KEY` | *(unset)* | Legacy single key, granted the `admin` role. Prefer `DRONE_API_KEYS` for real deployments |
@@ -1409,6 +2013,10 @@ needs to be set to run locally.
 | `DRONE_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM_NUMBER` | *(unset)* | Twilio credentials for SMS alerts |
 | `DRONE_SMS_TO_NUMBERS` | *(unset)* | Comma-separated destination numbers for SMS alerts |
 | `DRONE_SMS_MIN_SEVERITY` | `critical` | Minimum incident severity that sends an SMS |
+| `DRONE_MESHTASTIC_HOSTNAME` | *(unset)* | LAN address of a Meshtastic node's TCP API, for off-grid alerting |
+| `DRONE_MESHTASTIC_PORT` | `4403` | Meshtastic node's TCP API port |
+| `DRONE_MESHTASTIC_CHANNEL_INDEX` | `0` | Which mesh channel to send incident alerts on |
+| `DRONE_MESHTASTIC_MIN_SEVERITY` | `medium` | Minimum incident severity that sends a Meshtastic alert |
 | `DRONE_ALERT_TIMEOUT_SECONDS` | `5` | Per-request timeout for Slack/PagerDuty/SMS alerts |
 | `DRONE_NATS_URL` | *(unset)* | NATS broker URL to additionally publish detections/incidents to; unset disables it |
 | `DRONE_NATS_DETECTION_SUBJECT` | `drone.detections` | NATS subject each ingested detection is published to |
@@ -1436,6 +2044,9 @@ needs to be set to run locally.
 | `DRONE_COT_UDP_PORT` | `6969` | TAK endpoint UDP port |
 | `DRONE_COT_STALE_SECONDS` | `60` | How long a CoT event is valid before a TAK client greys it out |
 | `DRONE_FUSION_HISTORY_LIMIT` | `50` | Max recent detections per track fed into classification fusion |
+| `DRONE_INCIDENT_CORROBORATION_MIN_SENSOR_TYPES` | `2` | Distinct sensor types needed to escalate an incident's severity one level |
+| `DRONE_CLASSIFICATION_CONFIDENCE_DECAY_SECONDS` | `300` | Time for a stale track's `classification_confidence` to decay to the floor |
+| `DRONE_CLASSIFICATION_CONFIDENCE_FLOOR` | `0.3` | Floor `classification_confidence` decays toward, never below |
 | `DRONE_TRACK_TIME_GATE_SECONDS` | `30` | Max age gap for a detection to join a track |
 | `DRONE_TRACK_DISTANCE_GATE_M` | `500` | Max distance for a detection to join a track |
 | `DRONE_TRACK_STALE_SECONDS` | `30` | Active track goes `lost` after this many quiet seconds |
@@ -1526,6 +2137,14 @@ resolve to `ingest`/`viewer`/`operator`/`admin` or it falls back to
 field — or the default site if absent/unset). An `X-API-Key` header still
 takes priority over a session cookie when both are present, so existing
 sensor/automation integrations are entirely unaffected by turning this on.
+
+The dashboard surfaces this itself, not just the raw `/auth/login`
+redirect: `GET /auth/config` (unauthenticated) tells it whether SSO is
+even configured, so the auth bar's "or log in with SSO" link only appears
+on a deployment that actually turned it on. Once authenticated (either
+way), `GET /api/me` reports who as — the topbar shows `name (role)`, with
+a "Log out" link (`/auth/logout`) that only appears for an SSO session,
+since a static API key has nothing to log out of.
 
 **Multi-site**: every record (tracks, detections, incidents, zones,
 sensor/operator registrations) belongs to exactly one *site* (a physical
