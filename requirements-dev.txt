@@ -6,7 +6,7 @@ httpx==0.28.1
 # (falls back to httpx with a StarletteDeprecationWarning otherwise) --
 # httpx2 is httpx's successor for exactly this ASGI-test-client role.
 httpx2==2.12.0
-ruff==0.16.3
+ruff==0.16.5
 mypy==2.3.1
 bandit==1.9.4
 # Only for tests/test_load_test_script.py, which imports scripts/
@@ -14,7 +14,7 @@ bandit==1.9.4
 # unit-test its error-classification logic -- that script needs `requests`
 # to make HTTP calls when actually run, same version pinned in
 # requirements-e2e.txt.
-requests==2.33.1
+requests==2.34.2
 # Only for tests/test_alembic_migrations.py's schema-drift guard (compares
 # app/schema.py against what init_db() actually creates) -- not needed to
 # run the app itself; see requirements-migrations.txt/migrations/README.md
@@ -27,7 +27,7 @@ alembic==1.19.1
 # two real mismatches between this sample code and the SDK's actual field
 # names/types during development) instead of silently never running them.
 # Same version pinned in requirements-lattice.txt.
-anduril-lattice-sdk==4.27.0
+anduril-lattice-sdk==4.29.1
 # Only needed if DRONE_OIDC_* is set (see app/oidc.py) -- installed here so
 # CI actually exercises the real OIDC login flow (tests/test_oidc_*.py run
 # it end-to-end against a local stub OIDC provider) instead of skipping it.
@@ -38,5 +38,5 @@ authlib==1.7.2
 # `python -m app.ml.train` (see app/ml/) -- installed here so CI actually
 # trains and exercises a real scikit-learn model in tests/test_ml_*.py
 # instead of skipping them. Same versions pinned in requirements-ml.txt.
-scikit-learn==1.7.2
+scikit-learn==1.9.0
 joblib==1.5.3
