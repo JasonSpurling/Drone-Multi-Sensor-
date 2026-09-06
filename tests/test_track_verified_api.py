@@ -26,6 +26,20 @@ def test_single_sensor_track_is_unverified(isolated_db):
         track = client.get(f"/api/tracks/{track_id}").json()
         assert track["corroborating_sensor_types"] == 1
         assert track["verified"] is False
+        assert track["contributing_sensor_types"] == ["radar"]
+
+
+def test_contributing_sensor_types_lists_every_distinct_type(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=_detection("radar-1", "radar"))
+        track_id = r.json()["track_id"]
+        client.post(
+            "/api/detections",
+            json=_detection("cam-1", "camera", latitude=51.5001, longitude=-0.1001),
+        )
+
+        track = client.get(f"/api/tracks/{track_id}").json()
+        assert track["contributing_sensor_types"] == ["camera", "radar"]
 
 
 def test_multi_sensor_track_is_verified(isolated_db):

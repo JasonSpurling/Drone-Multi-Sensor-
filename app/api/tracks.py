@@ -5,9 +5,9 @@ from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_
 from app.config import INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
 from app.db import get_sensor_registration, get_track, list_detections, list_tracks, record_audit, update_track
 from app.export import to_csv, to_gpx, to_kml
-from app.fusion import corroborating_sensor_type_count, decay_classification_confidence
+from app.fusion import contributing_sensor_types, decay_classification_confidence
 from app.live import publish as publish_live_event
-from app.models import Detection, Track, TrackClassificationInput, TrackStatus
+from app.models import Classification, Detection, Track, TrackClassificationInput, TrackIgnoreInput, TrackStatus
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
@@ -45,7 +45,9 @@ def _with_computed_fields(track: Track) -> Track:
     pays once per opened incident, just now also paid per read here.
     """
     track = _with_decayed_confidence(track)
-    track.corroborating_sensor_types = corroborating_sensor_type_count(track)
+    types = contributing_sensor_types(track)
+    track.contributing_sensor_types = sorted(types)
+    track.corroborating_sensor_types = len(types)
     track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
     return track
 
@@ -80,19 +82,23 @@ def classify_track(
     principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
 ) -> Track:
     """An operator's deliberate override -- "that's our security team's
-    drone" (friendly) or "confirmed hostile" (drone) -- distinct from the
+    drone" (friendly), "confirmed hostile" (drone), or "Neutral" (clear my
+    own earlier call, go back to unclassified) -- distinct from the
     automated fusion ratchet that normally sets Track.classification (see
     that field's own docstring for why it's upgrade-only and never just
     manually reset there). Since a human just looked at this and made the
-    call, classification_confidence is set to 1.0 -- the same "nothing
-    left to be uncertain about" reasoning an acknowledged incident's
-    status carries, not a guess at how confident to report.
+    FRIENDLY/DRONE call, classification_confidence is set to 1.0 -- the
+    same "nothing left to be uncertain about" reasoning an acknowledged
+    incident's status carries, not a guess at how confident to report.
+    UNKNOWN gets None instead, per that field's own docstring ("no
+    meaningful confidence in not knowing") -- "Neutral" is reverting the
+    override, not a confident claim of its own.
     """
     track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     track.classification = body.classification
-    track.classification_confidence = 1.0
+    track.classification_confidence = None if body.classification == Classification.UNKNOWN else 1.0
     updated = update_track(track)
     record_audit(
         site_id=principal.site_id,
@@ -100,6 +106,34 @@ def classify_track(
         action="track.classify",
         target=str(track_id),
         detail=body.classification.value,
+    )
+    if updated.site_id is not None:
+        publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
+    return _with_computed_fields(updated)
+
+
+@router.post("/tracks/{track_id}/ignore", response_model=Track)
+def ignore_track(
+    track_id: int,
+    body: TrackIgnoreInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> Track:
+    """An operator's deliberate "stop alerting on this" suppression -- see
+    Track.ignored's docstring for what it actually changes (new incidents
+    only; nothing about the track itself is hidden or altered). Toggled
+    back off the same way, with ignored=false.
+    """
+    track = get_track(track_id, principal.site_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    track.ignored = body.ignored
+    updated = update_track(track)
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.ignore" if body.ignored else "track.unignore",
+        target=str(track_id),
+        detail="",
     )
     if updated.site_id is not None:
         publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})

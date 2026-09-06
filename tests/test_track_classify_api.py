@@ -48,14 +48,32 @@ def test_classify_as_drone_works_too(isolated_db):
         assert classified.json()["classification"] == "drone"
 
 
-def test_classify_rejects_values_outside_friendly_or_drone(isolated_db):
+def test_classify_as_unknown_reverts_the_override_and_clears_confidence(isolated_db):
+    """The "Neutral" action: clear a previous Friend/Foe override and let
+    automatic classification start fresh -- classification_confidence
+    goes to None (not 1.0), since reverting an override isn't itself a
+    confident claim -- see classify_track's docstring.
+    """
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=DETECTION_BODY)
+        track_id = r.json()["track_id"]
+        client.post(f"/api/tracks/{track_id}/classify", json={"classification": "friendly"})
+
+        neutral = client.post(f"/api/tracks/{track_id}/classify", json={"classification": "unknown"})
+        assert neutral.status_code == 200
+        body = neutral.json()
+        assert body["classification"] == "unknown"
+        assert body["classification_confidence"] is None
+
+
+def test_classify_rejects_values_outside_friendly_drone_or_unknown(isolated_db):
     with TestClient(app) as client:
         r = client.post("/api/detections", json=DETECTION_BODY)
         track_id = r.json()["track_id"]
 
         # Reclassifying as "bird" or "aircraft" is what sensor evidence is
         # for, not an operator override -- see TrackClassificationInput's
-        # docstring for why this endpoint restricts to friendly/drone only.
+        # docstring for why this endpoint restricts to friendly/drone/unknown.
         rejected = client.post(f"/api/tracks/{track_id}/classify", json={"classification": "bird"})
         assert rejected.status_code == 422
 

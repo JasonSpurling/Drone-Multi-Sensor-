@@ -92,6 +92,7 @@ _TABLE_MIGRATION_COLUMNS = {
         "site_id": "INTEGER",
         "aircraft_category": "VARCHAR(2)",
         "classification_confidence": "REAL",
+        "ignored": "INTEGER DEFAULT 0",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
@@ -629,11 +630,11 @@ def create_track(track: Track) -> Track:
                     (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
                      position_uncertainty_m, maneuver_probability, aircraft_category,
-                     classification_confidence)
+                     classification_confidence, ignored)
                 VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
                         :position_uncertainty_m, :maneuver_probability, :aircraft_category,
-                        :classification_confidence)
+                        :classification_confidence, :ignored)
                 RETURNING id
                 """
             ),
@@ -653,6 +654,7 @@ def create_track(track: Track) -> Track:
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
+                "ignored": int(track.ignored),
             },
         ).one()
         track.id = row.id
@@ -670,7 +672,7 @@ def update_track(track: Track) -> Track:
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
                     position_uncertainty_m = :position_uncertainty_m,
                     maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category,
-                    classification_confidence = :classification_confidence
+                    classification_confidence = :classification_confidence, ignored = :ignored
                 WHERE id = :id
                 """
             ),
@@ -687,6 +689,7 @@ def update_track(track: Track) -> Track:
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
+                "ignored": int(track.ignored),
                 "id": track.id,
             },
         )
@@ -737,6 +740,7 @@ def _row_to_track(row) -> Track:
         maneuver_probability=row["maneuver_probability"],
         aircraft_category=row["aircraft_category"],
         classification_confidence=row["classification_confidence"],
+        ignored=bool(row["ignored"]),
     )
 
 

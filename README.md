@@ -384,6 +384,12 @@ track never jumps into a different group's position and gets mistaken
 for a different kind of object. The choice is remembered per-browser
 (like the theme toggle) so it persists across reloads.
 
+Each card also shows a **Duration** (`first_seen` -> now, real elapsed
+time, not a countdown) and, when a registered camera is near enough to
+cue on that track (the same `nearestCameraSensor()` lookup the details
+panel's Live view tab uses), a **PTZ** badge -- both purely derived from
+existing data, no new tracking state.
+
 ### Verified/Unverified tracks
 
 The Tracks panel splits into two sub-tabs, **Verified** and **Unverified**
@@ -400,8 +406,16 @@ actually shows up first.
 
 This is independent of a separate Verified/Unverified filter at the
 bottom of the map itself, which controls which diamonds plot there
-(defaults to showing both) without touching which half of the *list* is
-showing.
+without touching which half of the *list* is showing -- one diamond chip
+per classification actually present in each bucket (not a flat two-way
+toggle), each independently togglable, plus an ALL reset per row; every
+chip is on by default.
+
+`contributing_sensor_types` -- which sensor types, not just how many --
+is the same corroboration set, surfaced on the map itself in a selected
+track's tooltip (`trackMapPopupHtml()` in `dashboard.html`) alongside its
+Verified/Unverified state, so an operator can see at a glance why a track
+is Verified without opening the full details panel.
 
 ### Track details tabs
 
@@ -1569,17 +1583,30 @@ one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
 
 **An operator's deliberate override, distinct from the automated vote
-above**: `POST /api/tracks/{id}/classify` (body `{"classification": "friendly"}`
-or `{"classification": "drone"}`) sets `Track.classification` directly
-and its confidence to `1.0` -- "that's our own authorized drone" or "I've
-personally confirmed this is hostile," not another vote for `app.fusion`
-to weigh. Restricted to just those two values (not the full
-`Classification` enum): an operator watching the dashboard is making
-exactly one of two calls, not reclassifying something as a bird or an
-aircraft, which is what sensor evidence itself is for. Surfaced as
-**Friend**/**Foe** buttons in the dashboard's track details panel; audited
-(`track.classify`) like every other operator action (`app/db.py`'s
-`record_audit`).
+above**: `POST /api/tracks/{id}/classify` (body `{"classification": "friendly"}`,
+`{"classification": "drone"}`, or `{"classification": "unknown"}`) sets
+`Track.classification` directly -- "that's our own authorized drone," "I've
+personally confirmed this is hostile," or "never mind, clear my own
+earlier call and let the automated vote decide again" -- not another vote
+for `app.fusion` to weigh. `classification_confidence` goes to `1.0` for
+friendly/drone (nothing left to be uncertain about) and back to `None` for
+unknown (reverting an override isn't a confident claim of its own).
+Restricted to just those three values (not the full `Classification`
+enum): an operator watching the dashboard is making one of three calls,
+not reclassifying something as a bird or an aircraft, which is what
+sensor evidence itself is for. Surfaced as **Friend**/**Foe**/**Neutral**
+buttons in the dashboard's track details panel; audited (`track.classify`)
+like every other operator action (`app/db.py`'s `record_audit`).
+
+**Suppressing alerts without touching classification**: `POST
+/api/tracks/{id}/ignore` (body `{"ignored": true}`) sets `Track.ignored` --
+an **Ignore** button in the dashboard, alongside Friend/Foe/Neutral. An
+ignored track is never hidden or altered (it keeps updating, tracking, and
+showing up in the list -- just dimmed, with an "Ignored" badge); the only
+thing that actually changes is that `app.incidents` never opens a new
+zone-incursion or behavioral incident for it (`_open_incident` and
+`_open_behavioral_incident` both check the flag first). Toggle back off
+with `{"ignored": false}` (**Unignore**).
 
 **Classification confidence, distinct from the label**: `Track.classification_confidence`
 (0-1) is how strongly *current* evidence backs whatever label is actually

@@ -217,24 +217,50 @@ class Track(BaseModel):
         "not a second, differently-tuned definition of 'verified' invented just for this field. "
         "The dashboard's Verified/Unverified track grouping is exactly this.",
     )
+    contributing_sensor_types: list[str] | None = Field(
+        default=None,
+        description="Which distinct sensor types (the same recent-detection window "
+        "app.fusion.corroborating_sensor_type_count considers) have actually contributed a "
+        "detection to this track -- e.g. ['radar', 'camera']. Read-time-only, same as "
+        "corroborating_sensor_types/verified above (its len() is that count); not populated on "
+        "a Track built any other way.",
+    )
+    ignored: bool = Field(
+        default=False,
+        description="An operator's deliberate 'stop alerting on this' suppression -- unlike "
+        "`classification`, this is persisted (POST /api/tracks/{id}/ignore), not read-time-only. "
+        "A zone/behavioral incident is never opened for an ignored track (app.incidents._open_incident "
+        "and ._open_behavioral_incident both check it first); the track itself keeps updating and "
+        "showing up everywhere else exactly as before -- ignoring never hides or deletes data, only "
+        "suppresses new incidents from it.",
+    )
 
 
 class TrackClassificationInput(BaseModel):
     """Body for POST /api/tracks/{id}/classify -- a deliberate operator
-    override ("that's our security team's drone", "confirmed hostile"),
-    distinct from the automated fusion ratchet that normally sets
+    override ("that's our security team's drone", "confirmed hostile", or
+    "never mind, forget that call and let automatic classification start
+    fresh"), distinct from the automated fusion ratchet that normally sets
     Track.classification (see that field's own docstring). Restricted to
-    FRIENDLY and DRONE, not the full Classification enum: an operator
-    watching the dashboard is making exactly one of two calls -- this is
-    ours (friendly) or this is the thing we're watching for (confirmed
-    drone) -- not reclassifying a track as a bird or an aircraft, which is
-    what the sensor evidence itself is for. Mirrors the same "automatic
-    system decision vs. a human's deliberate override" split already
-    established between app.incidents' auto-close logic and the operator-
-    driven POST /api/incidents/{id}/resolve.
+    FRIENDLY, DRONE, and UNKNOWN, not the full Classification enum: an
+    operator watching the dashboard is making one of three calls -- this
+    is ours (friendly), this is the thing we're watching for (confirmed
+    drone), or clear my own earlier call and go back to unclassified (the
+    "Neutral" action) -- never reclassifying a track as a bird or an
+    aircraft, which is what the sensor evidence itself is for, not an
+    operator's manual say-so. Mirrors the same "automatic system decision
+    vs. a human's deliberate override" split already established between
+    app.incidents' auto-close logic and the operator-driven POST
+    /api/incidents/{id}/resolve.
     """
 
-    classification: Literal[Classification.FRIENDLY, Classification.DRONE]
+    classification: Literal[Classification.FRIENDLY, Classification.DRONE, Classification.UNKNOWN]
+
+
+class TrackIgnoreInput(BaseModel):
+    """Body for POST /api/tracks/{id}/ignore -- see Track.ignored's docstring."""
+
+    ignored: bool
 
 
 class Incident(BaseModel):

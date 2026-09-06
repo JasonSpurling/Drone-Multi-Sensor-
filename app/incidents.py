@@ -114,6 +114,8 @@ def _open_incident(
     # in each, since a None id can't be looked up or referenced by a
     # foreign key anyway.
     assert track.id is not None and zone.id is not None and track.site_id is not None
+    if track.ignored:
+        return None
     if get_open_incident(track.id, zone.id, incident_type.value, track.site_id) is not None:
         return None
     base_severity = _SEVERITY_BY_CLASSIFICATION.get(track.classification, IncidentSeverity.MEDIUM)
@@ -164,7 +166,7 @@ _BEHAVIORAL_SEVERITY = {
 def _open_behavioral_incident(
     track: Track, incident_type: IncidentType, description: str, *, related_track_id: int | None = None
 ) -> Incident | None:
-    if track.id is None or track.site_id is None:
+    if track.id is None or track.site_id is None or track.ignored:
         return None
     if get_open_behavioral_incident(
         track.id, incident_type.value, track.site_id, related_track_id=related_track_id

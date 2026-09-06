@@ -65,6 +65,15 @@ def test_no_incident_for_track_outside_zone(site_id):
     assert check_zone_incidents(make_track(site_id, latitude=60.0, longitude=60.0)) == []
 
 
+def test_no_incident_for_an_ignored_track_even_inside_a_restricted_zone(site_id):
+    """An operator's Ignore action (Track.ignored, POST /api/tracks/{id}
+    /ignore) suppresses new incidents -- checked in _open_incident itself,
+    so this holds for every incident type, not just zone incursions.
+    """
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    assert check_zone_incidents(make_track(site_id, ignored=True)) == []
+
+
 def test_no_incident_for_non_restricted_zone(site_id):
     create_zone(Zone(site_id=site_id, name="monitor-zone", zone_type=ZoneType.MONITORING, polygon=SQUARE))
     assert check_zone_incidents(make_track(site_id)) == []

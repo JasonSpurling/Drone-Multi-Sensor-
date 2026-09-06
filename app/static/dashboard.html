@@ -270,6 +270,13 @@
   }
   .track-card:hover { background: var(--panel-2); }
   .track-card.selected { background: var(--hover-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .track-card.ignored { opacity: 0.55; }
+  .ptz-badge, .ignored-badge {
+    display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.03em;
+    border-radius: 3px; padding: 1px 4px; vertical-align: middle; margin-left: 4px;
+  }
+  .ptz-badge { background: var(--panel-2); border: 1px solid var(--accent); color: var(--accent); }
+  .ignored-badge { background: var(--panel-2); border: 1px solid var(--muted); color: var(--muted); }
   .track-thumb {
     position: relative;
     width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
@@ -365,20 +372,27 @@
   /* Bottom map-level Verified/Unverified filter -- independent of the
      Tracks panel's own Verified/Unverified sub-tabs (state.trackVerifiedTab):
      that one decides which half of the *list* shows; this one decides
-     which diamonds render on the *map*, and defaults to showing both. */
+     which diamonds render on the *map*, per classification color, and
+     defaults to showing everything. Two rows (Verified targets/Unverified
+     targets), each with one diamond chip per classification actually
+     present in that bucket right now, plus an ALL reset. */
   #map-verify-filter {
     position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
-    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 999px;
-    padding: 5px; backdrop-filter: blur(4px); display: flex; gap: 4px;
+    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px 8px; backdrop-filter: blur(4px);
+    display: flex; flex-direction: column; gap: 4px;
   }
+  .map-verify-row { display: flex; align-items: center; gap: 6px; }
+  .map-verify-row .row-label { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; min-width: 78px; }
   button.map-verify-chip {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 5px;
     background: transparent; border: 1px solid transparent; border-radius: 999px;
-    padding: 5px 11px; color: var(--muted); font-size: 11px; font-weight: 600;
+    padding: 4px 9px; color: var(--muted); font-size: 11px; font-weight: 600;
     letter-spacing: 0.02em; cursor: pointer;
   }
   button.map-verify-chip:hover { color: var(--text); }
   button.map-verify-chip.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+  button.map-verify-chip.excluded { opacity: 0.4; }
   button.map-verify-chip .diamond { font-size: 10px; line-height: 1; }
   #map-empty-state {
     position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -714,8 +728,8 @@
   </div>
 
   <div id="map-verify-filter" style="display:none;">
-    <button class="map-verify-chip active" type="button" data-map-verify="verified" id="map-verify-chip-verified"><span class="diamond" style="color:var(--active);" aria-hidden="true">&#9670;</span> Verified</button>
-    <button class="map-verify-chip active" type="button" data-map-verify="unverified" id="map-verify-chip-unverified"><span class="diamond" style="color:var(--high);" aria-hidden="true">&#9670;</span> Unverified</button>
+    <div class="map-verify-row" id="map-verify-row-verified"><span class="row-label">Verified</span></div>
+    <div class="map-verify-row" id="map-verify-row-unverified"><span class="row-label">Unverified</span></div>
   </div>
 
   <aside class="floating-panel" id="left-panel">
@@ -855,9 +869,10 @@ const state = {
   // switching tabs and back doesn't refetch, cleared on track reselection.
   cameraCue: null,
   // Which diamonds render on the *map* (independent of trackVerifiedTab
-  // above, which only affects the Tracks list) -- both on by default, see
-  // #map-verify-filter's doc comment near its CSS.
-  mapVerifiedFilter: { verified: true, unverified: true },
+  // above, which only affects the Tracks list) -- a classification
+  // excluded from a given verified/unverified bucket, nothing excluded by
+  // default, see #map-verify-filter's doc comment near its CSS.
+  mapClassExcluded: { verified: new Set(), unverified: new Set() },
   // null == showing each track's live position; otherwise an index into
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
@@ -1041,6 +1056,21 @@ function fmtRelative(iso) {
   const diffH = Math.round(diffM / 60);
   if (diffH < 24) return `${diffH}h ago`;
   return `${Math.round(diffH / 24)}d ago`;
+}
+
+// How long a track has existed (first_seen -> now), MM:SS below an hour
+// and H:MM:SS above it -- the "Duration" column a track list like this
+// conventionally shows, real elapsed wall-clock time from Track.first_seen,
+// not a guess or a countdown.
+function fmtDuration(firstSeenIso) {
+  if (!firstSeenIso) return "—";
+  const then = new Date(firstSeenIso + (firstSeenIso.endsWith("Z") ? "" : "Z")).getTime();
+  const totalS = Math.max(0, Math.round((Date.now() - then) / 1000));
+  const h = Math.floor(totalS / 3600);
+  const m = Math.floor((totalS % 3600) / 60);
+  const s = totalS % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
 function escapeHtml(value) {
@@ -1611,11 +1641,11 @@ async function resolveIncident(id) {
 // An operator's deliberate override (POST /api/tracks/{id}/classify) --
 // distinct from the automated fusion ratchet that normally sets
 // Track.classification (see that field's own docstring, and
-// TrackClassificationInput's in app/models.py). Only ever "friendly" or
-// "drone": an operator watching the dashboard is making exactly one of
-// two calls -- this is ours, or this is the thing we're watching for --
-// not reclassifying something as a bird or an aircraft, which is what
-// the sensor evidence itself is for.
+// TrackClassificationInput's in app/models.py). "friendly"/"drone" are
+// the Friend/Foe calls; "unknown" is Neutral -- clearing a previous
+// override and letting automatic classification start fresh. Never a
+// bird/aircraft reclassification, which is what the sensor evidence
+// itself is for, not an operator's manual say-so.
 async function classifyTrack(id, classification) {
   try {
     await fetchJSON(`/api/tracks/${id}/classify`, {
@@ -1627,6 +1657,24 @@ async function classifyTrack(id, classification) {
   } catch (e) {
     if (e instanceof AuthError) showAuthBar(true);
     else showErrorToast("Couldn't update this track's classification — try again.");
+    console.error(e);
+  }
+}
+
+// An operator's "stop alerting on this" suppression (POST /api/tracks/
+// {id}/ignore) -- see Track.ignored's docstring in app/models.py. Toggles
+// both ways from the same button.
+async function setTrackIgnored(id, ignored) {
+  try {
+    await fetchJSON(`/api/tracks/${id}/ignore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ignored }),
+    });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast(`Couldn't ${ignored ? "ignore" : "unignore"} this track — try again.`);
     console.error(e);
   }
 }
@@ -1830,15 +1878,20 @@ function renderTracks() {
           const alertDot = incidents.length
             ? `<span class="track-alert-dot" style="background:${SEVERITY_COLOR[incidents[0].severity] || SEVERITY_COLOR.low}" title="${incidents.length} active alert${incidents.length > 1 ? "s" : ""} (${escapeHtml(incidents[0].severity)})"></span>`
             : "";
-          return `<div class="track-card ${sel}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
+          // Real, not decorative: only shown when a registered camera is
+          // actually near enough to cue on this track (nearestCameraSensor,
+          // the same lookup the details panel's Live view tab uses).
+          const ptzBadge = nearestCameraSensor(t) ? `<span class="ptz-badge" title="A registered camera can cue on this track">PTZ</span>` : "";
+          const ignoredBadge = t.ignored ? `<span class="ignored-badge" title="New alerts suppressed for this track">Ignored</span>` : "";
+          return `<div class="track-card ${sel} ${t.ignored ? "ignored" : ""}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
             <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}${alertDot}</div>
             <div class="track-card-body">
-              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))}</div>
+              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}</div>
               <div class="track-card-sub">
                 <span class="status-dot" style="background:${STATUS_COLOR[t.status] || STATUS_COLOR.closed}"></span>
                 ${escapeHtml(t.status)} ${speed ? "&middot; " + speed : ""}
               </div>
-              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)}</div>
+              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)} &middot; dur ${fmtDuration(t.first_seen)}</div>
             </div>
           </div>`;
         })
@@ -2143,6 +2196,8 @@ function renderDetails() {
     <div class="detail-actions">
       <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
       <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
+      <button class="secondary classify-btn" id="classify-neutral-btn" title="Clear a previous Friend/Foe override and let automatic classification start fresh">Neutral</button>
+      <button class="secondary classify-btn ${track.ignored ? "active" : ""}" id="ignore-toggle-btn" title="${track.ignored ? "Stop suppressing alerts for this track" : "Suppress new alerts for this track (it keeps updating and tracking normally)"}">${track.ignored ? "Unignore" : "Ignore"}</button>
     </div>
     <div class="detail-actions">
       <button class="secondary" id="focus-btn">Focus</button>
@@ -2237,6 +2292,8 @@ function renderDetails() {
   }
   document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
   document.getElementById("classify-foe-btn").addEventListener("click", () => classifyTrack(track.id, "drone"));
+  document.getElementById("classify-neutral-btn").addEventListener("click", () => classifyTrack(track.id, "unknown"));
+  document.getElementById("ignore-toggle-btn").addEventListener("click", () => setTrackIgnored(track.id, !track.ignored));
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
   document.getElementById("follow-btn").addEventListener("click", () => {
     state.follow = !state.follow;
@@ -2675,6 +2732,30 @@ function altitudeColor(altitude_m) {
   return `hsl(${hue}, 80%, 55%)`;
 }
 
+// The selected map marker's tooltip content -- a quick summary plus which
+// sensor *types* actually corroborate this track
+// (track.contributing_sensor_types, the same set
+// app.fusion.contributing_sensor_types computes for the Verified/
+// Unverified grouping), so an operator can see at a glance why a track is
+// Verified without opening the full details panel. Real sensor types
+// that actually reported, never a fixed icon set implying coverage this
+// app doesn't have.
+function trackMapPopupHtml(track) {
+  const sensorBadges = (track.contributing_sensor_types || [])
+    .map((s) => badgeOutline(s, "var(--muted)"))
+    .join(" ");
+  const altitude = track.altitude_m != null ? `${Math.round(track.altitude_m)} m` : "—";
+  const speed = track.speed_mps != null ? `${track.speed_mps.toFixed(1)} m/s` : "—";
+  const heading = track.heading_deg != null ? `${Math.round(track.heading_deg)}°` : "—";
+  return `
+    <div style="min-width:160px;">
+      <div style="font-weight:600; margin-bottom:2px;">Track ${track.id} &middot; ${escapeHtml(GROUP_LABEL[track.classification] || track.classification)}</div>
+      <div style="font-size:11px; color:var(--muted);">${track.verified ? "Verified" : "Unverified"}${sensorBadges ? " &middot; " + sensorBadges : ""}</div>
+      <div style="font-size:11px; margin-top:4px;">Alt ${altitude} &middot; ${speed} &middot; ${heading}</div>
+    </div>
+  `;
+}
+
 function markerIcon(track, selected) {
   let color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
   if (track.classification === "aircraft") {
@@ -2764,7 +2845,7 @@ function renderMap() {
   }
 
   const plottable = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
-  const pts = plottable.filter((t) => (t.verified ? state.mapVerifiedFilter.verified : state.mapVerifiedFilter.unverified));
+  const pts = plottable.filter((t) => !state.mapClassExcluded[t.verified ? "verified" : "unverified"].has(t.classification));
   updateMapVerifyFilter(plottable);
 
   // An empty map reads as "is this even working?" without some signal
@@ -2849,7 +2930,16 @@ function renderMap() {
     if (t.speed_mps != null) labelParts.push(`${t.speed_mps.toFixed(1)} m/s`);
     const label = labelParts.join(" · ");
     if (selected && !scrubbing) {
-      marker.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip" });
+      // The click-to-select "card" this doubles as: unlike a Leaflet
+      // popup (which a click-triggered full renderMap() re-render, right
+      // below, would tear down before it ever painted), a tooltip is
+      // rebuilt fresh on every renderMap() call for whichever marker is
+      // currently selected -- so it survives the very re-render selecting
+      // it causes. Real per-track sensor coverage (trackMapPopupHtml),
+      // not just the brief label an unselected/hovered marker shows.
+      marker.bindTooltip(trackMapPopupHtml(t), {
+        permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip track-tooltip-selected",
+      });
     } else {
       // Non-permanent (hover-only) for an unselected track, and also for
       // the selected track's live marker while scrubbing its history --
@@ -3467,29 +3557,57 @@ function updateVerifyTabCounts(matchingTracks) {
   document.getElementById("verify-tab-unverified").textContent = `Unverified (${unverifiedCount})`;
 }
 
-// Counts + visibility for the map's own Verified/Unverified filter bar --
+// Rebuilds both rows of the map's own Verified/Unverified filter bar --
 // hidden entirely when there's nothing plottable at all (an empty bar
-// floating over an empty map is just noise), shown with live counts
-// otherwise. `plottable` is every currently-visible (search/class-filter-
-// passing) track with a known position, before this filter itself is
-// applied -- so toggling a chip off doesn't make its own count vanish.
+// floating over an empty map is just noise). `plottable` is every
+// currently-visible (search/class-filter-passing) track with a known
+// position, before this filter itself is applied -- so toggling a chip
+// off doesn't make its own row's other chips or counts vanish. Only one
+// diamond chip per classification actually present in that bucket right
+// now (not a fixed set of 5), plus an ALL reset -- rebuilt fresh on every
+// call rather than diffed, same as every other list in this dashboard.
+function renderMapVerifyRow(bucket, tracksInBucket) {
+  const row = document.getElementById(`map-verify-row-${bucket}`);
+  const excluded = state.mapClassExcluded[bucket];
+  const counts = new Map();
+  tracksInBucket.forEach((t) => counts.set(t.classification, (counts.get(t.classification) || 0) + 1));
+  const present = GROUP_ORDER.filter((g) => counts.has(g));
+  const chips = present
+    .map((g) => {
+      const isExcluded = excluded.has(g);
+      return `<button class="map-verify-chip ${isExcluded ? "excluded" : "active"}" type="button"
+        data-bucket="${bucket}" data-class="${g}" title="${GROUP_LABEL[g]}">
+        <span class="diamond" style="color:${CLASS_COLOR_HEX[g]}" aria-hidden="true">&#9670;</span>${counts.get(g)}
+      </button>`;
+    })
+    .join("");
+  const allActive = excluded.size === 0;
+  const allChip = present.length > 1
+    ? `<button class="map-verify-chip ${allActive ? "active" : ""}" type="button" data-bucket="${bucket}" data-class="__all__">ALL</button>`
+    : "";
+  row.innerHTML = `<span class="row-label">${bucket === "verified" ? "Verified" : "Unverified"}</span>${chips}${allChip}`;
+  row.querySelectorAll(".map-verify-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cls = btn.dataset.class;
+      if (cls === "__all__") {
+        excluded.clear();
+      } else if (excluded.has(cls)) {
+        excluded.delete(cls);
+      } else {
+        excluded.add(cls);
+      }
+      renderMap();
+    });
+  });
+}
+
 function updateMapVerifyFilter(plottable) {
   const bar = document.getElementById("map-verify-filter");
   bar.style.display = plottable.length > 0 ? "flex" : "none";
   if (plottable.length === 0) return;
-  const verifiedCount = plottable.filter((t) => t.verified).length;
-  const unverifiedCount = plottable.length - verifiedCount;
-  document.querySelector('.map-verify-chip[data-map-verify="verified"]').lastChild.textContent = ` Verified (${verifiedCount})`;
-  document.querySelector('.map-verify-chip[data-map-verify="unverified"]').lastChild.textContent = ` Unverified (${unverifiedCount})`;
+  renderMapVerifyRow("verified", plottable.filter((t) => t.verified));
+  renderMapVerifyRow("unverified", plottable.filter((t) => !t.verified));
 }
-document.querySelectorAll(".map-verify-chip").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const key = btn.dataset.mapVerify;
-    state.mapVerifiedFilter[key] = !state.mapVerifiedFilter[key];
-    btn.classList.toggle("active", state.mapVerifiedFilter[key]);
-    renderMap();
-  });
-});
 document.getElementById("alert-banner").addEventListener("click", () => showPanel("alerts"));
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.

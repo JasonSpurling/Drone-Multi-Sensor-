@@ -144,20 +144,28 @@ def decay_classification_confidence(raw_confidence: float | None, last_seen: dat
     return raw_confidence + (CLASSIFICATION_CONFIDENCE_FLOOR - raw_confidence) * decay_fraction
 
 
-def corroborating_sensor_type_count(track: Track) -> int:
-    """Distinct sensor types among the same recent-detection window this
-    module's own classification fusion considers (FUSION_HISTORY_LIMIT)
-    -- multiple sensor *types* independently reporting on this track, not
-    just multiple detections from the same one repeating itself. Shared
-    by app.incidents (severity escalation) and GET /api/tracks (the
-    dashboard's Verified/Unverified grouping) so both mean the same thing
-    by "corroborated" rather than keeping two copies of this query that
+def contributing_sensor_types(track: Track) -> set[str]:
+    """Which distinct sensor types have reported on this track within the
+    same recent-detection window this module's own classification fusion
+    considers (FUSION_HISTORY_LIMIT) -- e.g. {"radar", "camera"}. Shared
+    by app.incidents (severity escalation, via the count below), GET
+    /api/tracks (the dashboard's Verified/Unverified grouping and its
+    sensor-coverage display), so all three mean the same thing by
+    "corroborated" rather than keeping separate copies of this query that
     could quietly drift apart.
     """
     if track.id is None or track.site_id is None:
-        return 0
+        return set()
     history = list_recent_detections(track.id, track.site_id, FUSION_HISTORY_LIMIT)
-    return len({d.sensor_type for d in history})
+    return {d.sensor_type for d in history}
+
+
+def corroborating_sensor_type_count(track: Track) -> int:
+    """len(contributing_sensor_types(track)) -- kept as its own function
+    since most callers (severity escalation, the verified/unverified
+    threshold) only ever need the count, not the actual set.
+    """
+    return len(contributing_sensor_types(track))
 
 
 def is_verified(track: Track) -> bool:

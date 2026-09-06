@@ -1033,21 +1033,26 @@ def test_alert_banner_shows_for_an_open_incident_and_links_to_the_alerts_panel(l
 
 def test_map_verify_filter_toggles_which_diamonds_plot(live_server, page):
     """The bottom map-level Verified/Unverified filter (state.
-    mapVerifiedFilter) is independent of the Tracks panel's own Verified/
-    Unverified sub-tabs -- it decides which markers render on the map,
-    defaults to both on, and should never affect the list.
+    mapClassExcluded) is independent of the Tracks panel's own Verified/
+    Unverified sub-tabs -- it decides which markers render on the map, per
+    classification color, defaults to showing everything, and should
+    never affect the list.
     """
-    _seed_moving_track(live_server)  # single sensor -> unverified
+    _seed_moving_track(live_server)  # single radar sensor -> unverified, classifies as drone
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector(".track-card[data-id]")
     page.wait_for_selector("#map-verify-filter")
 
-    assert "Unverified (1)" in page.locator("#map-verify-chip-unverified").inner_text()
-    assert "Verified (0)" in page.locator("#map-verify-chip-verified").inner_text()
-    assert page.locator("#map-verify-chip-unverified").get_attribute("class").count("active")
+    chip = page.locator('.map-verify-chip[data-bucket="unverified"][data-class="drone"]')
+    page.wait_for_selector('.map-verify-chip[data-bucket="unverified"][data-class="drone"]')
+    assert "1" in chip.inner_text()
+    assert "active" in chip.get_attribute("class")
+    assert page.locator('.map-verify-chip[data-bucket="verified"]').count() == 0
 
-    page.click("#map-verify-chip-unverified")
-    assert "active" not in page.locator("#map-verify-chip-unverified").get_attribute("class")
+    chip.click()
+    assert "excluded" in page.locator(
+        '.map-verify-chip[data-bucket="unverified"][data-class="drone"]'
+    ).get_attribute("class")
     # The list is untouched by the map-only filter -- still counts as
     # unverified in the Tracks panel's own tab.
     page.click(".verify-tab-btn[data-verify='unverified']")
@@ -1083,3 +1088,80 @@ def test_live_view_shows_an_inset_thumbnail_only_when_a_second_real_camera_exist
     ).raise_for_status()
     page.evaluate("refresh()")  # force a refresh rather than waiting out the real 15s poll interval
     page.wait_for_selector(".inset-view-img")
+
+
+def test_friend_foe_neutral_and_ignore_buttons_drive_the_real_endpoints(live_server, page):
+    """Friend/Foe (POST /api/tracks/{id}/classify) and Ignore (POST
+    /api/tracks/{id}/ignore) are real operator overrides, not decoration
+    -- each click should be reflected back from the API on the next
+    refresh, including Neutral clearing a previous Friend/Foe call.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#classify-friendly-btn")
+
+    page.click("#classify-friendly-btn")
+    page.wait_for_selector('.badge:has-text("friendly")')
+
+    page.click("#classify-foe-btn")
+    page.wait_for_selector('.badge:has-text("drone")')
+
+    page.click("#classify-neutral-btn")
+    page.wait_for_selector('.badge:has-text("unknown")')
+
+    assert page.locator("#ignore-toggle-btn").inner_text() == "Ignore"
+    page.click("#ignore-toggle-btn")
+    page.wait_for_selector("#ignore-toggle-btn:text-is('Unignore')")
+    assert page.locator(".track-card.ignored").count() == 1
+    assert page.locator(".ignored-badge").count() == 1
+
+    page.click("#ignore-toggle-btn")
+    # :text-is is an exact match -- "Unignore" contains "Ignore" as a
+    # substring, so a has-text wait here would resolve on the stale state.
+    page.wait_for_selector("#ignore-toggle-btn:text-is('Ignore')")
+    assert page.locator(".track-card.ignored").count() == 0
+
+
+def test_track_card_shows_a_duration_and_a_ptz_badge_when_a_camera_is_near(live_server, page):
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-1",
+        json={"sensor_type": "camera", "latitude": 51.4970, "longitude": -0.1150, "camera_stream_url": "rtsp://cam/x"},
+        timeout=5,
+    ).raise_for_status()
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    assert page.locator(".ptz-badge").count() == 1
+    meta_text = page.locator(".track-card-meta").first.inner_text()
+    assert "dur " in meta_text
+
+
+def test_map_marker_tooltip_shows_verified_state_and_contributing_sensors_once_selected(live_server, page):
+    """Selecting a track's map marker (trackMapPopupHtml(), folded into
+    its permanent tooltip -- see renderMap()'s comment for why not a
+    Leaflet popup) surfaces real per-track sensor corroboration --
+    track.contributing_sensor_types -- not a fixed/fake icon set.
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "cam-1", "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    # Two distinct sensor types -> verified, so it's on the Verified tab,
+    # not the default Unverified one.
+    page.click(".verify-tab-btn[data-verify='verified']")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".leaflet-marker-icon")
+    page.wait_for_selector(".track-tooltip-selected")
+    # Leaflet's zoom-animated tooltip lets a just-removed one briefly
+    # coexist with its replacement in the DOM -- .last is the current one.
+    tooltip_text = page.locator(".track-tooltip-selected").last.inner_text()
+    assert "Verified" in tooltip_text
+    assert "radar" in tooltip_text
+    assert "camera" in tooltip_text

@@ -74,6 +74,9 @@ track = Table(
     # docstring. Read-time staleness decay is applied in app/api/tracks.py,
     # not stored here.
     Column("classification_confidence", Float),
+    # An operator's deliberate "stop alerting on this" suppression -- see
+    # app.models.Track.ignored's docstring.
+    Column("ignored", Integer, nullable=False, server_default="0"),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --

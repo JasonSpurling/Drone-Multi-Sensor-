@@ -30,6 +30,11 @@ section with the version and date, bump `__version__`, and start a fresh
 - Read-only PTZ slew-to-cue display under the Live view tab, showing the pan/tilt/distance the camera would need to point at the track right now (`GET /api/tracks/{id}/cue/{sensor_id}`, which already existed) -- deliberately never sends a command to the camera.
 - A live-view inset thumbnail, shown only when a second, genuinely distinct camera sensor is registered near the same track -- never a duplicate of the main feed.
 - A topbar ALERT banner, shown only while at least one incident is genuinely open/unacknowledged, with the count and worst severity; clicking it opens the Alerts panel.
+- `POST /api/tracks/{id}/classify` now also accepts `unknown` ("Neutral" in the dashboard): clears a previous Friend/Foe override and lets automatic classification start fresh, rather than only ever being able to set friendly/drone.
+- `POST /api/tracks/{id}/ignore`: an operator's "stop alerting on this" suppression (`Track.ignored`). A zone/behavioral incident is never opened for an ignored track; the track itself keeps updating and showing up everywhere else unchanged. Surfaced as an Ignore/Unignore button in the dashboard, which also dims an ignored track's card and adds an "Ignored" badge.
+- `Track.contributing_sensor_types`: which distinct sensor types (not just how many) have corroborated a track, surfaced on the dashboard's map marker tooltip when a track is selected, alongside its Verified/Unverified state.
+- A "Duration" (first_seen -> now) shown on every track card, and a "PTZ" badge when a registered camera is near enough to cue on that track.
+- The map's bottom Verified/Unverified filter now has one diamond chip per classification actually present in each bucket (not just a flat verified/unverified toggle), each independently togglable, plus an ALL reset per row.
 
 ## [0.2.0] - 2026-08-31
 
