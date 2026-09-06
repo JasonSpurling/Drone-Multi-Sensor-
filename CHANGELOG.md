@@ -41,6 +41,10 @@ section with the version and date, bump `__version__`, and start a fresh
 - A real connection-status dot in the topbar (`updateConnectionChip()`) -- was previously a hardcoded, always-green "live" indicator regardless of whether the WebSocket push or even the polling fallback was actually working. Now reflects connected (push live) / degraded (push down, polling still succeeding) / unavailable (the last poll itself failed).
 - A "coasting" display state for a track that's gone quiet but hasn't yet been marked lost server-side: its map marker dims and gets a dashed dead-reckoning line + "estimated position" tooltip extrapolated from its last known heading/speed, and its list card shows "coasting" instead of implying the plotted position is still fresh.
 - `Track.risk_score` now also factors in proximity to the nearest active restricted zone (`app.zones.nearest_restricted_zone_distance_m`) -- a track closing in on a protected zone scores higher even before it actually enters one and an incident opens.
+- A confirmation prompt before marking a track as Foe -- the highest-consequence operator override, since it can escalate an incident's severity.
+- Timed Ignore: `POST /api/tracks/{id}/ignore` now accepts `duration_minutes` (5/30/Indefinitely in the dashboard) -- a timed ignore expires and reverts to normal alerting on its own (`Track.ignored_until`, resolved at read time in `app.db._row_to_track`, no separate sweep job needed).
+- A real notification bell in the topbar (`detectAndRecordNotifications()`): a locally-observed log of genuine state transitions this dashboard itself sees between polls (a new incident opening, a sensor's health getting worse, a track going active -> lost) -- not a fabricated feed, and not persisted server-side.
+- The Sensor Health panel now shows each sensor's registered position (or "not registered") alongside its health status.
 
 ## [0.2.0] - 2026-08-31
 

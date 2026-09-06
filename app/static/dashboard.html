@@ -188,6 +188,24 @@
     display: none;
   }
   .rail-btn .rail-badge.show { display: inline-block; animation: pulse-alert 2s infinite; }
+  #notif-bell-btn { position: relative; }
+  #notif-badge {
+    position: absolute; top: 2px; right: 2px;
+    background: var(--high); color: var(--on-accent); font-size: 9px; font-weight: 700;
+    border-radius: 999px; padding: 1px 5px; min-width: 13px; line-height: 1.4; text-align: center;
+    display: none;
+  }
+  #notif-badge.show { display: inline-block; animation: pulse-alert 2s infinite; }
+  #notif-panel {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 50;
+    width: 300px; max-height: 360px; overflow-y: auto;
+    background: var(--panel-glass-strong); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); backdrop-filter: blur(6px);
+  }
+  .notif-item { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .notif-item:last-child { border-bottom: none; }
+  .notif-item.unread { background: var(--panel-2); }
+  .notif-time { color: var(--muted); font-size: 10px; margin-top: 2px; }
 
   .floating-panel {
     position: absolute; z-index: 15; top: 12px; bottom: 12px;
@@ -703,6 +721,12 @@
   <div class="topbar-right">
     <span id="whoami" style="display:none; margin-right:8px; color:var(--muted);"></span>
     <a id="sso-logout-link" href="/auth/logout" class="secondary" style="display:none; margin-right:8px;">Log out</a>
+    <div style="position:relative;">
+      <button id="notif-bell-btn" class="icon-btn" title="Notifications" aria-label="Notifications">
+        <span aria-hidden="true">&#128276;</span><span id="notif-badge" aria-hidden="true"></span>
+      </button>
+      <div id="notif-panel" class="notif-panel" hidden></div>
+    </div>
     <button id="theme-toggle" class="secondary" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">&#9788;</button>
   </div>
 </header>
@@ -1090,6 +1114,22 @@ function fmtRelative(iso) {
   const diffH = Math.round(diffM / 60);
   if (diffH < 24) return `${diffH}h ago`;
   return `${Math.round(diffH / 24)}d ago`;
+}
+
+// The mirror of fmtRelative for a *future* timestamp -- Track.ignored_until,
+// specifically. "expired" rather than a negative duration if it's somehow
+// already passed by the time this renders (a real, if narrow, race between
+// a poll landing and the expiry ticking over).
+function fmtUntil(iso) {
+  if (!iso) return "—";
+  const then = new Date(iso + (iso.endsWith("Z") ? "" : "Z")).getTime();
+  const diffS = Math.round((then - Date.now()) / 1000);
+  if (diffS <= 0) return "expired";
+  if (diffS < 60) return `${diffS}s`;
+  const diffM = Math.round(diffS / 60);
+  if (diffM < 60) return `${diffM}m`;
+  const diffH = Math.round(diffM / 60);
+  return `${diffH}h`;
 }
 
 // How long a track has existed (first_seen -> now), MM:SS below an hour
@@ -1696,14 +1736,17 @@ async function classifyTrack(id, classification) {
 }
 
 // An operator's "stop alerting on this" suppression (POST /api/tracks/
-// {id}/ignore) -- see Track.ignored's docstring in app/models.py. Toggles
-// both ways from the same button.
-async function setTrackIgnored(id, ignored) {
+// {id}/ignore) -- see Track.ignored/TrackIgnoreInput's docstrings in
+// app/models.py. durationMinutes omitted/null means "Indefinitely" (until
+// manually unignored); a number means it expires and reverts to normal
+// alerting on its own after that long, with no separate sweep job needed
+// (see app.db._row_to_track). Toggles both ways from the same call.
+async function setTrackIgnored(id, ignored, durationMinutes) {
   try {
     await fetchJSON(`/api/tracks/${id}/ignore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ignored }),
+      body: JSON.stringify({ ignored, duration_minutes: durationMinutes ?? null }),
     });
     await refresh();
   } catch (e) {
@@ -2241,8 +2284,17 @@ function renderDetails() {
       <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
       <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
       <button class="secondary classify-btn" id="classify-neutral-btn" title="Clear a previous Friend/Foe override and let automatic classification start fresh">Neutral</button>
-      <button class="secondary classify-btn ${track.ignored ? "active" : ""}" id="ignore-toggle-btn" title="${track.ignored ? "Stop suppressing alerts for this track" : "Suppress new alerts for this track (it keeps updating and tracking normally)"}">${track.ignored ? "Unignore" : "Ignore"}</button>
+      ${track.ignored
+        ? `<button class="secondary classify-btn active" id="ignore-toggle-btn" title="Stop suppressing alerts for this track">Unignore${track.ignored_until ? ` (${fmtUntil(track.ignored_until)})` : ""}</button>`
+        : `<button class="secondary classify-btn" id="ignore-toggle-btn" title="Suppress new alerts for this track (it keeps updating and tracking normally)" aria-haspopup="true" aria-expanded="false">Ignore &#9662;</button>`
+      }
     </div>
+    ${!track.ignored ? `
+    <div class="detail-actions secondary" id="ignore-duration-menu" hidden>
+      <button class="secondary" data-ignore-minutes="5">5 min</button>
+      <button class="secondary" data-ignore-minutes="30">30 min</button>
+      <button class="secondary" data-ignore-minutes="">Indefinitely</button>
+    </div>` : ""}
     <div class="detail-actions">
       <button class="secondary" id="focus-btn">Focus</button>
       <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
@@ -2335,9 +2387,33 @@ function renderDetails() {
     snapshotBtn.addEventListener("click", () => takeSnapshot(nearestCamera.sensorId));
   }
   document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
-  document.getElementById("classify-foe-btn").addEventListener("click", () => classifyTrack(track.id, "drone"));
+  document.getElementById("classify-foe-btn").addEventListener("click", () => {
+    // A Foe call is the highest-consequence override an operator can make
+    // here (it's what actually escalates an incident's severity via
+    // app.incidents' corroboration logic) -- worth one extra deliberate
+    // step, unlike Friend/Neutral which only ever calm things down.
+    if (window.confirm(`Confirm classification of Track ${track.id} as a threat (Foe)?`)) {
+      classifyTrack(track.id, "drone");
+    }
+  });
   document.getElementById("classify-neutral-btn").addEventListener("click", () => classifyTrack(track.id, "unknown"));
-  document.getElementById("ignore-toggle-btn").addEventListener("click", () => setTrackIgnored(track.id, !track.ignored));
+  if (track.ignored) {
+    document.getElementById("ignore-toggle-btn").addEventListener("click", () => setTrackIgnored(track.id, false));
+  } else {
+    const ignoreBtn = document.getElementById("ignore-toggle-btn");
+    const menu = document.getElementById("ignore-duration-menu");
+    ignoreBtn.addEventListener("click", () => {
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      ignoreBtn.setAttribute("aria-expanded", String(opening));
+    });
+    menu.querySelectorAll("button[data-ignore-minutes]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const raw = btn.dataset.ignoreMinutes;
+        setTrackIgnored(track.id, true, raw ? Number(raw) : null);
+      });
+    });
+  }
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
   document.getElementById("follow-btn").addEventListener("click", () => {
     state.follow = !state.follow;
@@ -3081,6 +3157,108 @@ function recordBreadcrumbs(tracks) {
   }
 }
 
+// A real, locally-observed event log -- not persisted server-side, and
+// not fabricated: each entry is generated only when this dashboard itself
+// sees a genuine state transition between one poll and the next (a new
+// incident opening, a sensor's health getting worse, a track going from
+// active to lost). The very first refresh() call only establishes the
+// baseline to diff against -- it would otherwise manufacture a flood of
+// "new" notifications for everything that already existed before this
+// tab was even opened.
+const notifications = []; // newest first, capped at NOTIF_MAX
+const NOTIF_MAX = 50;
+let notifBaselineEstablished = false;
+let prevIncidentIds = new Set();
+let prevSensorStatus = new Map();
+let prevTrackStatus = new Map();
+
+function pushNotification(text) {
+  notifications.unshift({ text, timestamp: new Date().toISOString(), read: false });
+  while (notifications.length > NOTIF_MAX) notifications.pop();
+}
+
+function detectAndRecordNotifications(tracks, incidents, sensors) {
+  if (!notifBaselineEstablished) {
+    notifBaselineEstablished = true;
+    prevIncidentIds = new Set(incidents.map((i) => i.id));
+    prevSensorStatus = new Map(sensors.map((s) => [s.sensor_id, s.status]));
+    prevTrackStatus = new Map(tracks.map((t) => [t.id, t.status]));
+    return;
+  }
+
+  incidents.forEach((i) => {
+    if (!prevIncidentIds.has(i.id)) {
+      pushNotification(`New alert: ${i.description || i.incident_type} (${i.severity}, track ${i.track_id ?? "—"})`);
+    }
+  });
+
+  // Worse, not just different -- a sensor recovering (offline -> online)
+  // is good news, not something that needs a notification.
+  const severityRank = { online: 0, stale: 1, missing: 2, offline: 2 };
+  sensors.forEach((s) => {
+    const prev = prevSensorStatus.get(s.sensor_id);
+    if (prev !== undefined && prev !== s.status && (severityRank[s.status] ?? 0) > (severityRank[prev] ?? 0)) {
+      pushNotification(`Sensor ${s.sensor_id} is now ${s.status}`);
+    }
+  });
+
+  tracks.forEach((t) => {
+    const prev = prevTrackStatus.get(t.id);
+    if (prev === "active" && t.status === "lost") {
+      pushNotification(`Track ${t.id} lost contact`);
+    }
+  });
+
+  prevIncidentIds = new Set(incidents.map((i) => i.id));
+  prevSensorStatus = new Map(sensors.map((s) => [s.sensor_id, s.status]));
+  prevTrackStatus = new Map(tracks.map((t) => [t.id, t.status]));
+}
+
+function renderNotifications() {
+  const unreadCount = notifications.filter((n) => !n.read).length;
+  const badge = document.getElementById("notif-badge");
+  const bellBtn = document.getElementById("notif-bell-btn");
+  if (unreadCount > 0) {
+    badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+    badge.classList.add("show");
+    bellBtn.setAttribute("aria-label", `Notifications, ${unreadCount} unread`);
+  } else {
+    badge.classList.remove("show");
+    bellBtn.setAttribute("aria-label", "Notifications");
+  }
+  const panel = document.getElementById("notif-panel");
+  if (panel.hidden) return; // rebuilt fresh on open instead, see the click handler below
+  panel.innerHTML = notifPanelHtml();
+}
+
+function notifPanelHtml() {
+  if (notifications.length === 0) {
+    return '<div class="empty" style="padding:10px;">No notifications yet.</div>';
+  }
+  return notifications
+    .map((n) => `<div class="notif-item ${n.read ? "" : "unread"}">
+      <div>${escapeHtml(n.text)}</div>
+      <div class="notif-time">${fmtRelative(n.timestamp)}</div>
+    </div>`)
+    .join("");
+}
+
+document.getElementById("notif-bell-btn").addEventListener("click", () => {
+  const panel = document.getElementById("notif-panel");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    panel.innerHTML = notifPanelHtml();
+    notifications.forEach((n) => { n.read = true; });
+    renderNotifications();
+  }
+});
+document.addEventListener("click", (e) => {
+  const panel = document.getElementById("notif-panel");
+  if (!panel.hidden && !panel.contains(e.target) && !e.target.closest("#notif-bell-btn")) {
+    panel.hidden = true;
+  }
+});
+
 function renderSensors() {
   const el = document.getElementById("sensors-table");
   updatePanelHeaderCount();
@@ -3096,16 +3274,26 @@ function renderSensors() {
     </div>`;
     return;
   }
+  // Real registered position, when one exists (PUT /api/sensor-
+  // registrations/{id}) -- distinct from a sensor that's only ever been
+  // seen via its own reported detections and has no fixed mount position
+  // on file at all, which this never guesses at.
+  const registrationBySensorId = new Map(state.sensorRegistrations.map((r) => [r.sensor_id, r]));
   const rows = state.sensors
-    .map((s) => `<tr>
+    .map((s) => {
+      const reg = registrationBySensorId.get(s.sensor_id);
+      const position = reg ? `${reg.latitude.toFixed(4)}, ${reg.longitude.toFixed(4)}` : "not registered";
+      return `<tr>
         <td>${escapeHtml(s.sensor_id)}</td>
         <td>${escapeHtml(s.sensor_type)}</td>
         <td><span class="status-dot" style="background:${SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline}"></span> ${escapeHtml(s.status)}</td>
         <td>${fmtRelative(s.last_seen)}</td>
-      </tr>`)
+        <td>${escapeHtml(position)}</td>
+      </tr>`;
+    })
     .join("");
   el.innerHTML = `<table>
-    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Seen</th></tr></thead>
+    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Seen</th><th>Position</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -3538,6 +3726,8 @@ async function refresh() {
     state.allZones = allZones;
     state.sensorRegistrations = sensorRegistrations;
     recordBreadcrumbs(tracks);
+    detectAndRecordNotifications(tracks, incidents, sensors);
+    renderNotifications();
     showAuthBar(false);
     loadWhoami(); // fire-and-forget -- who's authenticated doesn't gate rendering the rest
     renderClassFilters();

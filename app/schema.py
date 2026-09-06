@@ -77,6 +77,10 @@ track = Table(
     # An operator's deliberate "stop alerting on this" suppression -- see
     # app.models.Track.ignored's docstring.
     Column("ignored", Integer, nullable=False, server_default="0"),
+    # When an ignore (above) expires and reverts on its own -- NULL means
+    # either not ignored, or ignored with no expiry. See
+    # app.models.Track.ignored_until's docstring.
+    Column("ignored_until", String(40)),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --

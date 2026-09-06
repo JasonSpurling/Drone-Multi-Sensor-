@@ -240,7 +240,16 @@ class Track(BaseModel):
         "A zone/behavioral incident is never opened for an ignored track (app.incidents._open_incident "
         "and ._open_behavioral_incident both check it first); the track itself keeps updating and "
         "showing up everywhere else exactly as before -- ignoring never hides or deletes data, only "
-        "suppresses new incidents from it.",
+        "suppresses new incidents from it. Reflects current effective state, not just the raw stored "
+        "flag: app.db._row_to_track resolves an expired ignored_until back to False on every read, so "
+        "this is never stale past whatever last actually loaded the row.",
+    )
+    ignored_until: datetime | None = Field(
+        default=None,
+        description="When this track's Ignore expires and reverts to normal alerting on its own -- "
+        "None means either not ignored, or ignored with no expiry (an operator picked 'Indefinitely', "
+        "meaning 'until I manually Unignore it'). Set via POST /api/tracks/{id}/ignore's "
+        "duration_minutes.",
     )
 
 
@@ -266,9 +275,17 @@ class TrackClassificationInput(BaseModel):
 
 
 class TrackIgnoreInput(BaseModel):
-    """Body for POST /api/tracks/{id}/ignore -- see Track.ignored's docstring."""
+    """Body for POST /api/tracks/{id}/ignore -- see Track.ignored's docstring.
+
+    `duration_minutes` only matters when `ignored=True`: omitted or None means
+    "Indefinitely" (until manually unignored); a number means the ignore
+    expires and reverts to normal alerting on its own after that many
+    minutes. Ignored when `ignored=False` -- unignoring always clears any
+    expiry along with the flag itself.
+    """
 
     ignored: bool
+    duration_minutes: int | None = Field(default=None, gt=0)
 
 
 class Incident(BaseModel):

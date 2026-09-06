@@ -230,10 +230,21 @@ def test_registered_but_silent_sensor_shows_as_missing(live_server, page):
     row_text = page.locator("#sensors-table tbody tr").inner_text()
     assert "radar-ghost" in row_text
     assert "missing" in row_text
+    assert "51.5100, -0.1200" in row_text  # its registered position, not "not registered"
 
     page.wait_for_function("sensorLayer.getLayers().length === 1")
     popup_html = page.evaluate("sensorLayer.getLayers()[0].getPopup().getContent()")
     assert "never reported a detection" in popup_html
+
+
+def test_sensor_without_a_registered_position_shows_not_registered(live_server, page):
+    _seed_moving_track(live_server)  # radar-1, never registered a position
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=sensors]")
+    page.wait_for_selector("#sensors-table table")
+    row_text = page.locator("#sensors-table tbody tr").inner_text()
+    assert "radar-1" in row_text
+    assert "not registered" in row_text
 
 
 def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zones, page):
@@ -1203,23 +1214,41 @@ def test_friend_foe_neutral_and_ignore_buttons_drive_the_real_endpoints(live_ser
     page.click("#classify-friendly-btn")
     page.wait_for_selector('.badge:has-text("friendly")')
 
+    # Foe is the one classification that asks for confirmation first
+    # (window.confirm) -- Playwright auto-dismisses dialogs unless handled.
+    page.on("dialog", lambda dialog: dialog.accept())
     page.click("#classify-foe-btn")
     page.wait_for_selector('.badge:has-text("drone")')
 
     page.click("#classify-neutral-btn")
     page.wait_for_selector('.badge:has-text("unknown")')
 
-    assert page.locator("#ignore-toggle-btn").inner_text() == "Ignore"
-    page.click("#ignore-toggle-btn")
+    assert "Ignore" in page.locator("#ignore-toggle-btn").inner_text()
+    page.click("#ignore-toggle-btn")  # opens the duration menu
+    page.click("#ignore-duration-menu button[data-ignore-minutes='']")  # Indefinitely
     page.wait_for_selector("#ignore-toggle-btn:text-is('Unignore')")
     assert page.locator(".track-card.ignored").count() == 1
     assert page.locator(".ignored-badge").count() == 1
 
-    page.click("#ignore-toggle-btn")
+    page.click("#ignore-toggle-btn")  # now a direct Unignore, no menu
     # :text-is is an exact match -- "Unignore" contains "Ignore" as a
     # substring, so a has-text wait here would resolve on the stale state.
-    page.wait_for_selector("#ignore-toggle-btn:text-is('Ignore')")
+    page.wait_for_selector("#ignore-toggle-btn:text-is('Ignore ▾')")
     assert page.locator(".track-card.ignored").count() == 0
+
+
+def test_ignore_for_a_fixed_duration_shows_the_remaining_time(live_server, page):
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#ignore-toggle-btn")
+
+    page.click("#ignore-toggle-btn")
+    page.click("#ignore-duration-menu button[data-ignore-minutes='30']")
+    page.wait_for_selector("#ignore-toggle-btn:has-text('Unignore')")
+    # 30 minutes rounds to "30m" via fmtUntil -- not "expired" or blank.
+    assert "30m" in page.locator("#ignore-toggle-btn").inner_text()
 
 
 def test_track_card_shows_a_duration_and_a_ptz_badge_when_a_camera_is_near(live_server, page):
@@ -1263,3 +1292,34 @@ def test_map_marker_tooltip_shows_verified_state_and_contributing_sensors_once_s
     assert "Verified" in tooltip_text
     assert "radar" in tooltip_text
     assert "camera" in tooltip_text
+
+
+def test_notification_bell_shows_a_real_new_alert_and_clears_on_open(live_server, page):
+    """detectAndRecordNotifications() -- a real, locally-observed state
+    transition (a new incident opening between one poll and the next),
+    not a fabricated notification feed. The very first refresh only
+    establishes the baseline, so nothing appears until a genuine second
+    transition happens.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#notif-bell-btn")
+    assert "show" not in (page.locator("#notif-badge").get_attribute("class") or "")
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.evaluate("refresh()")
+    page.wait_for_selector("#notif-badge.show")
+    assert page.locator("#notif-badge").inner_text() == "1"
+
+    page.click("#notif-bell-btn")
+    page.wait_for_selector("#notif-panel:not([hidden])")
+    panel_text = page.locator("#notif-panel").inner_text()
+    assert "New alert" in panel_text
+    assert "restricted zone" in panel_text.lower()
+
+    # Opening the panel marks everything read -- the badge should clear.
+    assert "show" not in (page.locator("#notif-badge").get_attribute("class") or "")
+
+    # Clicking elsewhere closes the panel.
+    page.click("#app-shell")
+    page.wait_for_timeout(100)
+    assert page.locator("#notif-panel").is_hidden()

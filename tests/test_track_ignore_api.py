@@ -6,11 +6,13 @@ everywhere else unchanged).
 """
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.util import utcnow
 
 DETECTION_BODY = {
     "sensor_id": "radar-1", "sensor_type": "radar",
@@ -52,6 +54,57 @@ def test_unignore_toggles_it_back_off(isolated_db):
         unignored = client.post(f"/api/tracks/{track_id}/ignore", json={"ignored": False})
         assert unignored.status_code == 200
         assert unignored.json()["ignored"] is False
+
+
+def test_ignore_indefinitely_leaves_ignored_until_null(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=OUTSIDE_ANY_ZONE)
+        track_id = r.json()["track_id"]
+
+        ignored = client.post(f"/api/tracks/{track_id}/ignore", json={"ignored": True})
+        assert ignored.json()["ignored"] is True
+        assert ignored.json()["ignored_until"] is None
+
+
+def test_ignore_with_a_duration_sets_a_real_expiry(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=OUTSIDE_ANY_ZONE)
+        track_id = r.json()["track_id"]
+
+        before = utcnow()
+        ignored = client.post(
+            f"/api/tracks/{track_id}/ignore", json={"ignored": True, "duration_minutes": 30}
+        )
+        assert ignored.json()["ignored"] is True
+        ignored_until = datetime.fromisoformat(ignored.json()["ignored_until"])
+        assert before + timedelta(minutes=29) < ignored_until < before + timedelta(minutes=31)
+
+
+def test_a_timed_ignore_expires_on_its_own(isolated_db, monkeypatch):
+    """No separate expiry-sweep job exists -- app.db._row_to_track resolves
+    an expired ignored_until back to False on every read, checked here via
+    the shared app.db.utcnow used at that read site.
+    """
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=OUTSIDE_ANY_ZONE)
+        track_id = r.json()["track_id"]
+        client.post(f"/api/tracks/{track_id}/ignore", json={"ignored": True, "duration_minutes": 5})
+        assert client.get(f"/api/tracks/{track_id}").json()["ignored"] is True
+
+        future = utcnow() + timedelta(minutes=6)
+        monkeypatch.setattr("app.db.utcnow", lambda: future)
+        assert client.get(f"/api/tracks/{track_id}").json()["ignored"] is False
+
+
+def test_unignore_clears_any_existing_expiry(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=OUTSIDE_ANY_ZONE)
+        track_id = r.json()["track_id"]
+        client.post(f"/api/tracks/{track_id}/ignore", json={"ignored": True, "duration_minutes": 30})
+
+        unignored = client.post(f"/api/tracks/{track_id}/ignore", json={"ignored": False})
+        assert unignored.json()["ignored"] is False
+        assert unignored.json()["ignored_until"] is None
 
 
 def test_ignore_unknown_track_is_404(isolated_db):

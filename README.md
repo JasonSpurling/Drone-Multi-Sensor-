@@ -454,6 +454,20 @@ still succeeding, so the view is still correct, just not instant; red
 poll and on every WebSocket open/close, so it's never stale by more than
 one poll cycle.
 
+### Notification bell
+
+The bell icon in the topbar (`detectAndRecordNotifications()`) is a real,
+locally-observed event log, not a fabricated feed and not persisted
+server-side: on each poll, the dashboard diffs the incoming tracks/
+incidents/sensors against what it saw last time, and only ever adds a
+notification for a genuine transition it actually witnessed -- a new
+incident opening, a sensor's health getting strictly worse (never a
+recovery), or a track going `active` -> `lost`. The very first poll after
+a page load only establishes that baseline; it never floods the panel
+with everything that already existed before the tab was opened. The
+unread badge count clears the moment the panel is opened (read, in this
+context, means "seen," not "acted on").
+
 ### Coasting tracks
 
 A track that's gone quiet for a while, but hasn't yet been marked `lost`
@@ -521,6 +535,11 @@ indistinguishable: both were simply absent from `GET /api/sensors`,
 whether the registration was five minutes or five months old. A
 deactivated registration is never flagged this way -- a deliberately
 decommissioned sensor isn't a gap to surface.
+
+The Sensor Health panel's own table shows the same registered position
+(or "not registered" for a sensor that's only ever reported detections
+and has no fixed mount position on file) alongside its health status --
+the map plots it, the table now also states it in plain lat/lon.
 
 Two smaller additions alongside it: a scale bar (bottom-right, next to
 the zoom controls) for real distance context, and a "fit all" control
@@ -1672,17 +1691,31 @@ enum): an operator watching the dashboard is making one of three calls,
 not reclassifying something as a bird or an aircraft, which is what
 sensor evidence itself is for. Surfaced as **Friend**/**Foe**/**Neutral**
 buttons in the dashboard's track details panel; audited (`track.classify`)
-like every other operator action (`app/db.py`'s `record_audit`).
+like every other operator action (`app/db.py`'s `record_audit`). **Foe**
+specifically asks for confirmation first (`window.confirm`) before the
+call goes through -- it's the one override that can escalate an
+incident's severity, worth one deliberate extra step where Friend/Neutral
+(which only ever calm things down) don't need it.
 
 **Suppressing alerts without touching classification**: `POST
-/api/tracks/{id}/ignore` (body `{"ignored": true}`) sets `Track.ignored` --
-an **Ignore** button in the dashboard, alongside Friend/Foe/Neutral. An
-ignored track is never hidden or altered (it keeps updating, tracking, and
-showing up in the list -- just dimmed, with an "Ignored" badge); the only
-thing that actually changes is that `app.incidents` never opens a new
-zone-incursion or behavioral incident for it (`_open_incident` and
-`_open_behavioral_incident` both check the flag first). Toggle back off
-with `{"ignored": false}` (**Unignore**).
+/api/tracks/{id}/ignore` (body `{"ignored": true}`, optionally
+`"duration_minutes": N`) sets `Track.ignored` -- an **Ignore** button in
+the dashboard (with a small menu: 5 min / 30 min / Indefinitely),
+alongside Friend/Foe/Neutral. An ignored track is never hidden or altered
+(it keeps updating, tracking, and showing up in the list -- just dimmed,
+with an "Ignored" badge); the only thing that actually changes is that
+`app.incidents` never opens a new zone-incursion or behavioral incident
+for it (`_open_incident` and `_open_behavioral_incident` both check the
+flag first). Toggle back off with `{"ignored": false}` (**Unignore**),
+which also clears any expiry.
+
+A timed ignore (`duration_minutes` set) stores a real `Track.ignored_until`
+and expires on its own -- no separate sweep job needed: `app.db
+._row_to_track`, the one shared hydration point every track read goes
+through (the API layer, the tracking pipeline's own incident checks,
+everywhere), resolves an expired `ignored_until` back to `ignored=false`
+on the spot. "Indefinitely" (the default, `duration_minutes` omitted)
+behaves exactly like the original always-permanent Ignore.
 
 **Classification confidence, distinct from the label**: `Track.classification_confidence`
 (0-1) is how strongly *current* evidence backs whatever label is actually

@@ -93,6 +93,7 @@ _TABLE_MIGRATION_COLUMNS = {
         "aircraft_category": "VARCHAR(2)",
         "classification_confidence": "REAL",
         "ignored": "INTEGER DEFAULT 0",
+        "ignored_until": "VARCHAR(40)",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
@@ -630,11 +631,11 @@ def create_track(track: Track) -> Track:
                     (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
                      position_uncertainty_m, maneuver_probability, aircraft_category,
-                     classification_confidence, ignored)
+                     classification_confidence, ignored, ignored_until)
                 VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
                         :position_uncertainty_m, :maneuver_probability, :aircraft_category,
-                        :classification_confidence, :ignored)
+                        :classification_confidence, :ignored, :ignored_until)
                 RETURNING id
                 """
             ),
@@ -655,6 +656,7 @@ def create_track(track: Track) -> Track:
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
                 "ignored": int(track.ignored),
+                "ignored_until": track.ignored_until.isoformat() if track.ignored_until else None,
             },
         ).one()
         track.id = row.id
@@ -672,7 +674,8 @@ def update_track(track: Track) -> Track:
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
                     position_uncertainty_m = :position_uncertainty_m,
                     maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category,
-                    classification_confidence = :classification_confidence, ignored = :ignored
+                    classification_confidence = :classification_confidence, ignored = :ignored,
+                    ignored_until = :ignored_until
                 WHERE id = :id
                 """
             ),
@@ -690,6 +693,7 @@ def update_track(track: Track) -> Track:
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
                 "ignored": int(track.ignored),
+                "ignored_until": track.ignored_until.isoformat() if track.ignored_until else None,
                 "id": track.id,
             },
         )
@@ -723,6 +727,16 @@ def list_tracks(
 
 
 def _row_to_track(row) -> Track:
+    ignored_until = datetime.fromisoformat(row["ignored_until"]) if row["ignored_until"] else None
+    # An expired timed ignore reads back as not-ignored on its own, here at
+    # the one shared hydration point every track read goes through --
+    # app.incidents' suppression check and app.risk's scoring both just
+    # read track.ignored, with no separate expiry-sweep job needed. The
+    # raw ignored_until timestamp itself is left alone (not cleared) so it
+    # still reports honestly if this row is read again before its next
+    # write; a later update_track call naturally persists the now-False
+    # ignored flag.
+    ignored = bool(row["ignored"]) and (ignored_until is None or ignored_until > utcnow())
     return Track(
         id=row["id"],
         site_id=row["site_id"],
@@ -740,7 +754,8 @@ def _row_to_track(row) -> Track:
         maneuver_probability=row["maneuver_probability"],
         aircraft_category=row["aircraft_category"],
         classification_confidence=row["classification_confidence"],
-        ignored=bool(row["ignored"]),
+        ignored=ignored,
+        ignored_until=ignored_until,
     )
 
 

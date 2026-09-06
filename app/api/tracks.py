@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
@@ -140,20 +142,27 @@ def ignore_track(
 ) -> Track:
     """An operator's deliberate "stop alerting on this" suppression -- see
     Track.ignored's docstring for what it actually changes (new incidents
-    only; nothing about the track itself is hidden or altered). Toggled
-    back off the same way, with ignored=false.
+    only; nothing about the track itself is hidden or altered).
+    `duration_minutes` set means "expires on its own after that long"; left
+    out means "Indefinitely," same as this endpoint's original behavior.
+    Toggled back off with ignored=false, which always clears any expiry too.
     """
     track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     track.ignored = body.ignored
+    track.ignored_until = (
+        utcnow() + timedelta(minutes=body.duration_minutes)
+        if body.ignored and body.duration_minutes is not None
+        else None
+    )
     updated = update_track(track)
     record_audit(
         site_id=principal.site_id,
         actor=principal.name,
         action="track.ignore" if body.ignored else "track.unignore",
         target=str(track_id),
-        detail="",
+        detail=f"for {body.duration_minutes}m" if body.ignored and body.duration_minutes else "",
     )
     if updated.site_id is not None:
         publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
