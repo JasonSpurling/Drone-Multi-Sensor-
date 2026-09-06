@@ -20,6 +20,7 @@ from app.risk import compute_risk_score
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
+from app.zones import nearest_restricted_zone_distance_m
 
 router = APIRouter()
 
@@ -62,7 +63,12 @@ def _with_computed_fields(track: Track) -> Track:
     track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
     if track.id is not None and track.site_id is not None:
         open_incidents = list_open_incidents_for_track(track.id, track.site_id)
-        track.risk_score = compute_risk_score(track, open_incidents)
+        zone_distance = (
+            nearest_restricted_zone_distance_m(track.latitude, track.longitude, track.site_id)
+            if track.latitude is not None and track.longitude is not None
+            else None
+        )
+        track.risk_score = compute_risk_score(track, open_incidents, zone_distance)
     return track
 
 

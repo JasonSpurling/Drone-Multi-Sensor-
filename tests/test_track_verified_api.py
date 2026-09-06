@@ -51,6 +51,27 @@ def test_risk_score_is_exposed_and_reflects_an_open_incident(isolated_db):
         assert after["risk_score"] > baseline["risk_score"]
 
 
+def test_risk_score_reflects_proximity_to_a_restricted_zone(isolated_db):
+    """app.zones.nearest_restricted_zone_distance_m wired into
+    compute_risk_score via GET /api/tracks -- a track well outside any
+    zone should score lower than the same track once it's near the
+    seeded restricted zone's centroid.
+    """
+    with TestClient(app) as client:
+        far = client.post("/api/detections", json=_detection("radar-1", "radar", latitude=60.0, longitude=0.0))
+        far_track_id = far.json()["track_id"]
+        far_score = client.get(f"/api/tracks/{far_track_id}").json()["risk_score"]
+
+        # app/zones.seed.json's bundled "Central London Restricted Zone"
+        # centroid is ~(51.5, -0.1) -- isolated_db's default seed always
+        # loads it.
+        near = client.post("/api/detections", json=_detection("radar-2", "radar", latitude=51.5, longitude=-0.1))
+        near_track_id = near.json()["track_id"]
+        near_score = client.get(f"/api/tracks/{near_track_id}").json()["risk_score"]
+
+        assert near_score > far_score
+
+
 def test_contributing_sensor_types_lists_every_distinct_type(isolated_db):
     with TestClient(app) as client:
         r = client.post("/api/detections", json=_detection("radar-1", "radar"))

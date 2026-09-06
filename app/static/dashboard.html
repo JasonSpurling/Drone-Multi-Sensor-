@@ -115,11 +115,19 @@
     color: var(--accent); font-size: 15px;
   }
   .topbar-left h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: 0.02em; color: var(--text); }
+  /* Real connection state (updateConnectionChip()), not decoration -- was
+     previously a hardcoded always-green "live" dot regardless of whether
+     the WebSocket push or even the polling fallback was actually working.
+     connected = push is live; degraded = push is down but the ordinary
+     HTTP poll is still succeeding (the view is still correct, just not
+     instant); unavailable = the last poll itself failed. */
   .live-dot {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--active); box-shadow: 0 0 0 rgba(34,197,94,0.6);
     animation: pulse 2s infinite;
   }
+  .live-dot.degraded { background: var(--stale); animation: none; }
+  .live-dot.unavailable { background: var(--high); animation: pulse-alert 2s infinite; }
   @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
     70% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
@@ -672,7 +680,7 @@
   <div class="topbar-left">
     <span class="brand-mark" aria-hidden="true">&#9670;</span>
     <h1>Drone Multi-Sensor</h1>
-    <span class="live-dot" aria-hidden="true"></span>
+    <span class="live-dot" id="conn-status-dot" title="Connection status"></span>
     <div id="status-line">loading…</div>
   </div>
   <nav id="icon-rail" aria-label="Panel selector">
@@ -941,7 +949,32 @@ const CLASS_COLOR_HEX = {
   drone: "#ef4444", aircraft: "#3b82f6", bird: "#22c55e",
   friendly: "#14b8b0", unknown: "#8b93a7",
 };
-const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
+const STATUS_COLOR = {
+  active: "var(--active)", coasting: "var(--stale)", lost: "var(--lost)", closed: "var(--closed)",
+};
+// Half of app.config's default TRACK_STALE_SECONDS (30s, the point at
+// which the server itself moves a track active -> lost) -- this dashboard
+// has no live-config endpoint to read the real value from, so this is a
+// fixed, documented approximation, purely a display refinement of what
+// "gone quiet but not lost yet" means; it never changes what the server
+// actually considers the track's status to be.
+const COASTING_THRESHOLD_S = 15;
+
+function trackAgeS(t) {
+  const then = new Date(t.last_seen + (t.last_seen.endsWith("Z") ? "" : "Z")).getTime();
+  return (Date.now() - then) / 1000;
+}
+
+// "Coasting": still active server-side, but quiet long enough that its
+// shown position is an extrapolation rather than a fresh report -- see
+// renderMap()'s dead-reckoning line for the same idea drawn on the map.
+function isCoasting(t) {
+  return t.status === "active" && trackAgeS(t) > COASTING_THRESHOLD_S;
+}
+
+function displayStatus(t) {
+  return isCoasting(t) ? "coasting" : t.status;
+}
 const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
 const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
 
@@ -1899,8 +1932,8 @@ function renderTracks() {
             <div class="track-card-body">
               <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}</div>
               <div class="track-card-sub">
-                <span class="status-dot" style="background:${STATUS_COLOR[t.status] || STATUS_COLOR.closed}"></span>
-                ${escapeHtml(t.status)} ${speed ? "&middot; " + speed : ""}
+                <span class="status-dot" style="background:${STATUS_COLOR[displayStatus(t)] || STATUS_COLOR.closed}"></span>
+                ${escapeHtml(displayStatus(t))} ${speed ? "&middot; " + speed : ""}
               </div>
               <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)} &middot; dur ${fmtDuration(t.first_seen)}${t.risk_score != null ? ` &middot; risk ${t.risk_score}` : ""}</div>
             </div>
@@ -2925,13 +2958,41 @@ function renderMap() {
       }).addTo(trackLayer);
     }
 
+    // A coasting track (see isCoasting()) hasn't reported in a while, so
+    // its plotted marker is sitting at a stale position -- this dead-
+    // reckons where it should be *right now* by carrying its last known
+    // heading/speed forward for however long it's actually been quiet
+    // (unlike the vector above, which projects forward from a fresh
+    // position by a fixed look-ahead window). Explicitly labeled
+    // "estimated" rather than plotted as if it were a real report --
+    // this app never implies more position certainty than it has.
+    if (isCoasting(t) && t.heading_deg != null && t.speed_mps != null) {
+      const estimated = destinationPoint(t.latitude, t.longitude, t.heading_deg, t.speed_mps * trackAgeS(t));
+      const color = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
+      L.polyline([[t.latitude, t.longitude], estimated], {
+        color, weight: 2, opacity: 0.6, dashArray: "2 6", lineCap: "round",
+      }).addTo(trackLayer);
+      L.marker(estimated, {
+        icon: L.divIcon({
+          html: `<div style="width:10px;height:10px;border-radius:50%;border:2px dashed ${color};opacity:0.8;"></div>`,
+          className: "", iconSize: [10, 10], iconAnchor: [5, 5],
+        }),
+        interactive: false,
+      })
+        .bindTooltip("estimated position (coasting)", {
+          permanent: true, direction: "top", offset: [0, -8], className: "track-tooltip",
+        })
+        .addTo(trackLayer);
+    }
+
     const marker = L.marker([t.latitude, t.longitude], { icon: markerIcon(t, selected) })
       .on("click", () => selectTrack(t.id))
       .addTo(trackLayer);
-    // Dim the live marker while scrubbing history for this track -- the
-    // ghost marker below (at the scrubbed position) is the one that
-    // should draw the eye.
-    if (scrubbing) marker.setOpacity(0.35);
+    // Dim the live marker while scrubbing history for this track (the
+    // ghost marker below, at the scrubbed position, should draw the eye
+    // instead), or while coasting (its dead-reckoned estimate above is
+    // the more current position).
+    if (scrubbing || isCoasting(t)) marker.setOpacity(0.35);
 
     const labelParts = [`#${t.id}`, t.classification];
     if (t.aircraft_category) {
@@ -3492,12 +3553,14 @@ async function refresh() {
       : "0 active alerts";
     document.getElementById("status-line").innerHTML =
       `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${alertPart}`;
+    updateConnectionChip(false);
   } catch (e) {
     if (e instanceof AuthError) {
       showAuthBar(true);
       document.getElementById("status-line").textContent = "waiting for API key…";
     } else {
       document.getElementById("status-line").textContent = "connection error — retrying…";
+      updateConnectionChip(true);
     }
     console.error(e);
   }
@@ -3688,15 +3751,43 @@ function stopPolling() {
 let liveSocket = null;
 let liveReconnectTimer = null;
 
+// Real connection state for #conn-status-dot -- "connected" (WebSocket
+// push live), "degraded" (push down, but the ordinary HTTP poll is still
+// succeeding -- the view is still correct, just not instant), or
+// "unavailable" (the last poll itself failed). Called after every
+// refresh() and on every WebSocket open/close, so it's never stale by
+// more than one poll cycle.
+function updateConnectionChip(pollFailed) {
+  const dot = document.getElementById("conn-status-dot");
+  if (!dot) return;
+  let level, label;
+  if (pollFailed) {
+    level = "unavailable";
+    label = "Connection status: unavailable — the last poll failed";
+  } else if (liveSocket !== null && liveSocket.readyState === WebSocket.OPEN) {
+    level = "connected";
+    label = "Connection status: connected — live updates active";
+  } else {
+    level = "degraded";
+    label = "Connection status: degraded — polling only, live push unavailable";
+  }
+  dot.classList.toggle("degraded", level === "degraded");
+  dot.classList.toggle("unavailable", level === "unavailable");
+  dot.title = label;
+  dot.setAttribute("aria-label", label);
+}
+
 function connectLiveSocket() {
   if (liveSocket !== null) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws/live${apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : ""}`;
   const ws = new WebSocket(url);
   liveSocket = ws;
+  ws.addEventListener("open", () => updateConnectionChip(false));
   ws.addEventListener("message", refresh);
   ws.addEventListener("close", (event) => {
     liveSocket = null;
+    updateConnectionChip(false);
     // 4401/4403 (see app/api/live.py) mean the key is missing/wrong/
     // lacks access -- reconnecting every few seconds against the same
     // rejected key would just spam the server for no benefit; the

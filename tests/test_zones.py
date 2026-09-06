@@ -3,7 +3,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import create_zone
 from app.models import Zone, ZoneType
-from app.zones import point_in_polygon, zones_containing_point
+from app.zones import nearest_restricted_zone_distance_m, point_in_polygon, zones_containing_point
 
 SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
@@ -63,6 +63,33 @@ def test_inactive_zones_excluded(site_id):
         Zone(site_id=site_id, name="inactive-zone", zone_type=ZoneType.RESTRICTED, polygon=SQUARE, active=False)
     )
     assert zones_containing_point(51.1, 0.0, site_id) == []
+
+
+def test_nearest_restricted_zone_distance_is_none_with_no_zones(site_id):
+    assert nearest_restricted_zone_distance_m(51.1, 0.0, site_id) is None
+
+
+def test_nearest_restricted_zone_distance_is_near_zero_at_the_centroid(site_id):
+    create_zone(Zone(site_id=site_id, name="rz", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    # SQUARE's centroid is (51.1, 0.0) -- querying from exactly there
+    # should read as ~0m, not some large residual from float error.
+    distance = nearest_restricted_zone_distance_m(51.1, 0.0, site_id)
+    assert distance is not None
+    assert distance < 1.0
+
+
+def test_nearest_restricted_zone_distance_picks_the_closer_of_two_zones(site_id):
+    create_zone(Zone(site_id=site_id, name="near", zone_type=ZoneType.RESTRICTED, polygon=SQUARE))
+    far_square = [(60.0, -0.1), (60.0, 0.1), (60.2, 0.1), (60.2, -0.1)]
+    create_zone(Zone(site_id=site_id, name="far", zone_type=ZoneType.RESTRICTED, polygon=far_square))
+    distance = nearest_restricted_zone_distance_m(51.1, 0.0, site_id)
+    assert distance is not None
+    assert distance < 1.0  # matches "near", not "far"
+
+
+def test_nearest_restricted_zone_distance_ignores_non_restricted_zones(site_id):
+    create_zone(Zone(site_id=site_id, name="monitoring-only", zone_type=ZoneType.MONITORING, polygon=SQUARE))
+    assert nearest_restricted_zone_distance_m(51.1, 0.0, site_id) is None
 
 
 def test_duplicate_zone_name_in_the_same_site_is_rejected_at_the_db_layer(site_id):

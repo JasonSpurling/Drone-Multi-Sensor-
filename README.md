@@ -422,16 +422,56 @@ is Verified without opening the full details panel.
 `Track.risk_score` (`app/risk.py`, computed fresh on every read, never
 stored) is a plain, fully-documented point score: `+4` for `drone`
 classification (`+2` unknown, `+1` aircraft, `0` bird/friendly), `+2` if
-Verified, plus the worst currently-open incident's severity (`+1` to
-`+4`) if any. An ignored track always scores `0`, regardless of the rest
--- an operator has already said this one shouldn't compete for attention.
-This is **not** a claim of a trained ML risk model (this app ships no
-such model, same "scaffolding only" posture as `app/ml/`) -- every point
-in the score traces back to a field already shown elsewhere in the UI, so
-"why is this track ranked here" is always answerable without a black box.
-Surfaced on every track card and as a "Risk: highest first" option in the
-Sort control (see "Track list: alert indicator and sort" above -- same
-within-group-only reordering rule applies).
+Verified, the worst currently-open incident's severity (`+1` to `+4`) if
+any, plus `+1`/`+2` for proximity to the nearest active restricted zone
+(`app.zones.nearest_restricted_zone_distance_m`, within 500m/100m of its
+centroid) -- the same centroid-distance concept the "Nearest zone" info
+row already uses, so the two never disagree about what "distance to
+zone" means. This proximity term is what lets a track closing in on a
+protected zone score higher *before* it ever actually enters one and a
+zone-incursion incident opens (`app.incidents` only fires on actual
+entry). The total is capped at 10. An ignored track always scores `0`,
+regardless of the rest -- an operator has already said this one
+shouldn't compete for attention. This is **not** a claim of a trained ML
+risk model (this app ships no such model, same "scaffolding only"
+posture as `app/ml/`) -- every point in the score traces back to a field
+already shown elsewhere in the UI, so "why is this track ranked here" is
+always answerable without a black box. Surfaced on every track card and
+as a "Risk: highest first" option in the Sort control (see "Track list:
+alert indicator and sort" above -- same within-group-only reordering
+rule applies).
+
+### Connection status
+
+The topbar's small dot next to the app name (`#conn-status-dot`,
+`updateConnectionChip()`) reflects the dashboard's actual connection
+state -- previously a hardcoded, always-green "live" indicator regardless
+of whether anything was actually connected. Green ("connected") means
+the WebSocket live-push connection (see "Live updates" below) is open;
+amber ("degraded") means that push is down but the ordinary HTTP poll is
+still succeeding, so the view is still correct, just not instant; red
+("unavailable") means the last poll itself failed. Updated after every
+poll and on every WebSocket open/close, so it's never stale by more than
+one poll cycle.
+
+### Coasting tracks
+
+A track that's gone quiet for a while, but hasn't yet been marked `lost`
+server-side (`TRACK_STALE_SECONDS`, default 30s), is shown as
+**coasting** rather than silently still reading `active` as if its
+plotted position were still fresh. The dashboard's own coasting threshold
+(`COASTING_THRESHOLD_S`, 15s -- half the server default) is a fixed,
+documented client-side approximation, since there's no live-config
+endpoint to read the real value from; it only changes what's *displayed*,
+never what the server itself considers the track's status to be. A
+coasting track's map marker dims, and gets a dashed dead-reckoning line
+plus an "estimated position (coasting)" tooltip -- its last known
+heading/speed carried forward for however long it's actually been quiet,
+distinct from the existing motion vector (which always projects forward
+by a fixed look-ahead window from a fresh position, regardless of
+staleness). Never plotted as if it were a real report: the estimate is
+explicitly labeled, and the live marker at the old position is dimmed to
+make clear which one to trust.
 
 ### Track details tabs
 

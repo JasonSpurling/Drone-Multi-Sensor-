@@ -393,6 +393,56 @@ def test_polling_pauses_while_the_tab_is_hidden(live_server, page):
     assert request_count["n"] >= 1  # the immediate refresh on becoming visible again
 
 
+def test_connection_status_dot_reflects_real_websocket_and_poll_state(live_server, page):
+    """#conn-status-dot (updateConnectionChip()) used to be a hardcoded
+    always-green "live" dot regardless of whether anything was actually
+    connected. It should read "connected" once the real WebSocket is
+    open, and "degraded" once that socket actually closes -- not just
+    stay green forever.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_function("liveSocket !== null && liveSocket.readyState === WebSocket.OPEN")
+    page.wait_for_timeout(200)
+
+    dot = page.locator("#conn-status-dot")
+    assert "degraded" not in dot.get_attribute("class")
+    assert "unavailable" not in dot.get_attribute("class")
+    assert "connected" in dot.get_attribute("aria-label").lower()
+
+    page.evaluate("liveSocket.close()")
+    page.wait_for_function("document.getElementById('conn-status-dot').classList.contains('degraded')")
+    assert "degraded" in dot.get_attribute("aria-label").lower()
+
+
+def test_coasting_track_shows_a_dashed_estimated_position_on_the_map(live_server, page):
+    """isCoasting()/renderMap()'s dead-reckoning line: a track that's
+    gone quiet (but is still server-side "active") should get a dashed
+    line + "estimated position" marker on the map extrapolated from its
+    last known heading/speed -- not just sit at a now-stale position with
+    no indication the plotted spot is no longer current.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    # No real way to make server time pass in a live_server test -- instead
+    # backdate the already-fetched track's last_seen past COASTING_THRESHOLD_S
+    # and re-render, the same technique test_polling_pauses... uses to drive
+    # this app's own client-side clock-dependent logic directly.
+    page.evaluate("""
+        () => {
+            const t = state.tracks[0];
+            t.last_seen = new Date(Date.now() - (COASTING_THRESHOLD_S + 5) * 1000).toISOString();
+            renderMap();
+            renderTracks();
+        }
+    """)
+
+    assert page.evaluate("isCoasting(state.tracks[0])") is True
+    page.wait_for_selector(".track-tooltip:has-text('estimated position')")
+    assert "coasting" in page.locator(".track-card-sub").first.inner_text().lower()
+
+
 def test_icon_only_buttons_have_accessible_names(live_server, page):
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#tracks-list")

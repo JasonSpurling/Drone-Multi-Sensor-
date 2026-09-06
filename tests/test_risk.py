@@ -72,3 +72,31 @@ def test_drone_verified_with_a_critical_incident_scores_ten():
 def test_ignored_track_always_scores_zero_regardless_of_everything_else():
     track = make_track(classification=Classification.DRONE, verified=True, ignored=True)
     assert compute_risk_score(track, [make_incident(IncidentSeverity.CRITICAL)]) == 0
+
+
+def test_far_from_any_zone_adds_nothing():
+    track = make_track(classification=Classification.DRONE)
+    assert compute_risk_score(track, [], nearest_restricted_zone_distance_m=10_000.0) == 4
+
+
+def test_within_500m_of_a_zone_adds_one():
+    track = make_track(classification=Classification.DRONE)
+    assert compute_risk_score(track, [], nearest_restricted_zone_distance_m=300.0) == 4 + 1
+
+
+def test_within_100m_of_a_zone_adds_two():
+    track = make_track(classification=Classification.DRONE)
+    assert compute_risk_score(track, [], nearest_restricted_zone_distance_m=50.0) == 4 + 2
+
+
+def test_no_known_zone_distance_adds_nothing():
+    track = make_track(classification=Classification.DRONE)
+    assert compute_risk_score(track, [], nearest_restricted_zone_distance_m=None) == 4
+
+
+def test_score_is_capped_at_ten_even_when_every_factor_maxes_out():
+    track = make_track(classification=Classification.DRONE, verified=True)
+    score = compute_risk_score(
+        track, [make_incident(IncidentSeverity.CRITICAL)], nearest_restricted_zone_distance_m=10.0
+    )
+    assert score == 10  # 4 + 2 + 4 + 2 = 12, capped
