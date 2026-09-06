@@ -1001,3 +1001,85 @@ def test_a_failed_action_shows_a_visible_error_toast_not_just_console(live_serve
     page.evaluate("acknowledge(999999)")
     page.wait_for_selector("#error-toast.show")
     assert "couldn't acknowledge" in page.locator("#error-toast").inner_text().lower()
+
+
+def test_alert_banner_shows_for_an_open_incident_and_links_to_the_alerts_panel(live_server, page):
+    """The topbar's red ALERT banner (state.incidents-driven, see
+    renderAlertBanner()) reflects real open (unacknowledged) incidents --
+    it should be absent with none, appear once one opens, and disappear
+    again once it's acknowledged, rather than being static decoration.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+    assert not page.locator("#alert-banner").is_visible()
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.wait_for_selector("#alert-banner.show")
+    banner_text = page.locator("#alert-banner").inner_text()
+    assert "UNACKNOWLEDGED ALERT" in banner_text
+    assert "restricted zone" in banner_text.lower()
+
+    page.click("#alert-banner")
+    page.wait_for_selector(".alert-item")
+    assert page.locator('.rail-btn[data-panel="alerts"]').get_attribute("aria-pressed") == "true"
+
+    page.click("button[data-ack-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
+    # Acknowledged (not resolved) no longer needs to interrupt the whole
+    # screen -- the rail's own badge (still "active" while acknowledged)
+    # is a distinct, separate signal from this banner.
+    assert not page.locator("#alert-banner").is_visible()
+
+
+def test_map_verify_filter_toggles_which_diamonds_plot(live_server, page):
+    """The bottom map-level Verified/Unverified filter (state.
+    mapVerifiedFilter) is independent of the Tracks panel's own Verified/
+    Unverified sub-tabs -- it decides which markers render on the map,
+    defaults to both on, and should never affect the list.
+    """
+    _seed_moving_track(live_server)  # single sensor -> unverified
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_selector("#map-verify-filter")
+
+    assert "Unverified (1)" in page.locator("#map-verify-chip-unverified").inner_text()
+    assert "Verified (0)" in page.locator("#map-verify-chip-verified").inner_text()
+    assert page.locator("#map-verify-chip-unverified").get_attribute("class").count("active")
+
+    page.click("#map-verify-chip-unverified")
+    assert "active" not in page.locator("#map-verify-chip-unverified").get_attribute("class")
+    # The list is untouched by the map-only filter -- still counts as
+    # unverified in the Tracks panel's own tab.
+    page.click(".verify-tab-btn[data-verify='unverified']")
+    assert page.locator(".track-card[data-id]").count() == 1
+
+
+def test_live_view_shows_an_inset_thumbnail_only_when_a_second_real_camera_exists(live_server, page):
+    """The details panel's Live view inset thumbnail (secondNearestCameraSensor())
+    should never appear for a track with only one nearby camera -- that would be
+    a fake duplicate of the main feed -- but should appear once a second,
+    genuinely distinct camera sensor is registered nearby.
+    """
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-1",
+        json={"sensor_type": "camera", "latitude": 51.5, "longitude": -0.1, "camera_stream_url": "rtsp://cam1/x"},
+        timeout=5,
+    ).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#live-view-slot")
+    page.wait_for_timeout(300)
+    assert page.locator(".inset-view-img").count() == 0
+
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-2",
+        json={"sensor_type": "camera", "latitude": 51.5002, "longitude": -0.1002, "camera_stream_url": "rtsp://cam2/x"},
+        timeout=5,
+    ).raise_for_status()
+    page.evaluate("refresh()")  # force a refresh rather than waiting out the real 15s poll interval
+    page.wait_for_selector(".inset-view-img")

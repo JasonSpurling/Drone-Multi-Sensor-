@@ -88,6 +88,22 @@
     justify-content: space-between;
     gap: 16px;
   }
+
+  /* Real open-incident summary, not decoration -- shown only while at
+     least one incident has status "open" (app/incidents.py; acknowledged
+     incidents no longer count, matching the Alerts panel's own badge
+     logic in renderAlerts()). Fixed height so #app-shell's own height
+     calc (below) only has to add/subtract one constant. */
+  #alert-banner {
+    display: none;
+    height: 26px; flex-shrink: 0;
+    align-items: center; justify-content: center; gap: 8px;
+    background: var(--critical); color: #fff;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+    cursor: pointer; border: none; width: 100%;
+  }
+  #alert-banner.show { display: flex; }
+  #alert-banner:hover { filter: brightness(1.1); }
   .topbar-left { display: flex; align-items: center; gap: 10px; }
   .topbar-right { display: flex; align-items: center; }
   #theme-toggle {
@@ -136,6 +152,7 @@
      more standard console chrome, and it frees the map's entire left
      edge for panels/legend instead of sharing it with a 42px rail. ---- */
   #app-shell { position: relative; height: calc(100vh - 40px); overflow: hidden; }
+  body.has-alert-banner #app-shell { height: calc(100vh - 40px - 26px); }
   #map { position: absolute; inset: 0; background: var(--map-bg); z-index: 0; }
 
   /* Same #icon-rail id and .rail-btn/data-panel/#alerts-badge structure
@@ -345,6 +362,24 @@
   #map-layer-toggles input[type="checkbox"] {
     position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0;
   }
+  /* Bottom map-level Verified/Unverified filter -- independent of the
+     Tracks panel's own Verified/Unverified sub-tabs (state.trackVerifiedTab):
+     that one decides which half of the *list* shows; this one decides
+     which diamonds render on the *map*, and defaults to showing both. */
+  #map-verify-filter {
+    position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px; backdrop-filter: blur(4px); display: flex; gap: 4px;
+  }
+  button.map-verify-chip {
+    display: flex; align-items: center; gap: 6px;
+    background: transparent; border: 1px solid transparent; border-radius: 999px;
+    padding: 5px 11px; color: var(--muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.02em; cursor: pointer;
+  }
+  button.map-verify-chip:hover { color: var(--text); }
+  button.map-verify-chip.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+  button.map-verify-chip .diamond { font-size: 10px; line-height: 1; }
   #map-empty-state {
     position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%);
     text-align: center; pointer-events: none; /* never intercepts a map click/drag */
@@ -354,7 +389,7 @@
   #map-empty-state .map-empty-body { font-size: 12px; margin-top: 4px; opacity: 0.4; }
   #map-offline-banner {
     display: none;
-    position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
+    position: absolute; z-index: 10; bottom: 54px; left: 50%; transform: translateX(-50%);
     background: var(--panel-glass); border: 1px solid var(--medium); border-radius: 8px;
     padding: 6px 12px; font-size: 11px; color: var(--text); backdrop-filter: blur(4px);
   }
@@ -502,9 +537,20 @@
   .meter { background: var(--panel-2); border-radius: 999px; height: 6px; overflow: hidden; margin-top: 4px; }
   .meter-fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
   .sparkline-wrap { margin-top: 4px; }
+  #live-view-slot { position: relative; }
   .live-view-img {
     display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
     border-radius: 6px; background: #000; border: 1px solid var(--border);
+  }
+  /* Only ever rendered when a second, genuinely distinct camera sensor is
+     registered near the same track (see secondNearestCameraSensor()) --
+     never a fake/duplicate feed of the same camera the main view already
+     shows. */
+  .inset-view-img {
+    position: absolute; z-index: 2; right: 6px; bottom: 6px;
+    width: 84px; aspect-ratio: 16 / 9; object-fit: cover;
+    border-radius: 4px; background: #000; border: 1px solid rgba(255,255,255,0.6);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
   }
   .heading-arrow { display: inline-block; font-size: 14px; }
   /* --- Sensor-view tab strip (Live view/Quality/Signal/Radar/Image) --- */
@@ -639,6 +685,8 @@
   </div>
 </header>
 
+<button id="alert-banner" type="button"></button>
+
 <div id="auth-bar" style="display:none; padding:10px 20px; background:#2a1620; border-bottom:1px solid var(--border); gap:8px; align-items:center;">
   <span style="color:var(--drone);">API key required or rejected.</span>
   <input id="auth-input" type="password" placeholder="X-API-Key" aria-label="API key" style="background:var(--input-bg); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 8px;">
@@ -663,6 +711,11 @@
     <label><input type="checkbox" id="toggle-vectors" checked> Vectors</label>
     <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
     <label><input type="checkbox" id="toggle-sensors" checked> Sensors</label>
+  </div>
+
+  <div id="map-verify-filter" style="display:none;">
+    <button class="map-verify-chip active" type="button" data-map-verify="verified" id="map-verify-chip-verified"><span class="diamond" style="color:var(--active);" aria-hidden="true">&#9670;</span> Verified</button>
+    <button class="map-verify-chip active" type="button" data-map-verify="unverified" id="map-verify-chip-unverified"><span class="diamond" style="color:var(--high);" aria-hidden="true">&#9670;</span> Unverified</button>
   </div>
 
   <aside class="floating-panel" id="left-panel">
@@ -801,6 +854,10 @@ const state = {
   // {id}/cue/{sensor_id}) shown under the Live view tab -- cached so
   // switching tabs and back doesn't refetch, cleared on track reselection.
   cameraCue: null,
+  // Which diamonds render on the *map* (independent of trackVerifiedTab
+  // above, which only affects the Tracks list) -- both on by default, see
+  // #map-verify-filter's doc comment near its CSS.
+  mapVerifiedFilter: { verified: true, unverified: true },
   // null == showing each track's live position; otherwise an index into
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
@@ -1064,6 +1121,28 @@ function nearestCameraSensor(track) {
   return best;
 }
 
+// A second, distinct camera near the same track -- used for the details
+// panel's inset thumbnail. Deliberately returns null unless a genuinely
+// different camera sensor (not the one nearestCameraSensor already
+// picked) is registered and in range: an inset thumbnail duplicating the
+// same feed the main view already shows would be fake UI, not a real
+// second angle.
+function secondNearestCameraSensor(track, excludeSensorId) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const cameras = state.sensorRegistrations.filter(
+    (s) => s.active && s.sensor_type === "camera" && s.sensor_id !== excludeSensorId
+      && s.latitude != null && s.longitude != null
+  );
+  if (cameras.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of cameras) {
+    const distanceM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || distanceM < best.distanceM) best = { sensorId: s.sensor_id, distanceM };
+  }
+  return best;
+}
+
 // This track's most recent detection that actually carries raw_data --
 // real per-sensor signal fields an adapter reported (RF center
 // frequency/bandwidth, acoustic bearing_confidence, camera motion area,
@@ -1105,6 +1184,47 @@ function ensureLiveViewElements() {
   });
 }
 
+// Same persistent-element/appendChild pattern as liveViewImg above, and
+// for the same reason: renderDetails() rebuilds the whole panel's HTML on
+// every refresh, and a plain <img src> would otherwise reopen its MJPEG
+// connection every poll cycle instead of showing one continuous feed.
+let insetViewImg = null;
+let insetViewSensorId = null;
+
+function ensureInsetViewElements() {
+  if (insetViewImg) return;
+  insetViewImg = document.createElement("img");
+  insetViewImg.className = "inset-view-img";
+  // A second camera can go unreachable independently of the main one --
+  // hide the inset rather than show a broken-image icon over the main feed.
+  insetViewImg.addEventListener("error", () => { insetViewImg.style.display = "none"; });
+  insetViewImg.addEventListener("load", () => { insetViewImg.style.display = "block"; });
+}
+
+function attachInsetView(secondCamera) {
+  if (!secondCamera) {
+    insetViewSensorId = null;
+    if (insetViewImg) insetViewImg.remove();
+    return;
+  }
+  const slot = document.getElementById("live-view-slot");
+  if (!slot) return;
+  ensureInsetViewElements();
+  if (secondCamera.sensorId !== insetViewSensorId) {
+    insetViewSensorId = secondCamera.sensorId;
+    insetViewImg.alt = `Live view from ${secondCamera.sensorId}`;
+    insetViewImg.title = `${secondCamera.sensorId} · ${Math.round(secondCamera.distanceM)} m away`;
+    insetViewImg.src = `/api/sensors/${encodeURIComponent(secondCamera.sensorId)}/live`
+      + (apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "");
+  }
+  slot.appendChild(insetViewImg);
+}
+
+function stopInsetView() {
+  if (insetViewImg) { insetViewImg.src = ""; insetViewImg.remove(); }
+  insetViewSensorId = null;
+}
+
 function attachLiveView(nearestCamera) {
   const slot = document.getElementById("live-view-slot");
   if (!slot || !nearestCamera) {
@@ -1124,6 +1244,7 @@ function attachLiveView(nearestCamera) {
   slot.appendChild(liveViewFallback);
   const distanceEl = document.getElementById("live-view-distance");
   if (distanceEl) distanceEl.textContent = `${nearestCamera.sensorId} · ${Math.round(nearestCamera.distanceM)} m away`;
+  attachInsetView(secondNearestCameraSensor(state.tracks.find((t) => t.id === state.selectedTrackId), nearestCamera.sensorId));
 }
 
 function formatSignalKey(key) {
@@ -1337,6 +1458,7 @@ function showDetailsPanel(show) {
 function stopLiveView() {
   if (liveViewImg) liveViewImg.src = "";
   liveViewSensorId = null;
+  stopInsetView();
 }
 
 async function selectTrack(id) {
@@ -1740,9 +1862,34 @@ function renderTracks() {
   });
 }
 
+// The topbar's red ALERT strip -- real open-incident state, not
+// decoration: shown only while at least one incident has status "open"
+// (app/incidents.py; an *acknowledged* incident has already been seen by
+// an operator, so it no longer needs to interrupt the whole screen the
+// way the rail's badge count -- open+acknowledged, non-resolved -- still
+// does for the Alerts panel itself). Clicking it jumps straight to the
+// Alerts panel rather than requiring a second click to find out what it's
+// about.
+function renderAlertBanner() {
+  const banner = document.getElementById("alert-banner");
+  const unacknowledged = state.incidents.filter((i) => i.status === "open");
+  if (unacknowledged.length === 0) {
+    banner.classList.remove("show");
+    document.body.classList.remove("has-alert-banner");
+    return;
+  }
+  const worst = unacknowledged.slice().sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+  const plural = unacknowledged.length === 1 ? "" : "s";
+  banner.textContent = `⚠ ${unacknowledged.length} UNACKNOWLEDGED ALERT${plural} — `
+    + `${worst.severity.toUpperCase()}: ${worst.description || worst.incident_type}`;
+  banner.classList.add("show");
+  document.body.classList.add("has-alert-banner");
+}
+
 function renderAlerts() {
   const el = document.getElementById("alerts-list");
   const active = state.incidents.filter((i) => i.status !== "resolved");
+  renderAlertBanner();
   updatePanelHeaderCount();
   const badgeEl = document.getElementById("alerts-badge");
   const alertsRailBtn = document.querySelector('.rail-btn[data-panel="alerts"]');
@@ -2616,7 +2763,9 @@ function renderMap() {
       .addTo(trackLayer);
   }
 
-  const pts = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
+  const plottable = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
+  const pts = plottable.filter((t) => (t.verified ? state.mapVerifiedFilter.verified : state.mapVerifiedFilter.unverified));
+  updateMapVerifyFilter(plottable);
 
   // An empty map reads as "is this even working?" without some signal
   // that the blankness is expected -- distinguishes "nothing's arrived
@@ -3317,6 +3466,31 @@ function updateVerifyTabCounts(matchingTracks) {
   document.getElementById("verify-tab-verified").textContent = `Verified (${verifiedCount})`;
   document.getElementById("verify-tab-unverified").textContent = `Unverified (${unverifiedCount})`;
 }
+
+// Counts + visibility for the map's own Verified/Unverified filter bar --
+// hidden entirely when there's nothing plottable at all (an empty bar
+// floating over an empty map is just noise), shown with live counts
+// otherwise. `plottable` is every currently-visible (search/class-filter-
+// passing) track with a known position, before this filter itself is
+// applied -- so toggling a chip off doesn't make its own count vanish.
+function updateMapVerifyFilter(plottable) {
+  const bar = document.getElementById("map-verify-filter");
+  bar.style.display = plottable.length > 0 ? "flex" : "none";
+  if (plottable.length === 0) return;
+  const verifiedCount = plottable.filter((t) => t.verified).length;
+  const unverifiedCount = plottable.length - verifiedCount;
+  document.querySelector('.map-verify-chip[data-map-verify="verified"]').lastChild.textContent = ` Verified (${verifiedCount})`;
+  document.querySelector('.map-verify-chip[data-map-verify="unverified"]').lastChild.textContent = ` Unverified (${unverifiedCount})`;
+}
+document.querySelectorAll(".map-verify-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const key = btn.dataset.mapVerify;
+    state.mapVerifiedFilter[key] = !state.mapVerifiedFilter[key];
+    btn.classList.toggle("active", state.mapVerifiedFilter[key]);
+    renderMap();
+  });
+});
+document.getElementById("alert-banner").addEventListener("click", () => showPanel("alerts"));
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.
 document.addEventListener("keydown", (e) => {
