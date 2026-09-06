@@ -302,6 +302,21 @@ class TrackIgnoreInput(BaseModel):
     duration_minutes: int | None = Field(default=None, gt=0)
 
 
+class VisualVerificationInput(BaseModel):
+    """Body for POST /api/tracks/{id}/verify-visual -- a human operator's
+    structured judgment after actually looking at the camera feed/snapshot
+    next to what the sensors reported, not a single button that
+    automatically declares the track "verified." Deliberately not a
+    closed-loop auto-tracking confirmation (this app has no visual object
+    tracking to auto-confirm anything) -- just a real record of what a
+    person concluded, and when, kept in the audit log alongside every
+    other operator decision (classify, ignore, acknowledge, resolve).
+    """
+
+    result: Literal["confirmed", "different_object", "false_detection", "unable_to_determine"]
+    note: str | None = Field(default=None, max_length=500)
+
+
 class Incident(BaseModel):
     """An actionable event raised from track/zone analysis."""
 

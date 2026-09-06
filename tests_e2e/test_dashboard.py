@@ -1404,3 +1404,110 @@ def test_live_tab_shows_an_honest_camera_state_label_not_a_fake_tracking_state(l
     label_text = page.locator("#camera-state-label").inner_text()
     assert label_text in ("Camera available — connecting…", "Live", "Camera unreachable")
     assert page.locator("#notif-panel").is_hidden()
+
+
+def test_map_zones_and_labels_toggles_control_the_zone_layer_independently(live_server, page):
+    """The Zones/Labels map-layer toggles (added alongside the existing
+    Trails/Vectors/Uncertainty/Sensors ones) should behave independently:
+    turning Zones off removes the zone polygon entirely, while turning only
+    Labels off keeps the polygon but drops its always-visible name tooltip.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_timeout(500)
+    assert page.evaluate("zoneLayer.getLayers().length") == 1
+    assert page.locator(".zone-label").count() == 1
+
+    page.click("#toggle-zones")
+    page.wait_for_timeout(300)
+    assert page.evaluate("zoneLayer.getLayers().length") == 0
+
+    page.click("#toggle-zones")
+    page.click("#toggle-labels")
+    page.wait_for_timeout(300)
+    assert page.evaluate("zoneLayer.getLayers().length") == 1
+    assert page.locator(".zone-label").count() == 0
+
+
+def test_notification_drawer_shows_severity_state_and_can_be_acknowledged(live_server, page):
+    """Each notification now carries a real severity color, a lifecycle
+    state (Unread/Read/Acknowledged/Resolved) computed from the actual
+    incident it's linked to, and an Acknowledge button that drives the same
+    real POST /api/incidents/{id}/acknowledge endpoint the Alerts panel
+    uses -- not just a local flag.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#notif-bell-btn")
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.evaluate("refresh()")
+    page.wait_for_selector("#notif-badge.show")
+
+    page.click("#notif-bell-btn")
+    page.wait_for_selector(".notif-item")
+    item = page.locator(".notif-item").first
+    assert item.locator(".notif-sev-dot").count() == 1
+    assert "Acknowledged" not in item.locator(".notif-state-chip").inner_text()
+
+    item.locator("button[data-notif-ack]").click()
+    page.wait_for_timeout(500)
+    # acknowledge() calls refresh(), which rebuilds the panel from state.incidents
+    page.click("#notif-bell-btn")
+    page.click("#notif-bell-btn")
+    page.wait_for_selector(".notif-item")
+    chip_text = page.locator(".notif-item").first.locator(".notif-state-chip").inner_text()
+    assert "acknowledged" in chip_text.lower()
+
+    incidents = requests.get(live_server + "/api/incidents", timeout=5).json()
+    assert incidents[0]["status"] == "acknowledged"
+
+
+def test_visual_verification_dialog_records_a_real_result(live_server, page):
+    """The Live view's Visual verification control is a structured,
+    human-driven judgment (Confirmed/Different object/False detection/
+    Unable to determine, plus a note) posted to a real endpoint -- not a
+    single button that auto-declares the track verified, and not the fake
+    PTZ auto-tracking confirmation states this app has no capability to
+    back.
+    """
+    requests.put(live_server + "/api/sensor-registrations/cam-1", json={
+        "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "camera_stream_url": "rtsp://cam1/x",
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+    tracks = requests.get(live_server + "/api/tracks", timeout=5).json()
+    track_id = tracks[0]["id"]
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#visual-verify-btn")
+    page.click("#visual-verify-btn")
+    page.wait_for_selector("#visual-verify-form:not([hidden])")
+    page.check("input[name='visual-verify-result'][value='false_detection']")
+    page.fill("#visual-verify-note", "No object visible in frame")
+    page.click("#visual-verify-submit")
+    page.wait_for_selector("#visual-verify-status:not([style*='display: none'])")
+    assert "Recorded" in page.locator("#visual-verify-status").inner_text()
+
+    entries = requests.get(live_server + "/api/audit-log", timeout=5).json()
+    mine = [e for e in entries if e["target"] == str(track_id) and e["action"] == "track.visual_verify"]
+    assert len(mine) == 1
+    assert mine[0]["detail"] == "false_detection: No object visible in frame"
+
+
+def test_details_panel_sections_follow_identity_telemetry_action_order(live_server, page):
+    """The details panel reads top-to-bottom as Identity -> Telemetry ->
+    Action, per the intended "identify the object, understand its
+    movement, decide what to do" flow -- action buttons no longer sit
+    above the identity/telemetry data they act on.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".kv-section-title")
+
+    titles = [t.strip().lower() for t in page.locator(".kv-section-title").all_inner_texts()]
+    assert titles.index("identity") < titles.index("telemetry") < titles.index("action")

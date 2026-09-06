@@ -91,6 +91,40 @@ def test_acknowledging_and_resolving_an_incident_are_both_recorded(admin_key):
         assert "incident.resolve" in actions
 
 
+def test_visual_verification_is_recorded_with_result_and_note(admin_key):
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        track_id = client.post("/api/detections", json=DETECTION_BODY, headers=headers).json()["track_id"]
+
+        r = client.post(
+            f"/api/tracks/{track_id}/verify-visual",
+            json={"result": "confirmed", "note": "Matches the radar track, visible quadcopter"},
+            headers=headers,
+        )
+        assert r.status_code == 204
+
+        entries = client.get("/api/audit-log", headers=headers).json()
+        assert entries[0]["action"] == "track.visual_verify"
+        assert entries[0]["target"] == str(track_id)
+        assert entries[0]["detail"] == "confirmed: Matches the radar track, visible quadcopter"
+        # Never touches the track's own classification/risk fields -- this
+        # is a person's own conclusion, not a new automated signal.
+        track = client.get(f"/api/tracks/{track_id}", headers=headers).json()
+        assert track["classification"] == "drone"
+
+
+def test_visual_verification_requires_operator_or_admin_role(monkeypatch):
+    monkeypatch.setattr("app.config.API_KEY", "")
+    monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({"view-key": "viewer"}))
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/tracks/1/verify-visual",
+            json={"result": "confirmed"},
+            headers={"X-API-Key": "view-key"},
+        )
+        assert r.status_code == 403
+
+
 def test_audit_log_requires_admin_role(monkeypatch):
     monkeypatch.setattr("app.config.API_KEY", "")
     monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({"view-key": "viewer"}))

@@ -206,6 +206,11 @@
   .notif-item:last-child { border-bottom: none; }
   .notif-item.unread { background: var(--panel-2); }
   .notif-time { color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .notif-top-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .notif-sev-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .notif-state-chip { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+  .notif-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .notif-actions button { font-size: 11px; padding: 3px 8px; }
 
   .floating-panel {
     position: absolute; z-index: 15; top: 12px; bottom: 12px;
@@ -297,12 +302,13 @@
   .track-card:hover { background: var(--panel-2); }
   .track-card.selected { background: var(--hover-bg); box-shadow: inset 3px 0 0 var(--accent); }
   .track-card.ignored { opacity: 0.55; }
-  .ptz-badge, .ignored-badge {
+  .ptz-badge, .ignored-badge, .verified-badge {
     display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.03em;
     border-radius: 3px; padding: 1px 4px; vertical-align: middle; margin-left: 4px;
   }
   .ptz-badge { background: var(--panel-2); border: 1px solid var(--accent); color: var(--accent); }
   .ignored-badge { background: var(--panel-2); border: 1px solid var(--muted); color: var(--muted); }
+  .verified-badge { background: var(--panel-2); border: 1px solid var(--active); color: var(--active); }
   .track-thumb {
     position: relative;
     width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
@@ -455,6 +461,12 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
   }
   .track-tooltip::before { display: none !important; }
+  .zone-label {
+    background: transparent !important; border: none !important; box-shadow: none !important;
+    color: var(--zone) !important; font-size: 10px !important; font-weight: 600 !important;
+    text-transform: uppercase; letter-spacing: 0.03em; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+  .zone-label::before { display: none !important; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
   .empty-ok { color: var(--muted); padding: 14px 6px; display: flex; align-items: center; gap: 8px; }
   .empty-ok .check { color: var(--active); font-size: 16px; }
@@ -765,6 +777,8 @@
     <label><input type="checkbox" id="toggle-vectors" checked> Vectors</label>
     <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
     <label><input type="checkbox" id="toggle-sensors" checked> Sensors</label>
+    <label><input type="checkbox" id="toggle-zones" checked> Zones</label>
+    <label><input type="checkbox" id="toggle-labels" checked> Labels</label>
   </div>
 
   <div id="map-verify-filter" style="display:none;">
@@ -890,10 +904,24 @@
 // different replica processed.
 const POLL_MS = 15000;
 
+function loadCollapsedGroups() {
+  try {
+    const raw = localStorage.getItem("droneCollapsedGroups");
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (e) {
+    return new Set(); // private mode, corrupt value, etc.
+  }
+}
+
+function saveCollapsedGroups(groups) {
+  try { localStorage.setItem("droneCollapsedGroups", JSON.stringify([...groups])); } catch (e) { /* private mode etc. */ }
+}
+
 const state = {
   tracks: [], incidents: [], zones: [], sensors: [], allZones: [], sensorRegistrations: [],
   selectedTrackId: null, trail: [], trailDetections: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true, showSensors: true,
+  showZones: true, showLabels: true,
   activePanel: "tracks",
   // Which sub-tab of the sensor-view tab strip (Live view/Quality/Signal/
   // Radar/Image) is showing in the details panel -- see renderDetails().
@@ -903,8 +931,11 @@ const state = {
   trackVerifiedTab: "unverified",
   // Group headers (Friendly/Drone/Aircraft/...) collapsed by a click on
   // their own chevron -- a Set of classification strings, not a single
-  // bool, since each group collapses independently.
-  collapsedGroups: new Set(),
+  // bool, since each group collapses independently. Persisted to
+  // localStorage (see the click handler in renderTracks()) so a group an
+  // operator collapsed to focus on unknown activity stays collapsed
+  // across a full page reload, not just across poll cycles.
+  collapsedGroups: loadCollapsedGroups(),
   // sensor_id -> the last computed slew-to-cue result (GET /api/tracks/
   // {id}/cue/{sensor_id}) shown under the Live view tab -- cached so
   // switching tabs and back doesn't refetch, cleared on track reselection.
@@ -1014,7 +1045,10 @@ function isCoasting(t) {
 function displayStatus(t) {
   return isCoasting(t) ? "coasting" : t.status;
 }
-const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+const SEVERITY_COLOR = {
+  critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)",
+  info: "var(--muted)",
+};
 const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
 
 // The active (non-resolved) incidents for one track, worst severity first
@@ -1044,6 +1078,7 @@ async function fetchJSON(url, opts) {
   const res = await fetch(url, { ...opts, headers });
   if (res.status === 401) throw new AuthError(`${url} -> 401`);
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  if (res.status === 204) return null; // no body to parse (e.g. POST .../verify-visual)
   return res.json();
 }
 
@@ -1806,6 +1841,32 @@ async function setTrackIgnored(id, ignored, durationMinutes) {
   }
 }
 
+// A human operator's structured visual-verification judgment (POST
+// /api/tracks/{id}/verify-visual) -- confirmed / a different object / a
+// false detection / unable to determine, after actually comparing the
+// camera feed to what the sensors reported. Recorded to the audit log
+// only (surfaced on the Timeline tab for admins); never touches
+// Track.classification or risk_score, since this is a person's own
+// conclusion, not a new automated signal.
+async function submitVisualVerification(trackId, result, note) {
+  const statusEl = document.getElementById("visual-verify-status");
+  try {
+    await fetchJSON(`/api/tracks/${trackId}/verify-visual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result, note }),
+    });
+    if (statusEl) {
+      statusEl.style.display = "block";
+      statusEl.textContent = "Recorded.";
+    }
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't record this visual verification — try again.");
+    console.error(e);
+  }
+}
+
 // Posts a short sequence of detections forming one moving track, via the
 // same public /api/detections path any real sensor uses -- lets the
 // empty-state "Simulate tracks" button show what the dashboard actually
@@ -2020,10 +2081,13 @@ function renderTracks() {
           // the same lookup the details panel's Live view tab uses).
           const ptzBadge = nearestCameraSensor(t) ? `<span class="ptz-badge" title="A registered camera can cue on this track">PTZ</span>` : "";
           const ignoredBadge = t.ignored ? `<span class="ignored-badge" title="New alerts suppressed for this track">Ignored</span>` : "";
+          const verifiedBadge = t.verified
+            ? `<span class="verified-badge" title="Corroborated by ${t.corroborating_sensor_types} independent sensor types">&#10003;${t.corroborating_sensor_types}</span>`
+            : "";
           return `<div class="track-card ${sel} ${t.ignored ? "ignored" : ""}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
             <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}${alertDot}</div>
             <div class="track-card-body">
-              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}</div>
+              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}${verifiedBadge}</div>
               <div class="track-card-sub">
                 <span class="status-dot" style="background:${STATUS_COLOR[displayStatus(t)] || STATUS_COLOR.closed}"></span>
                 ${escapeHtml(displayStatus(t))} ${speed ? "&middot; " + speed : ""}
@@ -2044,6 +2108,7 @@ function renderTracks() {
       const g = header.dataset.group;
       if (state.collapsedGroups.has(g)) state.collapsedGroups.delete(g);
       else state.collapsedGroups.add(g);
+      saveCollapsedGroups(state.collapsedGroups);
       renderTracks();
     });
   });
@@ -2185,6 +2250,22 @@ function renderLiveTabContent({ nearestCamera }) {
     <div class="kv" id="ptz-cue-row" style="margin-top:6px; display:none;">
       <div class="k" title="The pan/tilt this camera would need to point at the track right now (GET /api/tracks/{id}/cue/{sensor_id}) -- read-only: nothing here sends a command to the camera.">PTZ cue</div>
       <div class="v" id="ptz-cue-value">Computing…</div>
+    </div>
+    <div class="detail-actions" style="margin-top:10px;">
+      <button class="secondary" id="visual-verify-btn" aria-haspopup="true" aria-expanded="false"
+        title="Record what you actually see in this feed compared to what the sensors reported -- not an automated confirmation">Visual verification &#9662;</button>
+    </div>
+    <div class="detail-actions secondary" id="visual-verify-form" hidden>
+      <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="confirmed" checked> Confirmed object</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="different_object"> Different object</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="false_detection"> False detection</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="unable_to_determine"> Unable to determine</label>
+        <textarea id="visual-verify-note" placeholder="Optional note…" rows="2"
+          style="background:var(--input-bg); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 6px; font-size:11px; resize:vertical;"></textarea>
+        <button id="visual-verify-submit">Record result</button>
+        <div id="visual-verify-status" class="k" style="display:none;"></div>
+      </div>
     </div>
   `;
 }
@@ -2416,35 +2497,6 @@ function renderDetails() {
       </div>
     </div>
 
-    <div class="detail-actions">
-      <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
-      <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
-      <button class="secondary classify-btn" id="classify-neutral-btn" title="Clear a previous Friend/Foe override and let automatic classification start fresh">Neutral</button>
-      ${track.ignored
-        ? `<button class="secondary classify-btn active" id="ignore-toggle-btn" title="Stop suppressing alerts for this track">Unignore${track.ignored_until ? ` (${fmtUntil(track.ignored_until)})` : ""}</button>`
-        : `<button class="secondary classify-btn" id="ignore-toggle-btn" title="Suppress new alerts for this track (it keeps updating and tracking normally)" aria-haspopup="true" aria-expanded="false">Ignore &#9662;</button>`
-      }
-    </div>
-    ${!track.ignored ? `
-    <div class="detail-actions secondary" id="ignore-duration-menu" hidden>
-      <button class="secondary" data-ignore-minutes="5">5 min</button>
-      <button class="secondary" data-ignore-minutes="30">30 min</button>
-      <button class="secondary" data-ignore-minutes="">Indefinitely</button>
-    </div>` : ""}
-    <div class="detail-actions">
-      <button class="secondary" id="focus-btn">Focus</button>
-      <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
-    </div>
-    <div class="detail-actions secondary">
-      <button class="secondary" id="copy-btn" title="Copy this track's data as text">Copy</button>
-      <select id="export-format" aria-label="Export format">
-        <option value="csv">CSV</option>
-        <option value="gpx">GPX</option>
-        <option value="kml">KML</option>
-      </select>
-      <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
-    </div>
-
     <div class="kv-section">
       <div class="kv-section-title">Identity</div>
       <div class="kv-cols">
@@ -2461,7 +2513,7 @@ function renderDetails() {
     </div>
 
     <div class="kv-section">
-      <div class="kv-section-title">Position &amp; motion</div>
+      <div class="kv-section-title">Telemetry</div>
       <div class="kv-cols">
         <div class="kv">
           <div class="k">Position</div><div class="v">${track.latitude != null ? `${track.latitude.toFixed(5)}, ${track.longitude.toFixed(5)}` : "—"}</div>
@@ -2476,6 +2528,38 @@ function renderDetails() {
         <div class="k" title="Straight-line distance to this zone's centroid, not whether the track is currently inside it -- see the Alerts panel for that.">Nearest zone</div>
         <div class="v">${escapeHtml(nz.name)}: ${Math.round(nz.distanceM)} m</div>
       </div>` : ""}
+    </div>
+
+    <div class="kv-section">
+      <div class="kv-section-title">Action</div>
+      <div class="detail-actions">
+        <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
+        <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
+        <button class="secondary classify-btn" id="classify-neutral-btn" title="Clear a previous Friend/Foe override and let automatic classification start fresh">Neutral</button>
+        ${track.ignored
+          ? `<button class="secondary classify-btn active" id="ignore-toggle-btn" title="Stop suppressing alerts for this track">Unignore${track.ignored_until ? ` (${fmtUntil(track.ignored_until)})` : ""}</button>`
+          : `<button class="secondary classify-btn" id="ignore-toggle-btn" title="Suppress new alerts for this track (it keeps updating and tracking normally)" aria-haspopup="true" aria-expanded="false">Ignore &#9662;</button>`
+        }
+      </div>
+      ${!track.ignored ? `
+      <div class="detail-actions secondary" id="ignore-duration-menu" hidden>
+        <button class="secondary" data-ignore-minutes="5">5 min</button>
+        <button class="secondary" data-ignore-minutes="30">30 min</button>
+        <button class="secondary" data-ignore-minutes="">Indefinitely</button>
+      </div>` : ""}
+      <div class="detail-actions">
+        <button class="secondary" id="focus-btn">Focus</button>
+        <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
+      </div>
+      <div class="detail-actions secondary">
+        <button class="secondary" id="copy-btn" title="Copy this track's data as text">Copy</button>
+        <select id="export-format" aria-label="Export format">
+          <option value="csv">CSV</option>
+          <option value="gpx">GPX</option>
+          <option value="kml">KML</option>
+        </select>
+        <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
+      </div>
     </div>
 
     <div class="kv-section">
@@ -2522,6 +2606,20 @@ function renderDetails() {
   const snapshotBtn = document.getElementById("snapshot-btn");
   if (snapshotBtn && nearestCamera) {
     snapshotBtn.addEventListener("click", () => takeSnapshot(nearestCamera.sensorId));
+  }
+  const visualVerifyBtn = document.getElementById("visual-verify-btn");
+  if (visualVerifyBtn) {
+    const form = document.getElementById("visual-verify-form");
+    visualVerifyBtn.addEventListener("click", () => {
+      const opening = form.hidden;
+      form.hidden = !opening;
+      visualVerifyBtn.setAttribute("aria-expanded", String(opening));
+    });
+    document.getElementById("visual-verify-submit").addEventListener("click", () => {
+      const result = form.querySelector("input[name='visual-verify-result']:checked").value;
+      const note = document.getElementById("visual-verify-note").value.trim();
+      submitVisualVerification(track.id, result, note || null);
+    });
   }
   document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
   document.getElementById("classify-foe-btn").addEventListener("click", () => {
@@ -2860,6 +2958,14 @@ function initMap() {
     state.showSensors = e.target.checked;
     renderMap();
   });
+  document.getElementById("toggle-zones").addEventListener("change", (e) => {
+    state.showZones = e.target.checked;
+    renderMap();
+  });
+  document.getElementById("toggle-labels").addEventListener("change", (e) => {
+    state.showLabels = e.target.checked;
+    renderMap();
+  });
 }
 
 // A distinct shape per classification (not just color) so markers are
@@ -3051,18 +3157,27 @@ function renderMap() {
   trackLayer.clearLayers();
 
   zonePolygonLayers.clear();
-  state.zones.forEach((z) => {
-    const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
-    const layer = L.polygon(z.polygon, {
-      color,
-      weight: 1.5,
-      fillColor: color,
-      fillOpacity: 0.08,
-    })
-      .bindPopup(`${escapeHtml(z.name)} <span style="color:var(--muted);">(${escapeHtml(z.zone_type)})</span>`)
-      .addTo(zoneLayer);
-    zonePolygonLayers.set(z.id, layer);
-  });
+  if (state.showZones) {
+    state.zones.forEach((z) => {
+      const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
+      const layer = L.polygon(z.polygon, {
+        color,
+        weight: 1.5,
+        fillColor: color,
+        fillOpacity: 0.08,
+      })
+        .bindPopup(`${escapeHtml(z.name)} <span style="color:var(--muted);">(${escapeHtml(z.zone_type)})</span>`)
+        .addTo(zoneLayer);
+      zonePolygonLayers.set(z.id, layer);
+      // Always-visible zone name, distinct from the click-to-open popup
+      // above -- the "Label layer" toggle controls exactly this, since a
+      // zone's own name is the one map identifier this app can show
+      // permanently without needing a click or hover first.
+      if (state.showLabels) {
+        layer.bindTooltip(z.name, { permanent: true, direction: "center", className: "zone-label" });
+      }
+    });
+  }
 
   // Where your sensors actually are, not just what they're seeing --
   // only ever a real registered position (app/api/sensor_registry.py),
@@ -3308,9 +3423,39 @@ let notifBaselineEstablished = false;
 let prevIncidentIds = new Set();
 let prevSensorStatus = new Map();
 let prevTrackStatus = new Map();
+let notifIdCounter = 0;
 
-function pushNotification(text) {
-  notifications.unshift({ text, timestamp: new Date().toISOString(), read: false });
+// A notification's lifecycle state, computed fresh every render rather
+// than stored -- for an incident-linked notification this is the real
+// Incident.status (open/acknowledged/resolved) looked up in state.
+// incidents, so it can never say "acknowledged" while the actual incident
+// is still open, or vice versa. A non-incident notification (sensor
+// status change, track lost) has no server-side resolution concept to
+// borrow, so it only ever reaches "acknowledged" -- a local, this-browser-
+// only "I've seen this" flag -- never a fabricated "resolved".
+function notifState(n) {
+  if (n.incidentId != null) {
+    const incident = state.incidents.find((i) => i.id === n.incidentId);
+    if (incident) {
+      if (incident.status === "resolved") return "resolved";
+      if (incident.status === "acknowledged") return "acknowledged";
+    }
+  }
+  if (n.acknowledged) return "acknowledged";
+  return n.read ? "read" : "unread";
+}
+
+const NOTIF_STATE_COLOR = {
+  unread: "var(--accent)", read: "var(--muted)",
+  acknowledged: "var(--lost)", resolved: "var(--active)",
+};
+
+function pushNotification(text, { severity = "info", trackId = null, incidentId = null } = {}) {
+  notifIdCounter += 1;
+  notifications.unshift({
+    id: notifIdCounter, text, timestamp: new Date().toISOString(),
+    read: false, acknowledged: false, severity, trackId, incidentId,
+  });
   while (notifications.length > NOTIF_MAX) notifications.pop();
 }
 
@@ -3325,7 +3470,9 @@ function detectAndRecordNotifications(tracks, incidents, sensors) {
 
   incidents.forEach((i) => {
     if (!prevIncidentIds.has(i.id)) {
-      pushNotification(`New alert: ${i.description || i.incident_type} (${i.severity}, track ${i.track_id ?? "—"})`);
+      pushNotification(`New alert: ${i.description || i.incident_type} (${i.severity}, track ${i.track_id ?? "—"})`, {
+        severity: i.severity, trackId: i.track_id, incidentId: i.id,
+      });
     }
   });
 
@@ -3335,14 +3482,14 @@ function detectAndRecordNotifications(tracks, incidents, sensors) {
   sensors.forEach((s) => {
     const prev = prevSensorStatus.get(s.sensor_id);
     if (prev !== undefined && prev !== s.status && (severityRank[s.status] ?? 0) > (severityRank[prev] ?? 0)) {
-      pushNotification(`Sensor ${s.sensor_id} is now ${s.status}`);
+      pushNotification(`Sensor ${s.sensor_id} is now ${s.status}`, { severity: "medium" });
     }
   });
 
   tracks.forEach((t) => {
     const prev = prevTrackStatus.get(t.id);
     if (prev === "active" && t.status === "lost") {
-      pushNotification(`Track ${t.id} lost contact`);
+      pushNotification(`Track ${t.id} lost contact`, { severity: "medium", trackId: t.id });
     }
   });
 
@@ -3352,7 +3499,7 @@ function detectAndRecordNotifications(tracks, incidents, sensors) {
 }
 
 function renderNotifications() {
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = notifications.filter((n) => notifState(n) === "unread").length;
   const badge = document.getElementById("notif-badge");
   const bellBtn = document.getElementById("notif-bell-btn");
   if (unreadCount > 0) {
@@ -3366,18 +3513,60 @@ function renderNotifications() {
   const panel = document.getElementById("notif-panel");
   if (panel.hidden) return; // rebuilt fresh on open instead, see the click handler below
   panel.innerHTML = notifPanelHtml();
+  wireNotifPanelButtons();
 }
+
+const NOTIF_STATE_LABEL = { unread: "Unread", read: "Read", acknowledged: "Acknowledged", resolved: "Resolved" };
 
 function notifPanelHtml() {
   if (notifications.length === 0) {
     return '<div class="empty" style="padding:10px;">No notifications yet.</div>';
   }
   return notifications
-    .map((n) => `<div class="notif-item ${n.read ? "" : "unread"}">
-      <div>${escapeHtml(n.text)}</div>
-      <div class="notif-time">${fmtRelative(n.timestamp)}</div>
-    </div>`)
+    .map((n) => {
+      const s = notifState(n);
+      const trackExists = n.trackId != null && state.tracks.some((t) => t.id === n.trackId);
+      return `<div class="notif-item ${s === "unread" ? "unread" : ""}" data-notif-id="${n.id}">
+        <div class="notif-top-row">
+          <span class="notif-sev-dot" style="background:${SEVERITY_COLOR[n.severity] || "var(--muted)"}"></span>
+          <span class="notif-state-chip" style="color:${NOTIF_STATE_COLOR[s]}">${NOTIF_STATE_LABEL[s]}</span>
+        </div>
+        <div>${escapeHtml(n.text)}</div>
+        <div class="notif-time">${fmtRelative(n.timestamp)}</div>
+        <div class="notif-actions">
+          ${trackExists ? `<button class="secondary" data-notif-view="${n.trackId}">View track</button>` : ""}
+          ${s === "unread" || s === "read" ? `<button class="secondary" data-notif-ack="${n.id}">Acknowledge</button>` : ""}
+        </div>
+      </div>`;
+    })
     .join("");
+}
+
+function wireNotifPanelButtons() {
+  const panel = document.getElementById("notif-panel");
+  panel.querySelectorAll("button[data-notif-view]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      panel.hidden = true;
+      selectTrack(Number(btn.dataset.notifView));
+    });
+  });
+  panel.querySelectorAll("button[data-notif-ack]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const n = notifications.find((x) => x.id === Number(btn.dataset.notifAck));
+      if (!n) return;
+      n.acknowledged = true;
+      // An incident-linked notification's real acknowledgment lives on the
+      // incident itself (the same endpoint the Alerts panel's Acknowledge
+      // button uses) -- so this button drives that, not just a local flag,
+      // and the notification's state above reads it back from
+      // state.incidents rather than trusting the flag once that succeeds.
+      if (n.incidentId != null) {
+        await acknowledge(n.incidentId);
+      } else {
+        renderNotifications();
+      }
+    });
+  });
 }
 
 document.getElementById("notif-bell-btn").addEventListener("click", () => {
@@ -3385,6 +3574,7 @@ document.getElementById("notif-bell-btn").addEventListener("click", () => {
   panel.hidden = !panel.hidden;
   if (!panel.hidden) {
     panel.innerHTML = notifPanelHtml();
+    wireNotifPanelButtons();
     notifications.forEach((n) => { n.read = true; });
     renderNotifications();
   }

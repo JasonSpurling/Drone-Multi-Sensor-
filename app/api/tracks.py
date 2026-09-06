@@ -24,6 +24,7 @@ from app.models import (
     TrackClassificationInput,
     TrackIgnoreInput,
     TrackStatus,
+    VisualVerificationInput,
     ZoneType,
 )
 from app.risk import assess_risk, is_approaching_zone
@@ -184,6 +185,34 @@ def ignore_track(
     if updated.site_id is not None:
         publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
     return _with_computed_fields(updated)
+
+
+@router.post("/tracks/{track_id}/verify-visual", status_code=204)
+def verify_visual(
+    track_id: int,
+    body: VisualVerificationInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> None:
+    """Records a human operator's structured visual-verification judgment
+    -- confirmed / a different object / a false detection / unable to
+    determine, plus an optional note -- after they actually compared the
+    camera feed or a snapshot to what the sensors reported. This never
+    touches Track.classification or risk_score itself: it's a record of
+    what a person concluded, not a new automated signal, so it can't be
+    mistaken for the fusion system's own evidence. Kept in the audit log
+    (surfaced on the Timeline tab for admins) rather than a new table,
+    the same place every other operator decision on a track already lives.
+    """
+    if get_track(track_id, principal.site_id) is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    detail = body.result if not body.note else f"{body.result}: {body.note}"
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.visual_verify",
+        target=str(track_id),
+        detail=detail,
+    )
 
 
 @router.get("/tracks/{track_id}/history", response_model=list[Detection])

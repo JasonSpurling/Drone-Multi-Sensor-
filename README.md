@@ -504,6 +504,20 @@ with everything that already existed before the tab was opened. The
 unread badge count clears the moment the panel is opened (read, in this
 context, means "seen," not "acted on").
 
+Each notification now shows a severity-colored dot and an explicit
+lifecycle state -- Unread, Read, Acknowledged, or Resolved
+(`notifState()`). For a notification tied to a real incident, this state
+is read straight from that `Incident.status` (open/acknowledged/resolved)
+rather than tracked separately, so it can never say "Acknowledged" while
+the incident itself is still open. Its **Acknowledge** button drives the
+same real `POST /api/incidents/{id}/acknowledge` endpoint the Alerts panel
+uses -- not a local-only flag. A notification with no incident behind it
+(a sensor status change, a track going lost) has no further server-side
+state to borrow, so it only ever reaches "Acknowledged" (a this-browser-
+only "I've seen this," never a fabricated "Resolved"). A **View track**
+button appears when the notification's track still exists, and jumps
+straight to it in the details panel.
+
 ### Coasting tracks
 
 A track that's gone quiet for a while, but hasn't yet been marked `lost`
@@ -523,6 +537,24 @@ staleness). Never plotted as if it were a real report: the estimate is
 explicitly labeled, and the live marker at the old position is dimmed to
 make clear which one to trust.
 
+### Details panel structure: Identity, Telemetry, Action
+
+The track details panel reads top-to-bottom in a fixed order -- **Identity**
+(icon, classification, status, confidence/zone badges, UID, category,
+first/last seen), **Telemetry** (position, altitude, heading, speed,
+nearest zone), then **Action** (Friend/Foe/Neutral, Ignore, Focus/Follow,
+Copy/Export) -- matching "identify the object, understand its movement,
+then decide what to do." The evidence tab strip (Live view/Quality/
+Signal/Radar/Image/Timeline) follows after Action.
+
+### Track list group headers
+
+Within each Verified/Unverified tab, tracks are grouped by classification
+under a collapsible header showing the category name and count
+(`state.collapsedGroups`). Collapsing a group (e.g. Friendly or Bird
+traffic, to focus on unknown activity) persists to `localStorage`, so it
+stays collapsed across a full page reload, not just across poll cycles.
+
 ### Track details tabs
 
 The details panel's sensor-specific content (previously several
@@ -535,6 +567,17 @@ and **Image** (an on-demand snapshot button). Each tab renders its own
 specific "not available" message when a track has nothing for it (no
 camera nearby, no signal data yet, ...) rather than hiding the tab
 outright or fabricating a placeholder.
+
+### Map layer toggles: Zones and Labels
+
+Alongside the existing Trails/Vectors/Uncertainty/Sensors checkboxes,
+**Zones** and **Labels** independently control the restricted/monitoring
+zone polygons drawn on the map. Turning Zones off removes the polygons
+entirely; turning off only Labels keeps the polygons visible but drops
+each one's always-on name tooltip (distinct from the existing click-to-open
+popup, which still works either way) -- useful for an operator who wants
+the zone boundaries visible without the name text competing for space at
+a busy zoom level.
 
 ### Map imagery vs. tracking data
 
@@ -1163,6 +1206,20 @@ frame, or "Camera unreachable" if it fails to load. This is deliberately
 **not** a closed-loop auto-tracking state machine (no
 Assigned/Slewing/Searching/Acquired/Following/Locked states) -- this app
 has no visual object tracking behind the camera, so it never claims one.
+
+### Visual verification
+
+`POST /api/tracks/{id}/verify-visual` (`Visual verification` under the
+Live tab) records a human operator's structured judgment after actually
+comparing the camera feed to what the sensors reported: **Confirmed
+object**, **Different object**, **False detection**, or **Unable to
+determine**, plus an optional note. This is deliberately not a single
+button that auto-declares a track "verified," and not the fake PTZ
+auto-tracking confirmation a closed-loop visual-tracking system would
+use -- it's a plain record of one person's conclusion, kept in the audit
+log (surfaced on the Timeline tab for admins) alongside every other
+operator decision. It never touches `Track.classification` or
+`risk_score` itself, so it can't be mistaken for a new automated signal.
 
 ## Downstream C2 integration
 
