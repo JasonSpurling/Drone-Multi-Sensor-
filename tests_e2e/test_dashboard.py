@@ -551,6 +551,54 @@ def test_after_action_report_button_populates_a_printable_summary(live_server, p
     assert "radar-1" in report_text
 
 
+def test_after_action_report_surfaces_a_real_decoded_identity_fragment(live_server, page):
+    """app.reporting._extract_identification: a real per-aircraft identity
+    field a sensor already decoded (here, a DJI DroneID-style
+    serial_number in raw_data) should show up in the report's new
+    Identification section -- not a manufacturer/model guess this app
+    has no data to back.
+    """
+    page.add_init_script("window.print = () => {};")
+    requests.post(live_server + "/api/detections", json={
+        **INSIDE_RESTRICTED_ZONE,
+        "raw_data": {"serial_number": "0W9DH1A0010SNL"},
+    }, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector("button[data-report-id]")
+    page.click("button[data-report-id]")
+    page.wait_for_function("document.getElementById('print-report').innerHTML.length > 0")
+
+    report_text = page.locator("#print-report").inner_text()
+    assert "Identification" in report_text
+    assert "0W9DH1A0010SNL" in report_text
+
+
+def test_track_sort_offers_a_risk_option_and_reorders_by_it(live_server, page):
+    """track.risk_score (app.risk.compute_risk_score) -- a plain point
+    score, not a proprietary ML ranking -- is a selectable sort, same as
+    the existing Alerts-first/Altitude/Speed options.
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()  # inside the seeded restricted zone -> higher risk
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-2", "sensor_type": "radar", "latitude": 52.0, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()  # outside any zone -> lower risk
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    assert page.locator("#track-sort option[value='risk']").count() == 1
+
+    page.select_option("#track-sort", "risk")
+    page.wait_for_timeout(200)
+    meta_texts = page.locator(".track-card-meta").all_inner_texts()
+    risks = [int(t.split("risk ")[1]) for t in meta_texts if "risk " in t]
+    assert risks == sorted(risks, reverse=True)
+
+
 def test_map_offline_banner_appears_after_repeated_tile_failures_and_clears_on_recovery(live_server, page):
     """Map tile imagery comes from an external CDN (unlike the vendored
     Leaflet library itself) -- a deployment with no internet access would

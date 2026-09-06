@@ -417,6 +417,22 @@ track's tooltip (`trackMapPopupHtml()` in `dashboard.html`) alongside its
 Verified/Unverified state, so an operator can see at a glance why a track
 is Verified without opening the full details panel.
 
+### Risk score
+
+`Track.risk_score` (`app/risk.py`, computed fresh on every read, never
+stored) is a plain, fully-documented point score: `+4` for `drone`
+classification (`+2` unknown, `+1` aircraft, `0` bird/friendly), `+2` if
+Verified, plus the worst currently-open incident's severity (`+1` to
+`+4`) if any. An ignored track always scores `0`, regardless of the rest
+-- an operator has already said this one shouldn't compete for attention.
+This is **not** a claim of a trained ML risk model (this app ships no
+such model, same "scaffolding only" posture as `app/ml/`) -- every point
+in the score traces back to a field already shown elsewhere in the UI, so
+"why is this track ranked here" is always answerable without a black box.
+Surfaced on every track card and as a "Risk: highest first" option in the
+Sort control (see "Track list: alert indicator and sort" above -- same
+within-group-only reordering rule applies).
+
 ### Track details tabs
 
 The details panel's sensor-specific content (previously several
@@ -514,12 +530,27 @@ Alt+5) surfaces this: pick a date range, see the breakdown, or click
 "What actually happened on this one incident" is
 `GET /api/incidents/{id}/report` -- a single incident's full story
 (`build_after_action_report`): what was seen, when, by which sensors, the
-track's fused classification and final position/speed, and how it was
-responded to (acknowledged by whom, resolution time). Every incident in
-the dashboard's **Alerts** panel (including resolved ones, not just
-active alerts) has a **Report** button that fetches this and renders it
-as a printable page (`window.print()`) -- useful for after-action review
-or an incident record you want on paper/PDF rather than just on screen.
+track's fused classification and final position/speed, any real identity
+fragment a sensor actually decoded, and how it was responded to
+(acknowledged by whom, resolution time). Every incident in the
+dashboard's **Alerts** panel (including resolved ones, not just active
+alerts) has a **Report** button that fetches this and renders it as a
+printable page (`window.print()`) -- useful for after-action review or an
+incident record you want on paper/PDF rather than just on screen.
+
+**Identification section**: `_extract_identification` pulls the most
+recent non-null value of any real per-aircraft identity field a sensor
+already decoded into a detection's `raw_data` -- DJI DroneID's
+`serial_number`, ASTERIX radar's Mode S `aircraft_address`/`callsign`/
+squawk (`mode3a`), ASTM F3411 Remote ID's `operator_id` -- into the
+report. These were already captured (see the adapter modules named for
+each), just not previously surfaced anywhere in the report. Deliberately
+**not** a manufacturer/model name: this app has no database mapping
+serial/address ranges to manufacturers, so it never fabricates one --
+just the raw identifying value an operator or investigator would look up
+themselves. The track's `aircraft_category` (real ICAO ADS-B emitter
+category, e.g. "Rotorcraft") is included in the Track section when known,
+for the same reason.
 
 An open incident's card also has **Acknowledge** and **Resolve** buttons
 (driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
@@ -1143,8 +1174,13 @@ An RF detection whose `raw_data` carries `center_frequency_mhz`,
 `bandwidth_mhz`, and (optionally) `frequency_hopping` is matched against a
 small library of publicly documented drone control/video link signatures
 (`app/rf_signatures.py`) -- DJI OcuSync, DJI Lightbridge, analog FPV video,
-and Wi-Fi-based FPV/control links -- instead of trusting a single flat RF
-confidence number. This mirrors how real counter-drone RF sensors actually
+Wi-Fi-based FPV/control links, and long-range RC control links
+(ExpressLRS/TBS Crossfire-style, at both 900 MHz and 2.4 GHz) -- instead
+of trusting a single flat RF confidence number. The 900 MHz entry in
+particular closes a real coverage gap: every other signature sits in the
+2.4/5.8 GHz bands, so a sub-1 GHz control link (a real, common band for
+long-range FPV) previously matched nothing at all. This mirrors how real
+counter-drone RF sensors actually
 work: classifying frequency band, channel bandwidth, and hopping behavior
 against known signature libraries for common link types, not decoding
 encrypted proprietary protocol content. A signature match's confidence is

@@ -99,6 +99,36 @@ BUILT_IN_SIGNATURES: tuple[RfSignature, ...] = (
         # weaker evidence on its own.
         drone_link_confidence=0.5,
     ),
+    # Long-range RC control links (ExpressLRS, TBS Crossfire, and other
+    # LoRa-based "ELRS-style" systems) -- previously the only sub-1 GHz
+    # entry missing from this table, a real coverage gap rather than a
+    # rebrand of an existing band. ExpressLRS's protocol and RF parameters
+    # are fully open-source and published (github.com/ExpressLRS); TBS
+    # Crossfire's ISM-band usage is documented in its own public manuals.
+    # Distinguished from every 2.4/5.8 GHz entry above by operating in the
+    # 900 MHz US ISM band at a much narrower channel width -- a long-range
+    # control uplink, not a video downlink.
+    RfSignature(
+        name="elrs_crossfire_900",
+        label="Long-range RC control (ExpressLRS/TBS Crossfire, 900 MHz)",
+        freq_bands_mhz=((902.0, 928.0),),
+        bandwidth_mhz=(0.1, 0.6),
+        frequency_hopping=True,
+        drone_link_confidence=0.8,
+        source="published open-source protocol specs (ExpressLRS) / public TBS Crossfire manuals",
+    ),
+    # Same families' 2.4 GHz variant -- distinguished from OcuSync/
+    # Lightbridge/Wi-Fi FPV above by a much narrower LoRa/FHSS channel
+    # width (roughly 0.5 MHz vs. their 8-22 MHz), not just by band.
+    RfSignature(
+        name="elrs_2_4ghz",
+        label="Long-range RC control (ExpressLRS, 2.4 GHz)",
+        freq_bands_mhz=((2400.0, 2483.5),),
+        bandwidth_mhz=(0.4, 1.0),
+        frequency_hopping=True,
+        drone_link_confidence=0.75,
+        source="published open-source protocol specs (ExpressLRS)",
+    ),
 )
 
 # Backward-compatible alias -- app/fusion.py and earlier tests referred to

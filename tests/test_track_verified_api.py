@@ -29,6 +29,28 @@ def test_single_sensor_track_is_unverified(isolated_db):
         assert track["contributing_sensor_types"] == ["radar"]
 
 
+def test_risk_score_is_exposed_and_reflects_an_open_incident(isolated_db):
+    """app.risk.compute_risk_score wired into GET /api/tracks -- a track
+    with no open incidents should be low (its classification alone), and
+    jump once a real zone-incursion incident opens for it.
+    """
+    with TestClient(app) as client:
+        # Just outside, then just inside, app/zones.seed.json's bundled
+        # "Central London Restricted Zone" (51.49-51.51, -0.11--0.09),
+        # which isolated_db's default seed always loads -- within
+        # TRACK_DISTANCE_GATE_M (500m) so the tracker fuses both
+        # detections into one track (see test_track_ignore_api.py's
+        # identical reasoning for these exact coordinates).
+        r = client.post("/api/detections", json=_detection("radar-1", "radar", latitude=51.5101, longitude=-0.10))
+        track_id = r.json()["track_id"]
+        baseline = client.get(f"/api/tracks/{track_id}").json()
+        assert baseline["risk_score"] is not None
+
+        client.post("/api/detections", json=_detection("radar-1", "radar", latitude=51.5099, longitude=-0.10))
+        after = client.get(f"/api/tracks/{track_id}").json()
+        assert after["risk_score"] > baseline["risk_score"]
+
+
 def test_contributing_sensor_types_lists_every_distinct_type(isolated_db):
     with TestClient(app) as client:
         r = client.post("/api/detections", json=_detection("radar-1", "radar"))

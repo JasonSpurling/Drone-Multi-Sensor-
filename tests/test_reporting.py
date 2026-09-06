@@ -160,3 +160,51 @@ def test_after_action_report_lists_detections_and_sensors_involved():
     assert report["sensors_involved"] == ["camera-1", "radar-1"]
     assert report["detections"][0]["sensor_id"] == "radar-1"
     assert report["detections"][0]["confidence"] == 0.9
+
+
+def test_after_action_report_extracts_real_identity_fragments_from_raw_data():
+    """_extract_identification surfaces real per-aircraft identity fields
+    a sensor already decoded (DJI DroneID serial_number, ASTERIX radar's
+    Mode S address/callsign/squawk) -- not a manufacturer/model guess.
+    """
+    from app.models import SensorType
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    detections = [
+        Detection(
+            sensor_id="radar-1", sensor_type=SensorType.RADAR, timestamp=START,
+            latitude=51.0, longitude=0.0, confidence=0.9,
+            raw_data={"aircraft_address": "ABC123", "callsign": "SPEEDBIRD1"},
+        ),
+        Detection(
+            sensor_id="dji-rid-1", sensor_type=SensorType.RF, timestamp=START + timedelta(seconds=5),
+            latitude=51.0, longitude=0.0, confidence=0.8,
+            raw_data={"serial_number": "0W9DH1A0010SNL"},
+        ),
+    ]
+    report = build_after_action_report(incident, track=None, zone=None, detections=detections)
+    assert report["identification"] == {
+        "aircraft_address": "ABC123", "callsign": "SPEEDBIRD1", "serial_number": "0W9DH1A0010SNL",
+    }
+
+
+def test_after_action_report_identification_is_empty_without_any_raw_data():
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    report = build_after_action_report(incident, track=None, zone=None, detections=[])
+    assert report["identification"] == {}
+
+
+def test_after_action_report_includes_aircraft_category_when_known():
+    from app.models import Classification, TrackStatus
+    from app.reporting import build_after_action_report
+
+    incident = make_incident()
+    track = Track(
+        track_uid="t-1", first_seen=START, last_seen=START, status=TrackStatus.ACTIVE,
+        classification=Classification.AIRCRAFT, aircraft_category="A7",
+    )
+    report = build_after_action_report(incident, track=track, zone=None, detections=[])
+    assert report["track"]["aircraft_category"] == "A7"

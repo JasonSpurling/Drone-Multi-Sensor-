@@ -35,6 +35,9 @@ section with the version and date, bump `__version__`, and start a fresh
 - `Track.contributing_sensor_types`: which distinct sensor types (not just how many) have corroborated a track, surfaced on the dashboard's map marker tooltip when a track is selected, alongside its Verified/Unverified state.
 - A "Duration" (first_seen -> now) shown on every track card, and a "PTZ" badge when a registered camera is near enough to cue on that track.
 - The map's bottom Verified/Unverified filter now has one diamond chip per classification actually present in each bucket (not just a flat verified/unverified toggle), each independently togglable, plus an ALL reset per row.
+- `Track.risk_score` (`app/risk.py`): a plain, fully-documented 0-10 point score from classification + verified + the worst open incident's severity -- not a proprietary/opaque ML ranking this app has no trained model to back. Surfaced on every track card and as a new "Risk: highest first" dashboard sort option.
+- The after-action report (`GET /api/incidents/{id}/report`) now includes an `identification` section: real per-aircraft identity fragments a sensor already decoded (DJI DroneID `serial_number`, ASTERIX radar's Mode S `aircraft_address`/`callsign`/squawk, ASTM Remote ID `operator_id`) that were previously captured in `raw_data` but never surfaced in the report -- not a manufacturer/model lookup this app has no data to back. Also now includes the track's `aircraft_category` when known.
+- Two more RF signatures (`app/rf_signatures.py`): ExpressLRS/TBS Crossfire-style long-range RC control links at both 900 MHz and 2.4 GHz, distinguished from the existing video-link entries by their much narrower channel width -- a real sub-1 GHz coverage gap the signature table didn't have before, from published open-source (ExpressLRS) and public (TBS Crossfire) specs.
 
 ## [0.2.0] - 2026-08-31
 

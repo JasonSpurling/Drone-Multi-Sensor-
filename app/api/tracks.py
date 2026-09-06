@@ -3,11 +3,20 @@ from fastapi.responses import Response
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
 from app.config import INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
-from app.db import get_sensor_registration, get_track, list_detections, list_tracks, record_audit, update_track
+from app.db import (
+    get_sensor_registration,
+    get_track,
+    list_detections,
+    list_open_incidents_for_track,
+    list_tracks,
+    record_audit,
+    update_track,
+)
 from app.export import to_csv, to_gpx, to_kml
 from app.fusion import contributing_sensor_types, decay_classification_confidence
 from app.live import publish as publish_live_event
 from app.models import Classification, Detection, Track, TrackClassificationInput, TrackIgnoreInput, TrackStatus
+from app.risk import compute_risk_score
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
@@ -37,18 +46,23 @@ def _with_decayed_confidence(track: Track) -> Track:
 
 
 def _with_computed_fields(track: Track) -> Track:
-    """_with_decayed_confidence plus the two read-time-only fields
-    (corroborating_sensor_types, verified) GET /api/tracks and GET
-    /api/tracks/{id} both need for the dashboard's Verified/Unverified
-    grouping -- one extra query per track (list_recent_detections, via
-    corroborating_sensor_type_count), the same cost app.incidents already
-    pays once per opened incident, just now also paid per read here.
+    """_with_decayed_confidence plus the read-time-only fields
+    (corroborating_sensor_types, verified, contributing_sensor_types,
+    risk_score) GET /api/tracks and GET /api/tracks/{id} both need for the
+    dashboard's Verified/Unverified grouping and risk-sorted priority
+    queue -- two extra queries per track (list_recent_detections via
+    contributing_sensor_types, list_open_incidents_for_track for risk),
+    the same cost app.incidents already pays once per opened incident,
+    just now also paid per read here.
     """
     track = _with_decayed_confidence(track)
     types = contributing_sensor_types(track)
     track.contributing_sensor_types = sorted(types)
     track.corroborating_sensor_types = len(types)
     track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
+    if track.id is not None and track.site_id is not None:
+        open_incidents = list_open_incidents_for_track(track.id, track.site_id)
+        track.risk_score = compute_risk_score(track, open_incidents)
     return track
 
 

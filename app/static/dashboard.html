@@ -752,6 +752,7 @@
         <select id="track-sort" aria-label="Sort tracks by">
           <option value="recent">Most recent</option>
           <option value="alerts">Alerts first</option>
+          <option value="risk">Risk: highest first</option>
           <option value="altitude">Altitude: high to low</option>
           <option value="speed">Speed: fastest first</option>
         </select>
@@ -1827,6 +1828,16 @@ const TRACK_SORT_COMPARATORS = {
     if (b.speed_mps == null) return -1;
     return b.speed_mps - a.speed_mps;
   },
+  // track.risk_score (app.risk.compute_risk_score) -- a plain point score
+  // from classification + verified + open-incident severity, not a
+  // proprietary ML ranking. Nulls (shouldn't happen once a track has been
+  // through GET /api/tracks, but defensive all the same) sort last.
+  risk: (a, b) => {
+    if (a.risk_score == null && b.risk_score == null) return a.last_seen < b.last_seen ? 1 : -1;
+    if (a.risk_score == null) return 1;
+    if (b.risk_score == null) return -1;
+    return b.risk_score - a.risk_score;
+  },
 };
 
 function renderTracks() {
@@ -1891,7 +1902,7 @@ function renderTracks() {
                 <span class="status-dot" style="background:${STATUS_COLOR[t.status] || STATUS_COLOR.closed}"></span>
                 ${escapeHtml(t.status)} ${speed ? "&middot; " + speed : ""}
               </div>
-              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)} &middot; dur ${fmtDuration(t.first_seen)}</div>
+              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)} &middot; dur ${fmtDuration(t.first_seen)}${t.risk_score != null ? ` &middot; risk ${t.risk_score}` : ""}</div>
             </div>
           </div>`;
         })
@@ -3198,6 +3209,12 @@ function renderPrintableReport(r) {
       <dt>Last seen</dt><dd>${fmtTime(r.track.last_seen)}</dd>
       <dt>Final position</dt><dd>${r.track.final_position.latitude != null ? r.track.final_position.latitude.toFixed(5) + ", " + r.track.final_position.longitude.toFixed(5) : "—"}</dd>
       <dt>Final speed</dt><dd>${r.track.final_speed_mps != null ? r.track.final_speed_mps.toFixed(1) + " m/s" : "—"}</dd>
+      ${r.track.aircraft_category ? `<dt>Aircraft category</dt><dd>${escapeHtml(AIRCRAFT_CATEGORY_LABEL[r.track.aircraft_category] || r.track.aircraft_category)}</dd>` : ""}
+    </dl>` : ""}
+    ${Object.keys(r.identification).length ? `
+    <h2>Identification</h2>
+    <dl>
+      ${Object.entries(r.identification).map(([k, v]) => `<dt>${escapeHtml(formatSignalKey(k))}</dt><dd>${escapeHtml(String(v))}</dd>`).join("")}
     </dl>` : ""}
     <h2>Sensors involved (${r.sensors_involved.length})</h2>
     <div>${r.sensors_involved.map(escapeHtml).join(", ") || "—"}</div>

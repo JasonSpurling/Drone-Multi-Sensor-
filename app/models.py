@@ -225,6 +225,14 @@ class Track(BaseModel):
         "corroborating_sensor_types/verified above (its len() is that count); not populated on "
         "a Track built any other way.",
     )
+    risk_score: int | None = Field(
+        default=None,
+        description="app.risk.compute_risk_score's 0-10 point score -- how urgent this track is to "
+        "look at, composed entirely from classification + verified + the worst open incident's "
+        "severity, all already-shown fields, never a proprietary/opaque ML score this app has no "
+        "trained model to actually back. Read-time-only, same as corroborating_sensor_types/verified "
+        "above; 0 for an ignored track regardless of the rest.",
+    )
     ignored: bool = Field(
         default=False,
         description="An operator's deliberate 'stop alerting on this' suppression -- unlike "
