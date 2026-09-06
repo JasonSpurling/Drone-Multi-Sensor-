@@ -130,41 +130,39 @@
     .skeleton-row { animation: none; background: var(--panel-2); }
   }
 
-  /* --- App shell: icon rail + floating panels over a full-bleed map. --- */
+  /* --- App shell: floating panels over a full-bleed map. Panel switching
+     itself lives in the top bar's nav (#icon-rail, below) now, not a
+     rail floating over the map -- a persistent horizontal nav is the
+     more standard console chrome, and it frees the map's entire left
+     edge for panels/legend instead of sharing it with a 42px rail. ---- */
   #app-shell { position: relative; height: calc(100vh - 40px); overflow: hidden; }
   #map { position: absolute; inset: 0; background: var(--map-bg); z-index: 0; }
 
+  /* Same #icon-rail id and .rail-btn/data-panel/#alerts-badge structure
+     as before the move to the top bar -- only where it lives and how it's
+     laid out changed, not what it's called or how JS finds it, so every
+     panel-switching handler below still just works. */
   #icon-rail {
-    position: absolute; z-index: 20; top: 12px; left: 12px; bottom: 12px;
-    width: 42px;
-    background: var(--panel-glass);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 8px 0;
-    gap: 4px;
-    backdrop-filter: blur(6px);
+    display: flex; align-items: center; gap: 2px;
   }
   .rail-btn {
     position: relative;
-    width: 30px; height: 30px;
+    display: flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 12px;
     background: transparent; border: 1px solid transparent; border-radius: 7px;
-    color: var(--muted); font-size: 15px;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
+    color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
+    cursor: pointer; white-space: nowrap;
   }
+  .rail-btn .rail-icon { font-size: 13px; line-height: 1; }
   .rail-btn:hover { color: var(--text); background: var(--panel-2); }
   .rail-btn.active { color: var(--on-accent); background: var(--accent); }
   .rail-btn .rail-badge {
-    position: absolute; top: -4px; right: -4px;
+    position: static; margin-left: 1px;
     background: var(--high); color: var(--on-accent); font-size: 9px; font-weight: 700;
-    border-radius: 999px; padding: 1px 4px; min-width: 13px; line-height: 1.4; text-align: center;
-    box-shadow: 0 0 0 2px var(--panel-glass);
+    border-radius: 999px; padding: 1px 5px; min-width: 13px; line-height: 1.4; text-align: center;
     display: none;
   }
-  .rail-btn .rail-badge.show { display: block; animation: pulse-alert 2s infinite; }
+  .rail-btn .rail-badge.show { display: inline-block; animation: pulse-alert 2s infinite; }
 
   .floating-panel {
     position: absolute; z-index: 15; top: 12px; bottom: 12px;
@@ -178,7 +176,7 @@
     flex-direction: column;
     overflow: hidden;
   }
-  #left-panel { left: 64px; transition: transform 0.15s ease; }
+  #left-panel { left: 12px; transition: transform 0.15s ease; }
   #left-panel.collapsed { transform: translateX(-120%); }
   /* Unlike #left-panel (which always has a long, scrollable list and
      benefits from claiming the full viewport height), a single track's
@@ -421,6 +419,12 @@
   button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
   button.secondary:hover { background: var(--secondary-hover); }
   button.secondary.active { background: var(--accent); border-color: var(--accent); }
+  /* Friend/Foe: an operator's deliberate classification override (POST
+     /api/tracks/{id}/classify), colored by outcome rather than left as
+     plain secondary buttons -- the same friendly/drone hues the rest of
+     the dashboard already uses for those classifications. */
+  button.classify-btn:hover { color: var(--friendly); border-color: var(--friendly); }
+  button.classify-btn.danger:hover { color: var(--drone); border-color: var(--drone); }
 
   #view-zones .panel-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); }
   #report-range-form {
@@ -518,26 +522,25 @@
   .label-more { font-size: 11px; color: var(--muted); padding: 6px 0 0; text-align: center; }
 
   /* --- Narrow viewport: the desktop layout's two side-by-side floating
-     panels (each 340-360px) plus the icon rail don't fit next to each
-     other below ~900px -- #details-panel's fixed right-anchored width
-     left its left edge overlapping the rail (which sits on top, z-index-
-     wise, silently clipping the panel's own back button under it) well
-     before that, too. Below 760px both panels go full-width (anchored
-     past the rail, which stays reachable) and stack instead of
-     overlapping: only one is ever visible at a time, and the rail's
-     already-active-icon-click (below) collapses the tracks/alerts/
+     panels (each 340-360px) don't fit next to each other below ~900px.
+     Below 760px both panels go full-width and stack instead of
+     overlapping: only one is ever visible at a time, and the nav's
+     already-active-button-click (below) collapses the tracks/alerts/
      sensors panel entirely so the map itself is reachable, not just
-     visible in the gaps around a panel that otherwise never closes. --- */
+     visible in the gaps around a panel that otherwise never closes. The
+     nav itself drops each button's text label and keeps just its icon +
+     alert badge, the same "compact but still reachable" shape the old
+     icon-only rail had, so five text-labeled nav buttons don't overflow
+     the 40px top bar next to the title and theme toggle. --- */
   @media (max-width: 760px) {
-    #left-panel, #details-panel { left: 60px; right: 12px; width: auto; }
+    #left-panel, #details-panel { left: 12px; right: 12px; width: auto; }
     body.details-open #left-panel { display: none; }
     #map-legend { display: none; }
-    #map-layer-toggles {
-      left: 60px; right: 12px; transform: none;
-      justify-content: space-around;
-    }
+    #map-layer-toggles { justify-content: space-around; }
     #map-layer-toggles label { padding: 4px 8px; font-size: 10px; }
     header.topbar .topbar-left h1 { display: none; }
+    .rail-btn { padding: 0 8px; }
+    .rail-btn .rail-label { display: none; }
   }
 
   /* --- After-action incident report: printed via window.print(), never
@@ -586,6 +589,23 @@
     <span class="live-dot" aria-hidden="true"></span>
     <div id="status-line">loading…</div>
   </div>
+  <nav id="icon-rail" aria-label="Panel selector">
+    <button class="rail-btn active" data-panel="tracks" title="Tracks (Alt+1)" aria-label="Tracks" aria-pressed="true">
+      <span class="rail-icon" aria-hidden="true">&#9635;</span><span class="rail-label">Tracks</span>
+    </button>
+    <button class="rail-btn" data-panel="alerts" title="Alerts (Alt+2)" aria-label="Alerts" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9650;</span><span class="rail-label">Alerts</span><span class="rail-badge" id="alerts-badge" aria-hidden="true"></span>
+    </button>
+    <button class="rail-btn" data-panel="sensors" title="Sensor Health (Alt+3)" aria-label="Sensor health" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9738;</span><span class="rail-label">Sensors</span>
+    </button>
+    <button class="rail-btn" data-panel="zones" title="Zones (Alt+4)" aria-label="Zones" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#11040;</span><span class="rail-label">Zones</span>
+    </button>
+    <button class="rail-btn" data-panel="reports" title="Incident Reports (Alt+5)" aria-label="Incident reports" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9776;</span><span class="rail-label">Reports</span>
+    </button>
+  </nav>
   <div class="topbar-right">
     <span id="whoami" style="display:none; margin-right:8px; color:var(--muted);"></span>
     <a id="sso-logout-link" href="/auth/logout" class="secondary" style="display:none; margin-right:8px;">Log out</a>
@@ -618,24 +638,6 @@
     <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
     <label><input type="checkbox" id="toggle-sensors" checked> Sensors</label>
   </div>
-
-  <nav id="icon-rail" aria-label="Panel selector">
-    <button class="rail-btn active" data-panel="tracks" title="Tracks (Alt+1)" aria-label="Tracks" aria-pressed="true">
-      &#9635;
-    </button>
-    <button class="rail-btn" data-panel="alerts" title="Alerts (Alt+2)" aria-label="Alerts" aria-pressed="false">
-      &#9650;<span class="rail-badge" id="alerts-badge" aria-hidden="true"></span>
-    </button>
-    <button class="rail-btn" data-panel="sensors" title="Sensor Health (Alt+3)" aria-label="Sensor health" aria-pressed="false">
-      &#9738;
-    </button>
-    <button class="rail-btn" data-panel="zones" title="Zones (Alt+4)" aria-label="Zones" aria-pressed="false">
-      &#11040;
-    </button>
-    <button class="rail-btn" data-panel="reports" title="Incident Reports (Alt+5)" aria-label="Incident reports" aria-pressed="false">
-      &#9776;
-    </button>
-  </nav>
 
   <aside class="floating-panel" id="left-panel">
     <div class="panel-header">
@@ -962,6 +964,121 @@ function headingArrow(headingDeg) {
   return `<span class="heading-arrow" style="display:inline-block;transform:rotate(${headingDeg}deg)">&#8593;</span>`;
 }
 
+// Initial great-circle bearing from (lat1,lon1) to (lat2,lon2), 0-360
+// clockwise from true north -- the inverse of destinationPoint() above
+// (which goes bearing+distance -> a point; this goes two points ->
+// bearing), needed for the radar polar view below since a track's own
+// record only ever carries its *own* heading (direction of travel), not
+// its bearing *from* a given sensor.
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2))
+    - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// The nearest *registered, active* sensor to a track, plus this track's
+// real bearing and range from it -- what the radar polar view plots.
+// "Nearest" rather than "whichever sensor actually detected this track"
+// because Track carries no such link (many sensors can contribute
+// detections to the same fused track); nearest is the honest, always-
+// available stand-in, not a claim about which sensor is watching it.
+function nearestSensorBearingRange(track) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const candidates = state.sensorRegistrations.filter(
+    (s) => s.active && s.latitude != null && s.longitude != null
+  );
+  if (candidates.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of candidates) {
+    const rangeM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || rangeM < best.rangeM) {
+      best = { sensorId: s.sensor_id, rangeM, bearingDeg: bearingDeg(s.latitude, s.longitude, track.latitude, track.longitude) };
+    }
+  }
+  return best;
+}
+
+// A radar-style polar plot -- concentric range rings, compass ticks,
+// true-north-up -- centered on the nearest registered sensor rather than
+// the track itself, the same reference frame a real radar/RF direction-
+// finder display uses. Distinct from the Leaflet map (geo-accurate,
+// north-up, shows everything at once): this is one track's bearing and
+// range from one sensor, at a glance, the way an operator reads a
+// dedicated radar scope rather than a general map. Ring spacing rounds
+// the track's range up to a "nice" scale (never a fixed one, so a track
+// at 80m and one at 8000m both plot legibly instead of one vanishing
+// into the plot's center or off its edge).
+function radarPolarSVG(nearest) {
+  // plotR + tick-label offset (18) must stay inside the viewBox's half-
+  // width, or N/E/S/W clip at the edges instead of rendering -- sized so
+  // 70 + 18 = 88 fits comfortably inside a 110-unit half-canvas.
+  const w = 220, h = 220, cx = 110, cy = 110, plotR = 70;
+  const scaleM = niceRadarScale(nearest.rangeM);
+  const r = Math.min((nearest.rangeM / scaleM) * plotR, plotR);
+  const angleRad = (nearest.bearingDeg * Math.PI) / 180;
+  const dotX = cx + r * Math.sin(angleRad);
+  const dotY = cy - r * Math.cos(angleRad);
+  const rings = [1 / 3, 2 / 3, 1].map((f) => `<circle cx="${cx}" cy="${cy}" r="${(plotR * f).toFixed(1)}" fill="none" stroke="currentColor" stroke-opacity="0.25"/>`).join("");
+  const ticks = [0, 90, 180, 270].map((deg) => {
+    const rad = (deg * Math.PI) / 180;
+    const x1 = cx + (plotR + 2) * Math.sin(rad), y1 = cy - (plotR + 2) * Math.cos(rad);
+    const x2 = cx + (plotR + 10) * Math.sin(rad), y2 = cy - (plotR + 10) * Math.cos(rad);
+    const label = { 0: "N", 90: "E", 180: "S", 270: "W" }[deg];
+    const lx = cx + (plotR + 18) * Math.sin(rad), ly = cy - (plotR + 18) * Math.cos(rad);
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="currentColor" stroke-opacity="0.5"/>
+      <text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">${label}</text>`;
+  }).join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Radar plot: bearing ${Math.round(nearest.bearingDeg)} degrees, range ${Math.round(nearest.rangeM)} meters from sensor ${escapeHtml(nearest.sensorId)}" style="display:block; margin:0 auto;">
+    ${rings}
+    ${ticks}
+    <line x1="${cx}" y1="${cy}" x2="${dotX.toFixed(1)}" y2="${dotY.toFixed(1)}" stroke="var(--drone)" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <circle cx="${cx}" cy="${cy}" r="3" fill="currentColor"/>
+    <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="5" fill="var(--drone)" stroke="var(--panel-glass-strong)" stroke-width="1.5"/>
+    <text x="${cx}" y="${h - 4}" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.5">rings at ${fmtRadarScale(scaleM / 3)} / ${fmtRadarScale((scaleM * 2) / 3)} / ${fmtRadarScale(scaleM)}</text>
+  </svg>`;
+}
+
+// Rounds up to a scale a human reads at a glance (100m steps under 1km,
+// then 500m, then 1km/5km/10km tiers) -- never the raw range itself,
+// which would make the outer ring an oddly specific number like "furthest
+// ring: 1847m."
+function niceRadarScale(rangeM) {
+  const steps = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+  return steps.find((s) => rangeM <= s) || Math.ceil(rangeM / 100000) * 100000;
+}
+
+function fmtRadarScale(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(m % 1000 === 0 ? 0 : 1)}km` : `${Math.round(m)}m`;
+}
+
+// The nearest active zone's name and straight-line distance from a
+// track's current position, by centroid -- not "is this track inside a
+// zone" (app.incidents already answers that, with a real polygon-
+// containment check), but "how far is it from the nearest protected
+// area," a genuinely different, complementary question an operator
+// watching a track approach asks before it ever crosses a boundary.
+// Leaflet's own L.latLng().distanceTo() (geodesic, not flat-earth) does
+// the math -- the same one this file already trusts for the scale bar
+// and recenter/fit-bounds logic, not a second haversine implementation.
+function nearestZone(track) {
+  if (track.latitude == null || track.longitude == null || state.zones.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const zone of state.zones) {
+    if (!zone.polygon || zone.polygon.length === 0) continue;
+    const centroid = zone.polygon.reduce(
+      (acc, [lat, lon]) => [acc[0] + lat / zone.polygon.length, acc[1] + lon / zone.polygon.length],
+      [0, 0]
+    );
+    const distanceM = here.distanceTo(L.latLng(centroid[0], centroid[1]));
+    if (best === null || distanceM < best.distanceM) best = { name: zone.name, distanceM };
+  }
+  return best;
+}
+
 // Space-separated terms are ANDed, each matched against every searchable
 // field -- "drone lost" finds a lost drone track without needing the
 // terms in field order, the way most real search boxes behave. Matches
@@ -1205,6 +1322,29 @@ async function resolveIncident(id) {
   } catch (e) {
     if (e instanceof AuthError) showAuthBar(true);
     else showErrorToast("Couldn't resolve this incident — try again.");
+    console.error(e);
+  }
+}
+
+// An operator's deliberate override (POST /api/tracks/{id}/classify) --
+// distinct from the automated fusion ratchet that normally sets
+// Track.classification (see that field's own docstring, and
+// TrackClassificationInput's in app/models.py). Only ever "friendly" or
+// "drone": an operator watching the dashboard is making exactly one of
+// two calls -- this is ours, or this is the thing we're watching for --
+// not reclassifying something as a bird or an aircraft, which is what
+// the sensor evidence itself is for.
+async function classifyTrack(id, classification) {
+  try {
+    await fetchJSON(`/api/tracks/${id}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ classification }),
+    });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't update this track's classification — try again.");
     console.error(e);
   }
 }
@@ -1524,6 +1664,8 @@ function renderDetails() {
   // color scale runs the opposite direction.
   const confidencePct = track.classification_confidence != null ? Math.round(track.classification_confidence * 100) : null;
   const confidenceColor = confidencePct == null ? "var(--border)" : confidencePct < 40 ? "var(--high)" : confidencePct < 70 ? "var(--medium)" : "var(--active)";
+  const nz = nearestZone(track);
+  const nearestSensor = nearestSensorBearingRange(track);
 
   el.innerHTML = `
     <div class="kv-section" style="padding-top:14px;">
@@ -1535,6 +1677,10 @@ function renderDetails() {
       </div>
     </div>
 
+    <div class="detail-actions">
+      <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
+      <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
+    </div>
     <div class="detail-actions">
       <button class="secondary" id="focus-btn">Focus</button>
       <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
@@ -1576,6 +1722,10 @@ function renderDetails() {
           <div class="k">Speed</div><div class="v">${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
         </div>
       </div>
+      ${nz ? `<div class="kv" style="margin-top:6px;">
+        <div class="k" title="Straight-line distance to this zone's centroid, not whether the track is currently inside it -- see the Alerts panel for that.">Nearest zone</div>
+        <div class="v">${escapeHtml(nz.name)}: ${Math.round(nz.distanceM)} m</div>
+      </div>` : ""}
     </div>
 
     <div class="kv-section">
@@ -1598,6 +1748,16 @@ function renderDetails() {
       </div>
     </div>
 
+    ${nearestSensor ? `
+    <div class="kv-section" id="radar-section">
+      <div class="kv-section-title">Radar</div>
+      ${radarPolarSVG(nearestSensor)}
+      <div class="kv" style="margin-top:6px;">
+        <div class="k">Bearing</div><div class="v">${Math.round(nearestSensor.bearingDeg)}&deg; from ${escapeHtml(nearestSensor.sensorId)}</div>
+        <div class="k">Range</div><div class="v">${Math.round(nearestSensor.rangeM)} m</div>
+      </div>
+    </div>` : ""}
+
     ${state.trailDetections.length > 0 ? `
     <div class="kv-section">
       <div class="kv-section-title">Label training data</div>
@@ -1617,6 +1777,8 @@ function renderDetails() {
     </div>` : ""}
   `;
 
+  document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
+  document.getElementById("classify-foe-btn").addEventListener("click", () => classifyTrack(track.id, "drone"));
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
   document.getElementById("follow-btn").addEventListener("click", () => {
     state.follow = !state.follow;

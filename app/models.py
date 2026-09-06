@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -201,6 +202,24 @@ class Track(BaseModel):
         "on top of the as-of-last-detection value stored here. None for an UNKNOWN track -- there's "
         "no meaningful confidence in not knowing.",
     )
+
+
+class TrackClassificationInput(BaseModel):
+    """Body for POST /api/tracks/{id}/classify -- a deliberate operator
+    override ("that's our security team's drone", "confirmed hostile"),
+    distinct from the automated fusion ratchet that normally sets
+    Track.classification (see that field's own docstring). Restricted to
+    FRIENDLY and DRONE, not the full Classification enum: an operator
+    watching the dashboard is making exactly one of two calls -- this is
+    ours (friendly) or this is the thing we're watching for (confirmed
+    drone) -- not reclassifying a track as a bird or an aircraft, which is
+    what the sensor evidence itself is for. Mirrors the same "automatic
+    system decision vs. a human's deliberate override" split already
+    established between app.incidents' auto-close logic and the operator-
+    driven POST /api/incidents/{id}/resolve.
+    """
+
+    classification: Literal[Classification.FRIENDLY, Classification.DRONE]
 
 
 class Incident(BaseModel):

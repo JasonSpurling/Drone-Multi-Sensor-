@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
-from app.db import get_sensor_registration, get_track, list_detections, list_tracks
+from app.db import get_sensor_registration, get_track, list_detections, list_tracks, record_audit, update_track
 from app.export import to_csv, to_gpx, to_kml
 from app.fusion import decay_classification_confidence
-from app.models import Detection, Track, TrackStatus
+from app.live import publish as publish_live_event
+from app.models import Detection, Track, TrackClassificationInput, TrackStatus
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
@@ -55,6 +56,39 @@ def get_track_by_id(track_id: int, principal: Principal = Depends(require_role(*
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return _with_decayed_confidence(track)
+
+
+@router.post("/tracks/{track_id}/classify", response_model=Track)
+def classify_track(
+    track_id: int,
+    body: TrackClassificationInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> Track:
+    """An operator's deliberate override -- "that's our security team's
+    drone" (friendly) or "confirmed hostile" (drone) -- distinct from the
+    automated fusion ratchet that normally sets Track.classification (see
+    that field's own docstring for why it's upgrade-only and never just
+    manually reset there). Since a human just looked at this and made the
+    call, classification_confidence is set to 1.0 -- the same "nothing
+    left to be uncertain about" reasoning an acknowledged incident's
+    status carries, not a guess at how confident to report.
+    """
+    track = get_track(track_id, principal.site_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    track.classification = body.classification
+    track.classification_confidence = 1.0
+    updated = update_track(track)
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.classify",
+        target=str(track_id),
+        detail=body.classification.value,
+    )
+    if updated.site_id is not None:
+        publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
+    return _with_decayed_confidence(updated)
 
 
 @router.get("/tracks/{track_id}/history", response_model=list[Detection])

@@ -282,9 +282,14 @@ def test_filter_chips_show_live_counts(live_server, page):
 def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail(live_server, page):
     """Regression test: #details-panel used to be right-anchored at a
     fixed 360px width regardless of viewport, so on a narrow (phone-width)
-    screen its left edge landed under the icon rail (which sits on top,
-    z-index-wise) -- silently clipping its own back button out of reach.
-    The max-width: 760px layout must keep it fully inside the viewport.
+    screen its left edge landed under the icon rail (back when panel
+    switching lived in a rail floating over the map) -- silently clipping
+    its own back button out of reach. Panel switching now lives in the
+    persistent top nav bar instead (#icon-rail, moved there so it reads as
+    standard console chrome rather than a floating overlay) -- the
+    equivalent regression today would be the details panel's top edge
+    landing underneath that bar instead. The max-width: 760px layout must
+    keep it fully inside the viewport, below the nav.
     """
     _seed_moving_track(live_server)
     page.set_viewport_size({"width": 390, "height": 844})
@@ -297,13 +302,14 @@ def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail
     back_button = page.locator("#details-back")
     box = back_button.bounding_box()
     assert box is not None
-    assert box["x"] >= 0  # not pushed off-screen or under the rail's left edge
+    assert box["x"] >= 0  # not pushed off-screen
 
-    # The rail must stay clickable (it sits on top, but with the panel's
-    # back button now inside the viewport, the two shouldn't overlap).
-    rail_box = page.locator(".rail-btn[data-panel=tracks]").bounding_box()
-    assert rail_box is not None
-    assert box["x"] >= rail_box["x"] + rail_box["width"]
+    # The nav bar sits on top (it's the persistent top bar); the details
+    # panel below it must start clear of the nav's bottom edge, not
+    # underneath it.
+    nav_box = page.locator("#icon-rail").bounding_box()
+    assert nav_box is not None
+    assert box["y"] >= nav_box["y"] + nav_box["height"]
 
 
 def test_narrow_viewport_collapsing_the_left_panel_reveals_the_map(live_server, page):
