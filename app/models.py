@@ -85,6 +85,14 @@ class IncidentSeverity(StrEnum):
 class IncidentStatus(StrEnum):
     OPEN = "open"
     ACKNOWLEDGED = "acknowledged"
+    # An operator's deliberate "I'm actively working this one" step,
+    # between just having seen it (acknowledged) and calling it handled
+    # (resolved) -- distinct from acknowledged the same way "assigned to
+    # someone" differs from "seen by someone." Purely a manual transition
+    # (POST /api/incidents/{id}/investigate); nothing in app.incidents'
+    # auto-close logic ever sets or requires it, since every "still open"
+    # query below already means status != resolved.
+    INVESTIGATING = "investigating"
     RESOLVED = "resolved"
 
 

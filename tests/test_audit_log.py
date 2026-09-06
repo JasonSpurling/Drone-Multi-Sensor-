@@ -91,6 +91,32 @@ def test_acknowledging_and_resolving_an_incident_are_both_recorded(admin_key):
         assert "incident.resolve" in actions
 
 
+def test_investigating_an_incident_requires_acknowledged_first_and_is_recorded(admin_key):
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        client.post("/api/detections", json=DETECTION_BODY, headers=headers)
+        zone_body = {**DETECTION_BODY, "latitude": 51.5, "longitude": -0.10}
+        client.post("/api/detections", json=zone_body, headers=headers)
+        incident_id = client.get("/api/incidents", headers=headers).json()[0]["id"]
+
+        # Can't jump straight from open to investigating.
+        r = client.post(f"/api/incidents/{incident_id}/investigate", headers=headers)
+        assert r.status_code == 409
+
+        client.post(f"/api/incidents/{incident_id}/acknowledge", headers=headers)
+        r = client.post(f"/api/incidents/{incident_id}/investigate", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["status"] == "investigating"
+
+        entries = client.get("/api/audit-log", headers=headers).json()
+        assert "incident.investigate" in [e["action"] for e in entries]
+
+        # Still resolvable from investigating, same as from acknowledged.
+        r = client.post(f"/api/incidents/{incident_id}/resolve", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["status"] == "resolved"
+
+
 def test_visual_verification_is_recorded_with_result_and_note(admin_key):
     with TestClient(app) as client:
         headers = {"X-API-Key": admin_key}

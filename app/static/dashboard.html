@@ -302,13 +302,14 @@
   .track-card:hover { background: var(--panel-2); }
   .track-card.selected { background: var(--hover-bg); box-shadow: inset 3px 0 0 var(--accent); }
   .track-card.ignored { opacity: 0.55; }
-  .ptz-badge, .ignored-badge, .verified-badge {
+  .ptz-badge, .ignored-badge, .verified-badge, .risk-badge {
     display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.03em;
     border-radius: 3px; padding: 1px 4px; vertical-align: middle; margin-left: 4px;
   }
   .ptz-badge { background: var(--panel-2); border: 1px solid var(--accent); color: var(--accent); }
   .ignored-badge { background: var(--panel-2); border: 1px solid var(--muted); color: var(--muted); }
   .verified-badge { background: var(--panel-2); border: 1px solid var(--active); color: var(--active); }
+  .risk-badge { background: var(--panel-2); border: 1px solid; }
   .track-thumb {
     position: relative;
     width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
@@ -401,6 +402,15 @@
   #map-layer-toggles input[type="checkbox"] {
     position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0;
   }
+  .layer-toggle-chip {
+    padding: 5px 11px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .layer-toggle-chip:hover { color: var(--text); }
+  .layer-toggle-chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   /* Bottom map-level Verified/Unverified filter -- independent of the
      Tracks panel's own Verified/Unverified sub-tabs (state.trackVerifiedTab):
      that one decides which half of the *list* shows; this one decides
@@ -467,6 +477,7 @@
     text-transform: uppercase; letter-spacing: 0.03em; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
   }
   .zone-label::before { display: none !important; }
+  .track-label-permanent { font-size: 10px !important; padding: 2px 6px !important; line-height: 1.4 !important; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
   .empty-ok { color: var(--muted); padding: 14px 6px; display: flex; align-items: center; gap: 8px; }
   .empty-ok .check { color: var(--active); font-size: 16px; }
@@ -492,6 +503,28 @@
   .alert-item.sev-low { border-left-color: var(--low); }
   .alert-item .top-row { display: flex; justify-content: space-between; align-items: center; }
   .alert-item .desc { color: var(--muted); margin: 6px 0; }
+  .sensor-cards { display: flex; flex-direction: column; gap: 8px; }
+  .sensor-card {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    cursor: pointer;
+  }
+  .sensor-card[aria-disabled="true"] { cursor: default; opacity: 0.85; }
+  .sensor-card:hover:not([aria-disabled="true"]) { border-color: var(--hover-border); background: var(--hover-bg); }
+  .sensor-card-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .sensor-card-name { font-weight: 600; font-size: 13px; }
+  .sensor-card-type { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .sensor-card-status { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 4px; }
+  .sensor-card-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .dev-tools-footer {
+    margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dev-tools-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+  }
+  .empty-compact { padding: 16px 14px; color: var(--muted); }
+  .empty-compact-title { color: var(--text); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .empty-compact-body { font-size: 12px; line-height: 1.5; margin-bottom: 10px; }
   button {
     background: var(--accent);
     color: white;
@@ -779,6 +812,7 @@
     <label><input type="checkbox" id="toggle-sensors" checked> Sensors</label>
     <label><input type="checkbox" id="toggle-zones" checked> Zones</label>
     <label><input type="checkbox" id="toggle-labels" checked> Labels</label>
+    <button type="button" id="toggle-track-labels" class="layer-toggle-chip" title="Cycles an always-visible per-track map label: Off, Compact (ID + risk), Full (adds classification/verification)">Track labels: Off</button>
   </div>
 
   <div id="map-verify-filter" style="display:none;">
@@ -922,6 +956,12 @@ const state = {
   selectedTrackId: null, trail: [], trailDetections: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true, showSensors: true,
   showZones: true, showLabels: true,
+  // "off" | "compact" | "full" -- an always-visible label per unselected
+  // track marker (see renderMap()), cycled via #toggle-track-labels.
+  // Distinct from showLabels above, which only ever controls the zone
+  // name label -- kept separate rather than overloading one flag for two
+  // different things with two different default expectations.
+  trackLabelMode: "off",
   activePanel: "tracks",
   // Which sub-tab of the sensor-view tab strip (Live view/Quality/Signal/
   // Radar/Image) is showing in the details panel -- see renderDetails().
@@ -1048,6 +1088,9 @@ function displayStatus(t) {
 const SEVERITY_COLOR = {
   critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)",
   info: "var(--muted)",
+};
+const INCIDENT_STATUS_COLOR = {
+  open: "var(--drone)", acknowledged: "var(--medium)", investigating: "var(--accent)", resolved: "var(--lost)",
 };
 const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
 
@@ -1778,6 +1821,22 @@ async function acknowledge(id) {
   }
 }
 
+// An operator's deliberate "I'm actively working this one" step, between
+// acknowledged and resolved -- see IncidentStatus.INVESTIGATING's
+// docstring in app/models.py. Only reachable from 'acknowledged'
+// (app.api.incidents enforces this server-side too), matching the same
+// review order acknowledge -> resolve already has.
+async function investigateIncident(id) {
+  try {
+    await fetchJSON(`/api/incidents/${id}/investigate`, { method: "POST" });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't start investigating this incident — try again.");
+    console.error(e);
+  }
+}
+
 // Nothing auto-resolves an incident (not even the offending track leaving
 // the zone/going stale) -- see app/incidents.py: this app treats
 // resolution as a deliberate operator judgment call ("we reviewed this
@@ -2043,12 +2102,19 @@ function renderTracks() {
     // one of the others (e.g. "no tracks detected" when a single-sensor
     // track is sitting right there under the other tab).
     if (state.tracks.length === 0) {
-      el.innerHTML = `<div class="empty-guidance">
-        <div class="empty-title">No tracks detected</div>
-        <div class="empty-body">Waiting for sensor data — a track appears here automatically once a detection is posted to <code>/api/detections</code>.</div>
-        <button id="simulate-tracks-btn">Simulate tracks</button>
+      // Compact, not the dominant thing on screen -- a live console's
+      // default state is "quietly waiting," not a large call-to-action
+      // competing with real security data once any does arrive. The
+      // actual "Simulate tracks" trigger now lives in the Sensors panel
+      // (a developer/test control, not a production affordance) --
+      // see renderSensors()'s dev-tools footer.
+      const lastPollText = state.sensors.length > 0 ? "sensors reporting normally" : "no sensors connected yet";
+      el.innerHTML = `<div class="empty-compact">
+        <div class="empty-compact-title">No active tracks</div>
+        <div class="empty-compact-body">All connected sensors are ${escapeHtml(lastPollText)}. A track appears here automatically once a detection comes in.</div>
+        <button class="secondary" id="view-sensor-health-btn">View sensor health</button>
       </div>`;
-      document.getElementById("simulate-tracks-btn").addEventListener("click", simulateDemoTracks);
+      document.getElementById("view-sensor-health-btn").addEventListener("click", () => showPanel("sensors"));
     } else if (matchingTracks.length === 0) {
       el.innerHTML = '<div class="empty">No tracks match your search/filter.</div>';
     } else {
@@ -2070,8 +2136,14 @@ function renderTracks() {
       const cards = groupTracks
         .map((t) => {
           const sel = t.id === state.selectedTrackId ? "selected" : "";
-          const pos = t.latitude != null ? `${t.latitude.toFixed(4)}, ${t.longitude.toFixed(4)}` : "no position";
           const speed = t.speed_mps != null ? `${t.speed_mps.toFixed(1)} m/s` : null;
+          const altitude = t.altitude_m != null ? `${Math.round(t.altitude_m)} m` : null;
+          const heading = t.heading_deg != null ? `${Math.round(t.heading_deg)}°` : null;
+          const nz = nearestZone(t);
+          const zoneText = nz ? `${Math.round(nz.distanceM)} m from ${nz.name}` : null;
+          const metaParts = [
+            zoneText, altitude, heading, speed, `updated ${fmtRelative(t.last_seen)}`, `dur ${fmtDuration(t.first_seen)}`,
+          ].filter(Boolean);
           const incidents = activeIncidentsForTrack(t.id);
           const alertDot = incidents.length
             ? `<span class="track-alert-dot" style="background:${SEVERITY_COLOR[incidents[0].severity] || SEVERITY_COLOR.low}" title="${incidents.length} active alert${incidents.length > 1 ? "s" : ""} (${escapeHtml(incidents[0].severity)})"></span>`
@@ -2084,15 +2156,22 @@ function renderTracks() {
           const verifiedBadge = t.verified
             ? `<span class="verified-badge" title="Corroborated by ${t.corroborating_sensor_types} independent sensor types">&#10003;${t.corroborating_sensor_types}</span>`
             : "";
-          return `<div class="track-card ${sel} ${t.ignored ? "ignored" : ""}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
+          // Only surfaced once it's actually worth calling out at a glance
+          // (a low/zero score would just be noise on every single row) --
+          // the exact score and its full factor breakdown are always one
+          // click away in the details panel's Quality tab.
+          const riskBadge = t.risk_score != null && t.risk_score >= 5
+            ? `<span class="risk-badge" style="border-color:${t.risk_score >= 8 ? "var(--critical)" : t.risk_score >= 6 ? "var(--high)" : "var(--medium)"}; color:${t.risk_score >= 8 ? "var(--critical)" : t.risk_score >= 6 ? "var(--high)" : "var(--medium)"};" title="Risk ${t.risk_score}/10 -- see the Quality tab for why">RISK ${t.risk_score}</span>`
+            : "";
+          return `<div class="track-card ${sel} ${t.ignored ? "ignored" : ""}" data-id="${t.id}" data-risk="${t.risk_score ?? ""}" aria-pressed="${t.id === state.selectedTrackId}">
             <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}${alertDot}</div>
             <div class="track-card-body">
-              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}${verifiedBadge}</div>
+              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}${verifiedBadge}${riskBadge}</div>
               <div class="track-card-sub">
                 <span class="status-dot" style="background:${STATUS_COLOR[displayStatus(t)] || STATUS_COLOR.closed}"></span>
-                ${escapeHtml(displayStatus(t))} ${speed ? "&middot; " + speed : ""}
+                ${escapeHtml(displayStatus(t))}
               </div>
-              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)} &middot; dur ${fmtDuration(t.first_seen)}${t.risk_score != null ? ` &middot; risk ${t.risk_score}` : ""}</div>
+              <div class="track-card-meta">${metaParts.join(" &middot; ") || "no position yet"}</div>
             </div>
           </div>`;
         })
@@ -2168,6 +2247,7 @@ function renderAlerts() {
   // post-incident review -- is still reachable once it's no longer active,
   // which is exactly when that review tends to happen.
   const zoneName = (id) => state.zones.find((z) => z.id === id)?.name ?? `zone ${id}`;
+  const trackExists = (id) => id != null && state.tracks.some((t) => t.id === id);
   el.innerHTML = state.incidents
     .slice()
     .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1))
@@ -2175,12 +2255,16 @@ function renderAlerts() {
       <div class="alert-item sev-${i.severity}">
         <div class="top-row">
           ${badge(i.severity, SEVERITY_COLOR[i.severity] || SEVERITY_COLOR.low)}
-          ${badgeOutline(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
+          ${badgeOutline(i.status, INCIDENT_STATUS_COLOR[i.status] || "var(--lost)")}
         </div>
         <div class="desc">${escapeHtml(i.description || i.incident_type)}${i.zone_id ? " · " + escapeHtml(zoneName(i.zone_id)) : ""}</div>
-        <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtRelative(i.opened_at)}</div>
-        <div style="margin-top:6px; display:flex; gap:6px;">
+        <div style="color:var(--muted); font-size:12px;">
+          track ${trackExists(i.track_id) ? `<a href="#" data-view-track-id="${i.track_id}">${i.track_id}</a>` : (i.track_id ?? "—")}
+          &middot; opened ${fmtRelative(i.opened_at)}${i.acknowledged_by ? ` &middot; acknowledged by ${escapeHtml(i.acknowledged_by)}` : ""}
+        </div>
+        <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
           ${i.status === "open" ? `<button data-ack-id="${i.id}">Acknowledge</button>` : ""}
+          ${i.status === "acknowledged" ? `<button class="secondary" data-investigate-id="${i.id}">Start investigation</button>` : ""}
           ${i.status !== "resolved" ? `<button class="secondary" data-resolve-id="${i.id}">Resolve</button>` : ""}
           <button class="secondary" data-report-id="${i.id}">Report</button>
         </div>
@@ -2190,11 +2274,21 @@ function renderAlerts() {
   el.querySelectorAll("button[data-ack-id]").forEach((btn) => {
     btn.addEventListener("click", () => acknowledge(Number(btn.dataset.ackId)));
   });
+  el.querySelectorAll("button[data-investigate-id]").forEach((btn) => {
+    btn.addEventListener("click", () => investigateIncident(Number(btn.dataset.investigateId)));
+  });
   el.querySelectorAll("button[data-resolve-id]").forEach((btn) => {
     btn.addEventListener("click", () => resolveIncident(Number(btn.dataset.resolveId)));
   });
   el.querySelectorAll("button[data-report-id]").forEach((btn) => {
     btn.addEventListener("click", () => openIncidentReport(Number(btn.dataset.reportId)));
+  });
+  el.querySelectorAll("a[data-view-track-id]").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectTrack(Number(link.dataset.viewTrackId));
+      showPanel("tracks");
+    });
   });
 }
 
@@ -2800,6 +2894,10 @@ let zoneDrawLayer = null;
 // list (see renderZones()) can highlight the matching shape on the map
 // with a single setStyle() call instead of a full re-render.
 const zonePolygonLayers = new Map();
+// sensor_id -> its Leaflet marker, the same pattern as zonePolygonLayers
+// above -- lets the Sensors panel (renderSensors()) fly to/open a real
+// registered sensor's map marker instead of just listing it in a table.
+const sensorMarkerLayers = new Map();
 let mapFitted = false;
 
 function initMap() {
@@ -2966,6 +3064,14 @@ function initMap() {
     state.showLabels = e.target.checked;
     renderMap();
   });
+  const TRACK_LABEL_MODES = ["off", "compact", "full"];
+  document.getElementById("toggle-track-labels").addEventListener("click", (e) => {
+    const next = TRACK_LABEL_MODES[(TRACK_LABEL_MODES.indexOf(state.trackLabelMode) + 1) % TRACK_LABEL_MODES.length];
+    state.trackLabelMode = next;
+    e.target.textContent = `Track labels: ${next[0].toUpperCase()}${next.slice(1)}`;
+    e.target.classList.toggle("active", next !== "off");
+    renderMap();
+  });
 }
 
 // A distinct shape per classification (not just color) so markers are
@@ -3110,11 +3216,17 @@ function trackMapPopupHtml(track) {
   const altitude = track.altitude_m != null ? `${Math.round(track.altitude_m)} m` : "—";
   const speed = track.speed_mps != null ? `${track.speed_mps.toFixed(1)} m/s` : "—";
   const heading = track.heading_deg != null ? `${Math.round(track.heading_deg)}°` : "—";
+  const confidencePct = track.classification_confidence != null ? Math.round(track.classification_confidence * 100) : null;
+  const zoneBadge = track.zone_status && ZONE_STATUS_LABEL[track.zone_status]
+    ? badgeOutline(ZONE_STATUS_LABEL[track.zone_status], ZONE_STATUS_COLOR[track.zone_status])
+    : "";
   return `
-    <div style="min-width:160px;">
+    <div style="min-width:170px;">
       <div style="font-weight:600; margin-bottom:2px;">Track ${track.id} &middot; ${escapeHtml(GROUP_LABEL[track.classification] || track.classification)}</div>
       <div style="font-size:11px; color:var(--muted);">${track.verified ? "Verified" : "Unverified"}${sensorBadges ? " &middot; " + sensorBadges : ""}</div>
       <div style="font-size:11px; margin-top:4px;">Alt ${altitude} &middot; ${speed} &middot; ${heading}</div>
+      ${confidencePct != null ? `<div style="font-size:11px; margin-top:2px;">Confidence ${confidencePct}%</div>` : ""}
+      ${track.risk_score != null || zoneBadge ? `<div style="margin-top:4px;">${track.risk_score != null ? `<span class="risk-inline" style="margin-right:4px;">Risk ${track.risk_score}/10</span>` : ""}${zoneBadge}</div>` : ""}
     </div>
   `;
 }
@@ -3189,6 +3301,7 @@ function renderMap() {
   // since gone quiet), so a sensor that's gone quiet -- or was never
   // hooked up in the first place -- is visible on the map itself, not
   // just buried in a side panel.
+  sensorMarkerLayers.clear();
   if (state.showSensors) {
     const healthBySensorId = new Map(state.sensors.map((s) => [s.sensor_id, s]));
     state.sensorRegistrations.filter((s) => s.active).forEach((s) => {
@@ -3202,12 +3315,13 @@ function renderMap() {
         className: "", iconSize: [14, 14], iconAnchor: [7, 7],
       });
       const seenText = health && health.last_seen ? fmtRelative(health.last_seen) : "never reported a detection";
-      L.marker([s.latitude, s.longitude], { icon, zIndexOffset: -100 })
+      const marker = L.marker([s.latitude, s.longitude], { icon, zIndexOffset: -100 })
         .bindPopup(
           `${escapeHtml(s.sensor_id)} <span style="color:var(--muted);">(${escapeHtml(s.sensor_type)})</span>` +
           `<br><span style="color:${color};">${escapeHtml(status)}</span> · seen ${escapeHtml(seenText)}`
         )
         .addTo(sensorLayer);
+      sensorMarkerLayers.set(s.sensor_id, marker);
     });
   }
 
@@ -3258,15 +3372,22 @@ function renderMap() {
     const selected = t.id === state.selectedTrackId;
     const scrubbing = selected && state.scrubIndex != null;
 
-    if (selected && state.showUncertainty && t.position_uncertainty_m) {
+    // The Uncertainty toggle now applies to every visible track, not just
+    // the selected one -- a real geographic radius (t.position_uncertainty_m,
+    // however large or small it actually is) rather than a fabricated
+    // small/medium/large tier, since the data already supports genuine
+    // precision here. An unselected track's circle is drawn thinner/fainter
+    // so a busy map still reads the selected track's own circle as the
+    // one to look at.
+    if (state.showUncertainty && t.position_uncertainty_m) {
       const uColor = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
       L.circle([t.latitude, t.longitude], {
         radius: t.position_uncertainty_m,
         color: uColor,
-        weight: 2,
-        opacity: 0.9,
+        weight: selected ? 2 : 1,
+        opacity: selected ? 0.9 : 0.4,
         fillColor: uColor,
-        fillOpacity: 0.18,
+        fillOpacity: selected ? 0.18 : 0.08,
         dashArray: "4 4",
       }).addTo(trackLayer);
     }
@@ -3340,11 +3461,26 @@ function renderMap() {
       marker.bindTooltip(trackMapPopupHtml(t), {
         permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip track-tooltip-selected",
       });
+    } else if (!scrubbing && state.trackLabelMode !== "off") {
+      // Track labels (Off/Compact/Full, cycled via #toggle-track-labels)
+      // -- an always-visible label for every unselected track, not just on
+      // hover, for an operator who wants IDs/status readable across the
+      // whole map at a glance. Real fields only: Compact is id + risk
+      // tier, Full adds classification/verification and altitude/heading/
+      // speed, all already shown elsewhere for this same track.
+      const compactRisk = t.risk_score != null && t.risk_score >= 5 ? ` · RISK ${t.risk_score}` : "";
+      const permanentLabel = state.trackLabelMode === "full"
+        ? `#${t.id} — ${GROUP_LABEL[t.classification] || t.classification}<br>${t.verified ? "Verified" : "Unverified"}${compactRisk}`
+        : `#${t.id}${compactRisk}`;
+      marker.bindTooltip(permanentLabel, {
+        permanent: true, direction: "top", offset: [0, -10], className: "track-tooltip track-label-permanent",
+      });
     } else {
-      // Non-permanent (hover-only) for an unselected track, and also for
-      // the selected track's live marker while scrubbing its history --
-      // dimmed context at that point, not the focal point, so a permanent
-      // label would just compete with the ghost marker's below.
+      // Non-permanent (hover-only) for an unselected track when Track
+      // labels is Off, and also for the selected track's live marker while
+      // scrubbing its history -- dimmed context at that point, not the
+      // focal point, so a permanent label would just compete with the
+      // ghost marker's below.
       marker.bindTooltip(label, { direction: "top", offset: [0, -10], className: "track-tooltip" });
     }
   });
@@ -3438,7 +3574,11 @@ function notifState(n) {
     const incident = state.incidents.find((i) => i.id === n.incidentId);
     if (incident) {
       if (incident.status === "resolved") return "resolved";
-      if (incident.status === "acknowledged") return "acknowledged";
+      // "investigating" is a finer-grained step than this drawer's own
+      // 4-state model distinguishes -- both it and "acknowledged" mean
+      // "someone's on this," so both map to the same badge here; the
+      // Alerts panel is where the actual distinction matters.
+      if (incident.status === "acknowledged" || incident.status === "investigating") return "acknowledged";
     }
   }
   if (n.acknowledged) return "acknowledged";
@@ -3586,6 +3726,23 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// A developer/test control, not a production affordance -- kept out of
+// the Tracks panel's own empty state (see renderTracks()) so a live
+// deployment never shows a "simulate data" button next to real security
+// data. Lives here instead since seeding demo tracks is exactly the kind
+// of thing someone checking sensor connectivity would reach for.
+function devToolsFooterHtml() {
+  return `<div class="dev-tools-footer">
+    <span class="dev-tools-label">Developer</span>
+    <button class="secondary" id="simulate-tracks-btn">Simulate demo tracks</button>
+  </div>`;
+}
+
+function wireDevToolsFooter() {
+  const btn = document.getElementById("simulate-tracks-btn");
+  if (btn) btn.addEventListener("click", simulateDemoTracks);
+}
+
 function renderSensors() {
   const el = document.getElementById("sensors-table");
   updatePanelHeaderCount();
@@ -3598,7 +3755,8 @@ function renderSensors() {
         <li>Include a <code>sensor_id</code>, <code>sensor_type</code>, and a position (or azimuth/range from a registered mount)</li>
         <li>If an API key is configured, send it as the <code>X-API-Key</code> header</li>
       </ol>
-    </div>`;
+    </div>${devToolsFooterHtml()}`;
+    wireDevToolsFooter();
     return;
   }
   // Real registered position, when one exists (PUT /api/sensor-
@@ -3606,23 +3764,34 @@ function renderSensors() {
   // seen via its own reported detections and has no fixed mount position
   // on file at all, which this never guesses at.
   const registrationBySensorId = new Map(state.sensorRegistrations.map((r) => [r.sensor_id, r]));
-  const rows = state.sensors
+  const cards = state.sensors
+    .slice()
+    .sort((a, b) => a.sensor_id.localeCompare(b.sensor_id))
     .map((s) => {
       const reg = registrationBySensorId.get(s.sensor_id);
-      const position = reg ? `${reg.latitude.toFixed(4)}, ${reg.longitude.toFixed(4)}` : "not registered";
-      return `<tr>
-        <td>${escapeHtml(s.sensor_id)}</td>
-        <td>${escapeHtml(s.sensor_type)}</td>
-        <td><span class="status-dot" style="background:${SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline}"></span> ${escapeHtml(s.status)}</td>
-        <td>${fmtRelative(s.last_seen)}</td>
-        <td>${escapeHtml(position)}</td>
-      </tr>`;
+      const position = reg ? `${reg.latitude.toFixed(4)}, ${reg.longitude.toFixed(4)}` : null;
+      const color = SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline;
+      const heartbeat = s.last_seen ? `Last heartbeat ${fmtRelative(s.last_seen)}` : "Never reported a detection";
+      return `<div class="sensor-card" data-sensor-id="${escapeHtml(s.sensor_id)}" ${position ? "" : "aria-disabled=\"true\""}>
+        <div class="sensor-card-top">
+          <span class="sensor-card-name">${escapeHtml(s.sensor_id)}</span>
+          <span class="sensor-card-type">${escapeHtml(s.sensor_type)}</span>
+        </div>
+        <div class="sensor-card-status">
+          <span class="status-dot" style="background:${color};"></span>
+          <span style="color:${color};">${escapeHtml(s.status)}</span>
+        </div>
+        <div class="sensor-card-meta">${escapeHtml(heartbeat)}</div>
+        <div class="sensor-card-meta">${position ? `Coverage position: ${escapeHtml(position)}` : "Not registered -- no known position on file"}</div>
+      </div>`;
     })
     .join("");
-  el.innerHTML = `<table>
-    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Seen</th><th>Position</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  el.innerHTML = `<div class="sensor-cards">${cards}</div>${devToolsFooterHtml()}`;
+  el.querySelectorAll(".sensor-card[data-sensor-id]").forEach((card) => {
+    if (card.getAttribute("aria-disabled") === "true") return; // nothing to fly to without a registered position
+    makeKeyboardActivatable(card, () => flyToSensor(card.dataset.sensorId));
+  });
+  wireDevToolsFooter();
 }
 
 // --- Zone management: draw a polygon on the map, then POST/PUT it via
@@ -3865,6 +4034,18 @@ function flyToZone(zoneId) {
   const layer = zonePolygonLayers.get(zoneId);
   if (!layer || !leafletMap) return;
   leafletMap.flyToBounds(layer.getBounds(), { padding: [40, 40], duration: 0.6 });
+}
+
+// Same "click a card, jump to its real map marker" affordance as
+// flyToZone above -- only ever works for a sensor with an actual
+// registered position (sensorMarkerLayers is only ever populated from
+// state.sensorRegistrations' real lat/lon in renderMap()), so a sensor
+// with no registered position simply has nothing to fly to.
+function flyToSensor(sensorId) {
+  const marker = sensorMarkerLayers.get(sensorId);
+  if (!marker || !leafletMap) return;
+  leafletMap.flyTo(marker.getLatLng(), Math.max(leafletMap.getZoom(), 16), { duration: 0.6 });
+  marker.openPopup();
 }
 
 async function toggleZoneActive(zoneId) {

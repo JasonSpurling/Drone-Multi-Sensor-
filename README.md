@@ -321,9 +321,10 @@ replica so the product still fits.
 | `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
 | `GET /api/detections` | Raw ingested detections (`?sensor_id=`, `?track_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`, freely combined) -- for sensor-level QA/debugging without a track id in hand already, or a bounded time slice once you do; see `GET /api/tracks/{id}/history` below for one track's own full path |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
-| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
+| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|investigating\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
-| `POST /api/incidents/{id}/resolve` | Resolve an incident |
+| `POST /api/incidents/{id}/investigate` | Mark an acknowledged incident as actively being investigated (only reachable from `acknowledged`) |
+| `POST /api/incidents/{id}/resolve` | Resolve an incident (from any non-resolved status) |
 | `GET /api/zones` | List active zones (`?include_inactive=true` for the zone-management UI, which also needs to find and reactivate a deactivated one) |
 | `POST /api/zones` | Create a zone (admin) |
 | `PUT /api/zones/{id}` | Update a zone -- polygon, type, altitude band, active state (admin) |
@@ -389,6 +390,18 @@ time, not a countdown) and, when a registered camera is near enough to
 cue on that track (the same `nearestCameraSensor()` lookup the details
 panel's Live view tab uses), a **PTZ** badge -- both purely derived from
 existing data, no new tracking state.
+
+Each card's meta line now also shows distance to the nearest zone,
+altitude, and heading (real fields the details panel already had --
+previously the card only showed raw latitude/longitude, which is rarely
+useful for a quick scan), and a **RISK** badge once `risk_score` is
+actually high enough to be worth calling out (score < 5 shows no badge at
+all, to avoid noise on every row) -- the exact score and its full
+factor-by-factor breakdown are always one click away in the details
+panel's Quality tab, never hidden behind the badge alone. The map's
+per-track popup card (the selected marker's permanent tooltip) similarly
+now also shows classification confidence and zone status alongside the
+altitude/speed/heading it already had.
 
 ### Verified/Unverified tracks
 
@@ -579,6 +592,25 @@ popup, which still works either way) -- useful for an operator who wants
 the zone boundaries visible without the name text competing for space at
 a busy zoom level.
 
+The **Uncertainty** toggle now applies to every visible track (previously
+only the selected one), still drawn at its real geographic radius
+(`Track.position_uncertainty_m`) rather than a fabricated small/medium/
+large tier -- an unselected track's circle is thinner and fainter so the
+selected track's own circle still reads as the one to look at. A new
+**Track labels** control (off/compact/full, cycled by clicking) shows an
+always-visible per-track map label instead of only on hover: Compact is
+the ID plus a risk-tier note (only once risk is actually high enough to
+be worth calling out), Full adds classification and verification state --
+all real fields already shown elsewhere, never fabricated ones.
+
+Nested-severity zones (an outer awareness boundary, a middle warning
+boundary, an inner restricted core) aren't a separate feature to build --
+they already work today as multiple real zones of different `zone_type`s
+drawn concentrically, each with its own real color and independent
+alert/entry behavior. There's no synthetic "auto-generate three rings
+from one zone" feature, since that would invent boundary geometry an
+operator never actually configured.
+
 ### Map imagery vs. tracking data
 
 The map background (dark/road/satellite tiles) always comes from an
@@ -604,6 +636,19 @@ panel you have to go looking in. A sensor that's never been registered
 (most GPS-tagged sensors -- cameras, ADS-B receivers -- never need to be)
 simply isn't plotted, rather than guessing a position for it. Toggle
 with the **Sensors** checkbox alongside Trails/Vectors/Uncertainty.
+
+### Sensor Health panel: cards, not a table
+
+The Sensor Health panel now shows one card per sensor (sensor ID, type,
+status, last heartbeat, and its registered position or "not registered")
+instead of a plain table -- clicking a card with a known position flies
+the map to it and opens its real popup, the same "click a card, jump to
+its marker" affordance zones already had. A developer-only **Simulate
+demo tracks** control now lives at the bottom of this panel (moved out of
+the Tracks panel's own empty state, which shouldn't show a demo/test
+button next to live security data in a real deployment) -- the capability
+is unchanged, just relocated to where someone checking sensor
+connectivity would actually reach for it.
 
 **"Missing" status**: a sensor with a registered position but zero
 detections ever shows a distinct `missing` status (violet), not just
@@ -692,8 +737,17 @@ for the same reason.
 
 An open incident's card also has **Acknowledge** and **Resolve** buttons
 (driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
-an acknowledged one keeps just **Resolve**, for a deliberate operator
-judgment call -- "we reviewed this and it's handled."
+an acknowledged one also gets a **Start investigation** button
+(`IncidentStatus.INVESTIGATING`, only reachable from `acknowledged`,
+server-enforced) -- a real, distinct "someone is actively working this
+one" step between just having seen it and calling it handled, still
+resolvable at any point from either state. `Incident.acknowledged_by`
+(whoever's key acknowledged it) is now shown on the card too, and the
+related track's ID is a real link that selects it and switches to the
+Tracks panel when that track still exists. This is deliberately not a
+full multi-operator assignment system -- `acknowledged_by` already is
+the real "who's handling this" signal this app has, so nothing invents a
+second, fabricated assignment field alongside it.
 
 A red **ALERT** banner appears across the topbar whenever at least one
 incident is still open (unacknowledged), naming the count and the worst
