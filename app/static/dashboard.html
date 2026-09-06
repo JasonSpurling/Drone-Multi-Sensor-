@@ -321,11 +321,32 @@
   #map-legend .item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
   #map-layer-toggles {
     position: absolute; z-index: 10; top: 12px; left: 50%; transform: translateX(-50%);
-    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 8px;
-    padding: 6px 12px; font-size: 11px; color: var(--muted); backdrop-filter: blur(4px);
-    display: flex; gap: 14px;
+    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px; backdrop-filter: blur(4px);
+    display: flex; gap: 4px;
   }
-  #map-layer-toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  /* Same active/inactive chip language as .filter-chip (track-class
+     filters) rather than a second, unstyled control convention -- a bare
+     OS checkbox + text label is what read as "not professional" here,
+     next to every other control on this map already using pill chips. */
+  #map-layer-toggles label {
+    position: relative; display: flex; align-items: center; gap: 0;
+    padding: 5px 11px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  #map-layer-toggles label:hover { color: var(--text); }
+  #map-layer-toggles label:has(input:checked) {
+    background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  }
+  #map-layer-toggles label:has(input:focus-visible) {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  #map-layer-toggles input[type="checkbox"] {
+    position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0;
+  }
   #map-empty-state {
     position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%);
     text-align: center; pointer-events: none; /* never intercepts a map click/drag */
@@ -513,8 +534,9 @@
     #map-legend { display: none; }
     #map-layer-toggles {
       left: 60px; right: 12px; transform: none;
-      justify-content: space-around; font-size: 10px;
+      justify-content: space-around;
     }
+    #map-layer-toggles label { padding: 4px 8px; font-size: 10px; }
     header.topbar .topbar-left h1 { display: none; }
   }
 
