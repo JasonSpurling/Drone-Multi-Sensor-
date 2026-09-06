@@ -926,6 +926,43 @@ COCO one. Like `dump1090_bridge.py`, this only runs if you `pip install`
 the camera extras -- `ultralytics` (and its `torch` dependency) is not a
 core dependency of the API server.
 
+## Live camera view
+
+Both camera adapters above only ever post a *detection* -- motion, or an
+object class -- never the actual image. `GET /api/sensors/{sensor_id}/live`
+(`app/api/camera_live.py`) is a separate, real live view: it opens a
+registered camera's RTSP/HTTP stream server-side and re-proxies it to the
+browser as an MJPEG feed (a `multipart/x-mixed-replace` response any
+`<img>` tag can render directly, no video player needed), so the
+dashboard's track details panel can show what a nearby camera currently
+sees -- throttled to 8 FPS (`_MAX_FPS` in that module) since this is a
+"confirm what the camera sees right now" live view, not a claim of smooth
+broadcast-quality video.
+
+Register the camera's stream URL alongside its position:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/sensor-registrations/cam-1 \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_type":"camera","latitude":51.50,"longitude":-0.10,
+       "camera_stream_url":"rtsp://192.168.1.50/stream1"}'
+```
+
+`camera_stream_url` is write-only in practice: `GET /api/sensor-registrations`
+always reports it as `null` regardless of what's actually stored, since a
+camera's stream URL commonly embeds its own login credentials, and
+there's no legitimate reason a dashboard viewer needs it back once it's
+set -- only the live-view endpoint itself, server-side, does. The
+dashboard picks whichever registered camera is nearest a selected track
+and streams from it automatically; no separate configuration in the UI
+itself.
+
+Requires the same camera extras as the adapters above
+(`pip install -r requirements-camera.txt`) -- `opencv-python-headless` is
+what actually opens the RTSP stream and encodes each frame as JPEG.
+Without it, the endpoint returns `501` with that exact instruction rather
+than an empty/broken stream.
+
 ## Downstream C2 integration
 
 **Publishing tracks to Anduril Lattice** (`app/adapters/lattice_bridge.py`):
@@ -1471,6 +1508,19 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 `drone` from a lower-confidence label (never silently downgraded away from
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
+
+**An operator's deliberate override, distinct from the automated vote
+above**: `POST /api/tracks/{id}/classify` (body `{"classification": "friendly"}`
+or `{"classification": "drone"}`) sets `Track.classification` directly
+and its confidence to `1.0` -- "that's our own authorized drone" or "I've
+personally confirmed this is hostile," not another vote for `app.fusion`
+to weigh. Restricted to just those two values (not the full
+`Classification` enum): an operator watching the dashboard is making
+exactly one of two calls, not reclassifying something as a bird or an
+aircraft, which is what sensor evidence itself is for. Surfaced as
+**Friend**/**Foe** buttons in the dashboard's track details panel; audited
+(`track.classify`) like every other operator action (`app/db.py`'s
+`record_audit`).
 
 **Classification confidence, distinct from the label**: `Track.classification_confidence`
 (0-1) is how strongly *current* evidence backs whatever label is actually

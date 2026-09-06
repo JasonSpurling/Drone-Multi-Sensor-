@@ -21,6 +21,7 @@ from app.api import (
     audit_log,
     auth_sso,
     authorized_operators,
+    camera_live,
     detections,
     health,
     incidents,
@@ -299,6 +300,7 @@ app.include_router(incidents.router, prefix="/api")
 app.include_router(zones_api.router, prefix="/api")
 app.include_router(sensors.router, prefix="/api")
 app.include_router(sensor_registry.router, prefix="/api")
+app.include_router(camera_live.router, prefix="/api")
 app.include_router(authorized_operators.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(ml_training.router, prefix="/api")

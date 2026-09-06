@@ -308,6 +308,18 @@ class SensorRegistrationInput(BaseModel):
         description="Compass bearing (degrees) the sensor's azimuth_deg=0 points to",
     )
     active: bool = True
+    camera_stream_url: str | None = Field(
+        default=None,
+        max_length=500,
+        description="An RTSP/HTTP source URL for GET /api/sensors/{id}/live "
+        "(app/api/camera_live.py) to open and re-proxy as an MJPEG stream, so the dashboard shows "
+        "a real live view without the browser ever connecting to the camera directly. Write-only "
+        "in practice: GET /api/sensor-registrations and the PUT response below always report this "
+        "as null regardless of what's actually stored (see app/api/sensor_registry.py) since a "
+        "camera's stream URL commonly embeds its own login credentials -- there's no legitimate "
+        "reason a dashboard viewer needs it back once it's set, only the proxy endpoint that "
+        "already holds it server-side.",
+    )
 
 
 class SensorRegistration(SensorRegistrationInput):

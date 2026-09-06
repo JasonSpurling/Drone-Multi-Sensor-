@@ -104,7 +104,7 @@ _TABLE_MIGRATION_COLUMNS = {
     },
     "zone": {"site_id": "INTEGER"},
     "incident": {"site_id": "INTEGER", "related_track_id": "INTEGER"},
-    "sensor_registry": {"site_id": "INTEGER"},
+    "sensor_registry": {"site_id": "INTEGER", "camera_stream_url": "VARCHAR(500)"},
 }
 
 
@@ -1113,6 +1113,7 @@ def upsert_sensor_registration(
     altitude_m: float | None,
     azimuth_reference_deg: float,
     active: bool = True,
+    camera_stream_url: str | None = None,
 ) -> None:
     with db_session() as conn:
         conn.execute(
@@ -1120,15 +1121,16 @@ def upsert_sensor_registration(
                 """
                 INSERT INTO sensor_registry
                     (sensor_id, site_id, sensor_type, latitude, longitude, altitude_m,
-                     azimuth_reference_deg, active)
+                     azimuth_reference_deg, active, camera_stream_url)
                 VALUES (:sensor_id, :site_id, :sensor_type, :latitude, :longitude, :altitude_m,
-                        :azimuth_reference_deg, :active)
+                        :azimuth_reference_deg, :active, :camera_stream_url)
                 ON CONFLICT (sensor_id) DO UPDATE SET
                     site_id = excluded.site_id, sensor_type = excluded.sensor_type,
                     latitude = excluded.latitude, longitude = excluded.longitude,
                     altitude_m = excluded.altitude_m,
                     azimuth_reference_deg = excluded.azimuth_reference_deg,
-                    active = excluded.active
+                    active = excluded.active,
+                    camera_stream_url = excluded.camera_stream_url
                 """
             ),
             {
@@ -1140,6 +1142,7 @@ def upsert_sensor_registration(
                 "altitude_m": altitude_m,
                 "azimuth_reference_deg": azimuth_reference_deg,
                 "active": int(active),
+                "camera_stream_url": camera_stream_url,
             },
         )
 

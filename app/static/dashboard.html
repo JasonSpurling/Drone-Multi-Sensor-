@@ -502,6 +502,10 @@
   .meter { background: var(--panel-2); border-radius: 999px; height: 6px; overflow: hidden; margin-top: 4px; }
   .meter-fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
   .sparkline-wrap { margin-top: 4px; }
+  .live-view-img {
+    display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+    border-radius: 6px; background: #000; border: 1px solid var(--border);
+  }
   .heading-arrow { display: inline-block; font-size: 14px; }
   .playback-row { display: flex; align-items: center; gap: 8px; }
   .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
@@ -1001,6 +1005,99 @@ function nearestSensorBearingRange(track) {
   return best;
 }
 
+// The nearest active *camera* sensor to a track (distinct from
+// nearestSensorBearingRange above, which considers every sensor type --
+// a live view is only ever meaningful for a camera) -- used to decide
+// whether the details panel's Live view section has anything to show.
+function nearestCameraSensor(track) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const cameras = state.sensorRegistrations.filter(
+    (s) => s.active && s.sensor_type === "camera" && s.latitude != null && s.longitude != null
+  );
+  if (cameras.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of cameras) {
+    const distanceM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || distanceM < best.distanceM) best = { sensorId: s.sensor_id, distanceM };
+  }
+  return best;
+}
+
+// This track's most recent detection that actually carries raw_data --
+// real per-sensor signal fields an adapter reported (RF center
+// frequency/bandwidth, acoustic bearing_confidence, camera motion area,
+// ...), which vary by sensor_type and aren't otherwise surfaced anywhere
+// in this panel. Not every detection carries one (a plain lat/lon report
+// often doesn't), so this is the most recent one that does, not just the
+// most recent detection outright.
+function latestSignalDetection(track) {
+  const withSignal = state.trailDetections.filter((d) => d.raw_data && Object.keys(d.raw_data).length > 0);
+  if (withSignal.length === 0) return null;
+  return withSignal.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))[0];
+}
+
+// One persistent <img> (and its open MJPEG connection), reused across
+// renderDetails() calls instead of recreated by them -- that function
+// replaces #track-details' entire innerHTML on every refresh (every
+// poll cycle and every WebSocket push), which would otherwise tear down
+// and reopen the live-view stream every few seconds instead of showing
+// one continuous feed. Moving the *same* element into the freshly-built
+// DOM (appendChild on an element that already has a parent detaches it
+// from the old one first) is what actually preserves the connection --
+// creating a new <img> with the same src would not.
+let liveViewImg = null;
+let liveViewFallback = null;
+let liveViewSensorId = null;
+
+function ensureLiveViewElements() {
+  if (liveViewImg) return;
+  liveViewImg = document.createElement("img");
+  liveViewImg.className = "live-view-img";
+  liveViewFallback = document.createElement("div");
+  liveViewFallback.className = "empty";
+  liveViewFallback.style.cssText = "padding:4px 0; display:none;";
+  liveViewFallback.textContent = "Camera unreachable, not registered with a live stream URL, or the "
+    + "server's camera extras (opencv) aren't installed -- see the README's \"Live view\" section.";
+  liveViewImg.addEventListener("error", () => {
+    liveViewFallback.style.display = "block";
+    liveViewImg.style.display = "none";
+  });
+}
+
+function attachLiveView(nearestCamera) {
+  const slot = document.getElementById("live-view-slot");
+  if (!slot || !nearestCamera) {
+    liveViewSensorId = null;
+    return;
+  }
+  ensureLiveViewElements();
+  if (nearestCamera.sensorId !== liveViewSensorId) {
+    liveViewSensorId = nearestCamera.sensorId;
+    liveViewImg.style.display = "block";
+    liveViewFallback.style.display = "none";
+    liveViewImg.alt = `Live view from ${nearestCamera.sensorId}`;
+    liveViewImg.src = `/api/sensors/${encodeURIComponent(nearestCamera.sensorId)}/live`
+      + (apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "");
+  }
+  slot.appendChild(liveViewImg);
+  slot.appendChild(liveViewFallback);
+  const distanceEl = document.getElementById("live-view-distance");
+  if (distanceEl) distanceEl.textContent = `${nearestCamera.sensorId} · ${Math.round(nearestCamera.distanceM)} m away`;
+}
+
+function formatSignalKey(key) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatSignalValue(value) {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  if (typeof value === "object") return escapeHtml(JSON.stringify(value));
+  return escapeHtml(String(value));
+}
+
 // A radar-style polar plot -- concentric range rings, compass ticks,
 // true-north-up -- centered on the nearest registered sensor rather than
 // the track itself, the same reference frame a real radar/RF direction-
@@ -1178,6 +1275,17 @@ function toggleOrShowPanel(name) {
 function showDetailsPanel(show) {
   document.getElementById("details-panel").style.display = show ? "flex" : "none";
   document.body.classList.toggle("details-open", show);
+  if (!show) stopLiveView();
+}
+
+// Actually ends the open MJPEG connection (clearing .src, not just
+// hiding the element) -- closing the details panel without this would
+// leave a live camera stream running in the background indefinitely,
+// since attachLiveView()'s whole point is to *not* tear the connection
+// down on every re-render.
+function stopLiveView() {
+  if (liveViewImg) liveViewImg.src = "";
+  liveViewSensorId = null;
 }
 
 async function selectTrack(id) {
@@ -1666,6 +1774,8 @@ function renderDetails() {
   const confidenceColor = confidencePct == null ? "var(--border)" : confidencePct < 40 ? "var(--high)" : confidencePct < 70 ? "var(--medium)" : "var(--active)";
   const nz = nearestZone(track);
   const nearestSensor = nearestSensorBearingRange(track);
+  const nearestCamera = nearestCameraSensor(track);
+  const signalDetection = latestSignalDetection(track);
 
   el.innerHTML = `
     <div class="kv-section" style="padding-top:14px;">
@@ -1694,6 +1804,13 @@ function renderDetails() {
       </select>
       <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
     </div>
+
+    ${nearestCamera ? `
+    <div class="kv-section">
+      <div class="kv-section-title">Live view</div>
+      <div id="live-view-slot"></div>
+      <div class="k" id="live-view-distance" style="margin-top:6px;"></div>
+    </div>` : ""}
 
     <div class="kv-section">
       <div class="kv-section-title">Identity</div>
@@ -1758,6 +1875,19 @@ function renderDetails() {
       </div>
     </div>` : ""}
 
+    ${signalDetection ? `
+    <div class="kv-section">
+      <div class="kv-section-title">Signal</div>
+      <div class="kv">
+        <div class="k">Sensor</div><div class="v">${escapeHtml(signalDetection.sensor_id)} (${escapeHtml(signalDetection.sensor_type)})</div>
+        <div class="k">Confidence</div><div class="v">${Math.round(signalDetection.confidence * 100)}%</div>
+        ${Object.entries(signalDetection.raw_data)
+          .map(([k, v]) => `<div class="k">${escapeHtml(formatSignalKey(k))}</div><div class="v">${formatSignalValue(v)}</div>`)
+          .join("")}
+      </div>
+      <div class="k" style="margin-top:6px; font-size:10px;">${fmtRelative(signalDetection.timestamp)}</div>
+    </div>` : ""}
+
     ${state.trailDetections.length > 0 ? `
     <div class="kv-section">
       <div class="kv-section-title">Label training data</div>
@@ -1777,6 +1907,7 @@ function renderDetails() {
     </div>` : ""}
   `;
 
+  attachLiveView(nearestCamera);
   document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
   document.getElementById("classify-foe-btn").addEventListener("click", () => classifyTrack(track.id, "drone"));
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));

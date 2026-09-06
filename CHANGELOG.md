@@ -18,6 +18,13 @@ section with the version and date, bump `__version__`, and start a fresh
 
 ## [Unreleased]
 
+### Added
+
+- Console-style dashboard redesign: panel switching moved from a floating icon rail into a persistent top nav bar; a radar-style polar view (concentric range rings + compass bearing) in track details, plotted from the nearest registered sensor using real geodesic math; a "Nearest zone" distance row.
+- `POST /api/tracks/{id}/classify`: an operator's deliberate Friend/Foe classification override, distinct from `app.fusion`'s automated evidence-weighted vote -- surfaced as Friend/Foe buttons in the dashboard.
+- `GET /api/sensors/{sensor_id}/live`: a real MJPEG live-view proxy for a registered camera's RTSP/HTTP stream (throttled to 8 FPS), surfaced in the dashboard's track details panel for the nearest camera sensor. Requires `requirements-camera.txt`'s opencv extra; returns `501` with that instruction otherwise, never a fake/empty stream. `SensorRegistration.camera_stream_url` is write-only (always reported as `null`) since it commonly embeds login credentials.
+- A "Signal" section in track details surfacing a track's most recent detection's real per-sensor `raw_data` fields (RF center frequency/bandwidth, acoustic bearing confidence, ...) -- previously captured but not shown anywhere in the UI.
+
 ## [0.2.0] - 2026-08-31
 
 ### Added
