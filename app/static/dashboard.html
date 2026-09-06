@@ -1789,7 +1789,6 @@ function initMap() {
   leafletMap.addControl(new RecenterControl());
 
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-  const cartoAttr = osmAttr + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
   const esriAttr = "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS community";
   // World_Topo_Map's real attribution differs from World_Imagery's above
   // (a different blend of source providers) -- verified against Esri's
@@ -1798,13 +1797,23 @@ function initMap() {
   const esriTopoAttr = "Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, "
     + "GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), "
     + '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community';
+  // Canvas/World_Dark_Gray_Base's own documented attribution -- replaces
+  // the former CARTO dark tile source so every base layer on this map
+  // comes from the same Esri ArcGIS Online org, not a mix of providers.
+  const esriDarkAttr = "Esri, HERE, Garmin, " + osmAttr + ", and the GIS User Community";
+  // World_Street_Map's own documented attribution -- replaces the former
+  // plain OpenStreetMap tile source for the same reason.
+  const esriStreetAttr = "Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, "
+    + "Esri China (Hong Kong), Esri Korea, Esri (Thailand), NGCC, " + osmAttr + ", and the GIS User Community";
 
-  const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: cartoAttr, subdomains: "abcd", maxZoom: 19,
-  });
-  const roadLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: osmAttr, maxZoom: 19,
-  });
+  const darkLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { attribution: esriDarkAttr, maxZoom: 16 }
+  );
+  const roadLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    { attribution: esriStreetAttr, maxZoom: 19 }
+  );
   const satelliteLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     { attribution: esriAttr, maxZoom: 19 }
