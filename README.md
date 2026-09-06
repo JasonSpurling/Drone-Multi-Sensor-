@@ -384,6 +384,38 @@ track never jumps into a different group's position and gets mistaken
 for a different kind of object. The choice is remembered per-browser
 (like the theme toggle) so it persists across reloads.
 
+### Verified/Unverified tracks
+
+The Tracks panel splits into two sub-tabs, **Verified** and **Unverified**
+(with a live count on each), before the usual classification groups. A
+track counts as Verified once 2+ distinct sensor types have independently
+reported on it (`INCIDENT_CORROBORATION_MIN_SENSOR_TYPES`, the same
+threshold `app.incidents` already uses to escalate an incident's
+severity) -- `corroborating_sensor_types`/`verified` on `GET
+/api/tracks(/{id})` and `POST /api/tracks/{id}/classify`, computed fresh
+at read time, never stored. A brand-new, single-sensor track is
+genuinely Unverified until a second sensor type corroborates it, so the
+panel defaults to the Unverified tab -- that's where a fresh detection
+actually shows up first.
+
+This is independent of a separate Verified/Unverified filter at the
+bottom of the map itself, which controls which diamonds plot there
+(defaults to showing both) without touching which half of the *list* is
+showing.
+
+### Track details tabs
+
+The details panel's sensor-specific content (previously several
+always-stacked sections) is now a tab strip: **Live view** (the MJPEG
+feed and read-only PTZ cue, see "Live camera view" and "Slew-to-cue"
+below), **Quality** (classification confidence, uncertainty, maneuvering,
+trail sparkline), **Signal** (the most recent detection's raw per-sensor
+fields), **Radar** (bearing/range polar plot from the nearest sensor),
+and **Image** (an on-demand snapshot button). Each tab renders its own
+specific "not available" message when a track has nothing for it (no
+camera nearby, no signal data yet, ...) rather than hiding the tab
+outright or fabricating a placeholder.
+
 ### Map imagery vs. tracking data
 
 The map background (dark/road/satellite tiles) always comes from an
@@ -479,6 +511,14 @@ An open incident's card also has **Acknowledge** and **Resolve** buttons
 (driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
 an acknowledged one keeps just **Resolve**, for a deliberate operator
 judgment call -- "we reviewed this and it's handled."
+
+A red **ALERT** banner appears across the topbar whenever at least one
+incident is still open (unacknowledged), naming the count and the worst
+severity among them -- clicking it opens the Alerts panel directly. It
+disappears again as soon as every open incident has been acknowledged or
+resolved; an acknowledged-but-not-yet-resolved incident no longer needs
+to interrupt the whole screen (it still counts toward the rail icon's own
+badge, a separate, quieter signal).
 
 The system also auto-closes an incident once its own trigger condition
 is confirmed gone, so it never sits open/acknowledged indefinitely after
@@ -963,6 +1003,19 @@ what actually opens the RTSP stream and encodes each frame as JPEG.
 Without it, the endpoint returns `501` with that exact instruction rather
 than an empty/broken stream.
 
+If a *second*, genuinely distinct camera sensor is also registered near
+the same track, the dashboard shows it as a small inset thumbnail in the
+corner of the main live view -- never a duplicate of the main feed, and
+never shown at all when there's only one camera nearby.
+
+`GET /api/sensors/{sensor_id}/snapshot` is the same idea for a single
+still frame instead of a feed: it opens the stream fresh, grabs the first
+frame that decodes, and returns it as one JPEG (`502` if the camera never
+produces a decodable frame within 10s). Not a stored-image history --
+there's no capture pipeline or table behind it -- just "what does this
+camera see right now," as a still. Surfaced as a "Take snapshot" button
+under the dashboard's Image tab.
+
 ## Downstream C2 integration
 
 **Publishing tracks to Anduril Lattice** (`app/adapters/lattice_bridge.py`):
@@ -1315,6 +1368,12 @@ from the camera itself via `GetConfigurationOptions`, not a fixed unit --
 correctly handled here, per the ONVIF spec, rather than assumed) hasn't
 been confirmed against a real camera's actual reported ranges. Verify
 against your own hardware before relying on it.
+
+The dashboard's Live view tab shows this same cue (pan/tilt/distance) as a
+**read-only** display next to the nearest registered camera -- it calls
+the cue endpoint above and renders the numbers it gets back, but never
+sends a command to any camera itself; driving real hardware is still only
+`onvif_ptz_bridge.py`'s job, run separately.
 
 ## Airspace data
 
