@@ -507,6 +507,28 @@
     border-radius: 6px; background: #000; border: 1px solid var(--border);
   }
   .heading-arrow { display: inline-block; font-size: 14px; }
+  /* --- Sensor-view tab strip (Live view/Quality/Signal/Radar/Image) --- */
+  .tab-strip { display: flex; gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  button.tab-btn {
+    background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 0 0 7px 0; cursor: pointer;
+  }
+  button.tab-btn:hover { color: var(--text); }
+  button.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-empty { color: var(--muted); font-size: 12px; padding: 8px 0; font-style: italic; }
+  .snapshot-img { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--border); margin-top: 8px; }
+  /* --- Track list Verified/Unverified sub-tabs + collapsible group headers --- */
+  .verify-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  button.verify-tab-btn {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--muted); font-size: 11px; font-weight: 600; padding: 6px 0; cursor: pointer;
+  }
+  button.verify-tab-btn:hover { color: var(--text); }
+  button.verify-tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .group-header { cursor: pointer; user-select: none; }
+  .group-header .chevron { display: inline-block; transition: transform 0.15s ease; margin-right: 3px; font-size: 9px; }
+  .group-header.collapsed .chevron { transform: rotate(-90deg); }
   .playback-row { display: flex; align-items: center; gap: 8px; }
   .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .playback-time { font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; white-space: nowrap; }
@@ -649,6 +671,10 @@
     </div>
 
     <div id="left-panel-search">
+      <div id="verify-tabs" class="verify-tabs">
+        <button class="verify-tab-btn" data-verify="verified" id="verify-tab-verified" title="Corroborated by 2+ independent sensor types">Verified</button>
+        <button class="verify-tab-btn active" data-verify="unverified" id="verify-tab-unverified" title="Reported by only one sensor type so far">Unverified</button>
+      </div>
       <div class="search-box">
         <input id="search-input" type="text" placeholder="Search ID, UID, class, status…" title="Also matches classification, status, and aircraft category (e.g. &quot;rotor&quot;) — press / to focus, Esc to clear">
         <button id="search-clear" type="button" aria-label="Clear search">&times;</button>
@@ -761,6 +787,20 @@ const state = {
   selectedTrackId: null, trail: [], trailDetections: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true, showSensors: true,
   activePanel: "tracks",
+  // Which sub-tab of the sensor-view tab strip (Live view/Quality/Signal/
+  // Radar/Image) is showing in the details panel -- see renderDetails().
+  detailsTab: "live",
+  // "verified" | "unverified" -- which half of the Tracks panel's list is
+  // showing (see the Verified/Unverified sub-tabs above the class filters).
+  trackVerifiedTab: "unverified",
+  // Group headers (Friendly/Drone/Aircraft/...) collapsed by a click on
+  // their own chevron -- a Set of classification strings, not a single
+  // bool, since each group collapses independently.
+  collapsedGroups: new Set(),
+  // sensor_id -> the last computed slew-to-cue result (GET /api/tracks/
+  // {id}/cue/{sensor_id}) shown under the Live view tab -- cached so
+  // switching tabs and back doesn't refetch, cleared on track reselection.
+  cameraCue: null,
   // null == showing each track's live position; otherwise an index into
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
@@ -1209,6 +1249,17 @@ function visibleTracks() {
   });
 }
 
+// Verified/Unverified is a Tracks-*list* distinction only (see the
+// verify-tabs above the class filters) -- the map keeps showing every
+// track regardless of which sub-tab is active, the same way the
+// reference layout this was modeled on keeps a single combined map with
+// its own separate Verified/Unverified checkbox row, distinct from the
+// list's tabs. visibleTracks() itself (used by the map, search-highlight,
+// etc.) is deliberately untouched by trackVerifiedTab.
+function visibleTracksForList() {
+  return visibleTracks().filter((t) => (state.trackVerifiedTab === "verified" ? t.verified : !t.verified));
+}
+
 // --- Left-rail panel switching: Tracks / Alerts / Sensors share one
 // floating panel, one view visible at a time -- mirrors a multi-purpose
 // side rail instead of three permanently-stacked panels competing for
@@ -1293,6 +1344,7 @@ async function selectTrack(id) {
   state.trail = [];
   state.trailDetections = [];
   state.scrubIndex = null;
+  state.detailsTab = "live";
   stopPlayback();
   showDetailsPanel(true);
   renderTracks();
@@ -1609,15 +1661,19 @@ const TRACK_SORT_COMPARATORS = {
 
 function renderTracks() {
   const el = document.getElementById("tracks-list");
-  const tracks = visibleTracks();
+  const matchingTracks = visibleTracks();
+  const tracks = visibleTracksForList();
   updatePanelHeaderCount();
+  updateVerifyTabCounts(matchingTracks);
+
   if (tracks.length === 0) {
-    // Two different empty states: nothing has ever come in yet (a fresh
-    // deployment or a demo with no sensor/simulator running), vs. real
-    // tracks exist but the current search/filter excludes all of them --
-    // "no tracks match your filter" would be actively misleading for the
-    // first case, and "waiting for sensor data" would be misleading for
-    // the second.
+    // Three different empty states: nothing has ever come in yet (a fresh
+    // deployment or a demo with no sensor/simulator running), tracks exist
+    // but the search/class filter excludes all of them, or tracks exist
+    // and pass those filters but none are in the active Verified/
+    // Unverified tab specifically -- each would be misleading in place of
+    // one of the others (e.g. "no tracks detected" when a single-sensor
+    // track is sitting right there under the other tab).
     if (state.tracks.length === 0) {
       el.innerHTML = `<div class="empty-guidance">
         <div class="empty-title">No tracks detected</div>
@@ -1625,8 +1681,10 @@ function renderTracks() {
         <button id="simulate-tracks-btn">Simulate tracks</button>
       </div>`;
       document.getElementById("simulate-tracks-btn").addEventListener("click", simulateDemoTracks);
-    } else {
+    } else if (matchingTracks.length === 0) {
       el.innerHTML = '<div class="empty">No tracks match your search/filter.</div>';
+    } else {
+      el.innerHTML = `<div class="empty">No ${state.trackVerifiedTab} tracks right now.</div>`;
     }
     return;
   }
@@ -1640,6 +1698,7 @@ function renderTracks() {
   el.innerHTML = GROUP_ORDER.filter((g) => byGroup.get(g) && byGroup.get(g).length > 0)
     .map((g) => {
       const groupTracks = byGroup.get(g).slice().sort(TRACK_SORT_COMPARATORS[trackSort] || TRACK_SORT_COMPARATORS.recent);
+      const collapsed = state.collapsedGroups.has(g);
       const cards = groupTracks
         .map((t) => {
           const sel = t.id === state.selectedTrackId ? "selected" : "";
@@ -1662,12 +1721,20 @@ function renderTracks() {
           </div>`;
         })
         .join("");
-      return `<div class="group-header" style="color:${CLASS_COLOR[g] || CLASS_COLOR.unknown}">
-          ${GROUP_LABEL[g] || g} <span class="n">${groupTracks.length}</span>
-        </div>${cards}`;
+      return `<div class="group-header ${collapsed ? "collapsed" : ""}" data-group="${g}" style="color:${CLASS_COLOR[g] || CLASS_COLOR.unknown}">
+          <span><span class="chevron">&#9660;</span>${GROUP_LABEL[g] || g}</span> <span class="n">${groupTracks.length}</span>
+        </div>${collapsed ? "" : cards}`;
     })
     .join("");
 
+  el.querySelectorAll(".group-header").forEach((header) => {
+    header.addEventListener("click", () => {
+      const g = header.dataset.group;
+      if (state.collapsedGroups.has(g)) state.collapsedGroups.delete(g);
+      else state.collapsedGroups.add(g);
+      renderTracks();
+    });
+  });
   el.querySelectorAll(".track-card").forEach((card) => {
     makeKeyboardActivatable(card, () => selectTrack(Number(card.dataset.id)));
   });
@@ -1754,6 +1821,145 @@ function trailSparkline(trail) {
   </svg>`;
 }
 
+// --- Details panel sensor-view tabs (Live view/Quality/Signal/Radar/
+// Image) -- one tab strip switching a single content area, instead of
+// four permanently-stacked sections competing for scroll space. Each
+// tab's content function returns its own honest empty state when this
+// specific track/selection doesn't have that kind of data, rather than
+// hiding the tab itself (consistent chrome beats a tab strip that
+// reflows every time a camera happens to be nearby or not). -----------
+const DETAILS_TABS = [
+  { key: "live", label: "Live view" },
+  { key: "quality", label: "Quality" },
+  { key: "signal", label: "Signal" },
+  { key: "radar", label: "Radar" },
+  { key: "image", label: "Image" },
+];
+
+function renderLiveTabContent({ nearestCamera }) {
+  if (!nearestCamera) {
+    return `<div class="tab-empty">No camera sensor registered near this track.</div>`;
+  }
+  return `
+    <div id="live-view-slot"></div>
+    <div class="k" id="live-view-distance" style="margin-top:6px;"></div>
+    <div class="kv" id="ptz-cue-row" style="margin-top:6px; display:none;">
+      <div class="k" title="The pan/tilt this camera would need to point at the track right now (GET /api/tracks/{id}/cue/{sensor_id}) -- read-only: nothing here sends a command to the camera.">PTZ cue</div>
+      <div class="v" id="ptz-cue-value">Computing…</div>
+    </div>
+  `;
+}
+
+function renderQualityTabContent({ track, confidencePct, confidenceColor, maneuverPct, meterColor }) {
+  return `
+    <div class="kv">
+      <div class="k" title="How strongly current evidence backs the classification above -- can fall as the track goes stale, even though the label itself never downgrades">Confidence</div>
+      <div class="v">
+        ${confidencePct != null ? confidencePct + "%" : "—"}
+        <div class="meter"><div class="meter-fill" style="width:${confidencePct ?? 0}%; background:${confidenceColor}"></div></div>
+      </div>
+      <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
+      <div class="k">Maneuvering</div>
+      <div class="v">
+        ${maneuverPct != null ? maneuverPct + "%" : "—"}
+        <div class="meter"><div class="meter-fill" style="width:${maneuverPct ?? 0}%; background:${meterColor}"></div></div>
+      </div>
+    </div>
+    <div class="sparkline-wrap">
+      ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
+    </div>
+  `;
+}
+
+function renderSignalTabContent({ signalDetection }) {
+  if (!signalDetection) {
+    return `<div class="tab-empty">No per-sensor signal data on this track yet.</div>`;
+  }
+  return `
+    <div class="kv">
+      <div class="k">Sensor</div><div class="v">${escapeHtml(signalDetection.sensor_id)} (${escapeHtml(signalDetection.sensor_type)})</div>
+      <div class="k">Confidence</div><div class="v">${Math.round(signalDetection.confidence * 100)}%</div>
+      ${Object.entries(signalDetection.raw_data)
+        .map(([k, v]) => `<div class="k">${escapeHtml(formatSignalKey(k))}</div><div class="v">${formatSignalValue(v)}</div>`)
+        .join("")}
+    </div>
+    <div class="k" style="margin-top:6px; font-size:10px;">${fmtRelative(signalDetection.timestamp)}</div>
+  `;
+}
+
+function renderRadarTabContent({ nearestSensor }) {
+  if (!nearestSensor) {
+    return `<div class="tab-empty">No registered sensors to plot a bearing from.</div>`;
+  }
+  return `
+    ${radarPolarSVG(nearestSensor)}
+    <div class="kv" style="margin-top:6px;">
+      <div class="k">Bearing</div><div class="v">${Math.round(nearestSensor.bearingDeg)}&deg; from ${escapeHtml(nearestSensor.sensorId)}</div>
+      <div class="k">Range</div><div class="v">${Math.round(nearestSensor.rangeM)} m</div>
+    </div>
+  `;
+}
+
+function renderImageTabContent({ nearestCamera }) {
+  if (!nearestCamera) {
+    return `<div class="tab-empty">No camera sensor registered near this track.</div>`;
+  }
+  return `
+    <div class="k">${escapeHtml(nearestCamera.sensorId)} &middot; ${Math.round(nearestCamera.distanceM)} m away</div>
+    <button class="secondary" id="snapshot-btn" style="margin-top:8px;">Take snapshot</button>
+    <div id="snapshot-result"></div>
+  `;
+}
+
+const DETAILS_TAB_RENDERERS = {
+  live: renderLiveTabContent, quality: renderQualityTabContent, signal: renderSignalTabContent,
+  radar: renderRadarTabContent, image: renderImageTabContent,
+};
+
+function renderDetailsTabContent(tabKey, ctx) {
+  return (DETAILS_TAB_RENDERERS[tabKey] || renderLiveTabContent)(ctx);
+}
+
+async function fetchAndShowPtzCue(trackId, cameraSensorId) {
+  const valueEl = document.getElementById("ptz-cue-value");
+  const rowEl = document.getElementById("ptz-cue-row");
+  if (!valueEl || !rowEl) return;
+  try {
+    const cue = await fetchJSON(`/api/tracks/${trackId}/cue/${encodeURIComponent(cameraSensorId)}`);
+    rowEl.style.display = "";
+    valueEl.textContent = `Pan ${cue.pan_deg.toFixed(0)}° · Tilt ${cue.tilt_deg.toFixed(0)}° · ${Math.round(cue.distance_m)} m`;
+  } catch (e) {
+    // A track with no resolved position yet (409) or similar -- the cue
+    // row just stays hidden rather than showing a scary error for
+    // something that resolves itself once the track has a position.
+    if (e instanceof AuthError) showAuthBar(true);
+  }
+}
+
+async function takeSnapshot(sensorId) {
+  const btn = document.getElementById("snapshot-btn");
+  const resultEl = document.getElementById("snapshot-result");
+  if (btn) { btn.disabled = true; btn.textContent = "Capturing…"; }
+  try {
+    const headers = apiKey ? { "X-API-Key": apiKey } : {};
+    const res = await fetch(`/api/sensors/${encodeURIComponent(sensorId)}/snapshot`, { headers });
+    if (res.status === 401) throw new AuthError("snapshot -> 401");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `snapshot -> ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (resultEl) resultEl.innerHTML = `<img class="snapshot-img" src="${url}" alt="Snapshot from ${escapeHtml(sensorId)}">`;
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else if (resultEl) resultEl.innerHTML = `<div class="tab-empty">${escapeHtml(e.message || "Couldn't capture a snapshot.")}</div>`;
+    console.error(e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Take snapshot"; }
+  }
+}
+
 function renderDetails() {
   const el = document.getElementById("track-details");
   const track = state.tracks.find((t) => t.id === state.selectedTrackId);
@@ -1805,13 +2011,6 @@ function renderDetails() {
       <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
     </div>
 
-    ${nearestCamera ? `
-    <div class="kv-section">
-      <div class="kv-section-title">Live view</div>
-      <div id="live-view-slot"></div>
-      <div class="k" id="live-view-distance" style="margin-top:6px;"></div>
-    </div>` : ""}
-
     <div class="kv-section">
       <div class="kv-section-title">Identity</div>
       <div class="kv-cols">
@@ -1846,47 +2045,13 @@ function renderDetails() {
     </div>
 
     <div class="kv-section">
-      <div class="kv-section-title">Track quality</div>
-      <div class="kv">
-        <div class="k" title="How strongly current evidence backs the classification above -- can fall as the track goes stale, even though the label itself never downgrades">Confidence</div>
-        <div class="v">
-          ${confidencePct != null ? confidencePct + "%" : "—"}
-          <div class="meter"><div class="meter-fill" style="width:${confidencePct ?? 0}%; background:${confidenceColor}"></div></div>
-        </div>
-        <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
-        <div class="k">Maneuvering</div>
-        <div class="v">
-          ${maneuverPct != null ? maneuverPct + "%" : "—"}
-          <div class="meter"><div class="meter-fill" style="width:${maneuverPct ?? 0}%; background:${meterColor}"></div></div>
-        </div>
+      <div class="tab-strip" role="tablist" aria-label="Sensor view">
+        ${DETAILS_TABS.map((t) => `<button class="tab-btn ${state.detailsTab === t.key ? "active" : ""}" data-tab="${t.key}" role="tab" aria-selected="${state.detailsTab === t.key}">${t.label}</button>`).join("")}
       </div>
-      <div class="sparkline-wrap">
-        ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
+      <div id="details-tab-content">
+        ${renderDetailsTabContent(state.detailsTab, { track, nearestCamera, nearestSensor, signalDetection, confidencePct, confidenceColor, maneuverPct, meterColor })}
       </div>
     </div>
-
-    ${nearestSensor ? `
-    <div class="kv-section" id="radar-section">
-      <div class="kv-section-title">Radar</div>
-      ${radarPolarSVG(nearestSensor)}
-      <div class="kv" style="margin-top:6px;">
-        <div class="k">Bearing</div><div class="v">${Math.round(nearestSensor.bearingDeg)}&deg; from ${escapeHtml(nearestSensor.sensorId)}</div>
-        <div class="k">Range</div><div class="v">${Math.round(nearestSensor.rangeM)} m</div>
-      </div>
-    </div>` : ""}
-
-    ${signalDetection ? `
-    <div class="kv-section">
-      <div class="kv-section-title">Signal</div>
-      <div class="kv">
-        <div class="k">Sensor</div><div class="v">${escapeHtml(signalDetection.sensor_id)} (${escapeHtml(signalDetection.sensor_type)})</div>
-        <div class="k">Confidence</div><div class="v">${Math.round(signalDetection.confidence * 100)}%</div>
-        ${Object.entries(signalDetection.raw_data)
-          .map(([k, v]) => `<div class="k">${escapeHtml(formatSignalKey(k))}</div><div class="v">${formatSignalValue(v)}</div>`)
-          .join("")}
-      </div>
-      <div class="k" style="margin-top:6px; font-size:10px;">${fmtRelative(signalDetection.timestamp)}</div>
-    </div>` : ""}
 
     ${state.trailDetections.length > 0 ? `
     <div class="kv-section">
@@ -1907,7 +2072,22 @@ function renderDetails() {
     </div>` : ""}
   `;
 
-  attachLiveView(nearestCamera);
+  if (state.detailsTab === "live") {
+    attachLiveView(nearestCamera);
+    if (nearestCamera) fetchAndShowPtzCue(track.id, nearestCamera.sensorId);
+  } else {
+    stopLiveView();
+  }
+  el.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.detailsTab = btn.dataset.tab;
+      renderDetails();
+    });
+  });
+  const snapshotBtn = document.getElementById("snapshot-btn");
+  if (snapshotBtn && nearestCamera) {
+    snapshotBtn.addEventListener("click", () => takeSnapshot(nearestCamera.sensorId));
+  }
   document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
   document.getElementById("classify-foe-btn").addEventListener("click", () => classifyTrack(track.id, "drone"));
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
@@ -3121,6 +3301,22 @@ trackSortSelect.addEventListener("change", (e) => {
   localStorage.setItem("droneTrackSort", trackSort);
   renderTracks();
 });
+document.querySelectorAll(".verify-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.trackVerifiedTab = btn.dataset.verify;
+    document.querySelectorAll(".verify-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    renderTracks();
+  });
+});
+// Counts on the Verified/Unverified tab buttons themselves -- computed
+// from tracks that already pass the search/class filter above them, so
+// the two numbers always add up to the count shown in the panel header.
+function updateVerifyTabCounts(matchingTracks) {
+  const verifiedCount = matchingTracks.filter((t) => t.verified).length;
+  const unverifiedCount = matchingTracks.length - verifiedCount;
+  document.getElementById("verify-tab-verified").textContent = `Verified (${verifiedCount})`;
+  document.getElementById("verify-tab-unverified").textContent = `Unverified (${unverifiedCount})`;
+}
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.
 document.addEventListener("keydown", (e) => {

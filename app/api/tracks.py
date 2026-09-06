@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
+from app.config import INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
 from app.db import get_sensor_registration, get_track, list_detections, list_tracks, record_audit, update_track
 from app.export import to_csv, to_gpx, to_kml
-from app.fusion import decay_classification_confidence
+from app.fusion import corroborating_sensor_type_count, decay_classification_confidence
 from app.live import publish as publish_live_event
 from app.models import Detection, Track, TrackClassificationInput, TrackStatus
 from app.slew_to_cue import compute_camera_cue
@@ -35,6 +36,20 @@ def _with_decayed_confidence(track: Track) -> Track:
     return track
 
 
+def _with_computed_fields(track: Track) -> Track:
+    """_with_decayed_confidence plus the two read-time-only fields
+    (corroborating_sensor_types, verified) GET /api/tracks and GET
+    /api/tracks/{id} both need for the dashboard's Verified/Unverified
+    grouping -- one extra query per track (list_recent_detections, via
+    corroborating_sensor_type_count), the same cost app.incidents already
+    pays once per opened incident, just now also paid per read here.
+    """
+    track = _with_decayed_confidence(track)
+    track.corroborating_sensor_types = corroborating_sensor_type_count(track)
+    track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
+    return track
+
+
 @router.get("/tracks", response_model=list[Track])
 def get_tracks(
     status: TrackStatus | None = Query(default=None),
@@ -46,7 +61,7 @@ def get_tracks(
     tracks = list_tracks(
         site_id=principal.site_id, status=status.value if status else None, limit=limit, offset=offset
     )
-    return [_with_decayed_confidence(t) for t in tracks]
+    return [_with_computed_fields(t) for t in tracks]
 
 
 @router.get("/tracks/{track_id}", response_model=Track)
@@ -55,7 +70,7 @@ def get_track_by_id(track_id: int, principal: Principal = Depends(require_role(*
     track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return _with_decayed_confidence(track)
+    return _with_computed_fields(track)
 
 
 @router.post("/tracks/{track_id}/classify", response_model=Track)
@@ -88,7 +103,7 @@ def classify_track(
     )
     if updated.site_id is not None:
         publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
-    return _with_decayed_confidence(updated)
+    return _with_computed_fields(updated)
 
 
 @router.get("/tracks/{track_id}/history", response_model=list[Detection])

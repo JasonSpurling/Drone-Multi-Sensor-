@@ -202,6 +202,21 @@ class Track(BaseModel):
         "on top of the as-of-last-detection value stored here. None for an UNKNOWN track -- there's "
         "no meaningful confidence in not knowing.",
     )
+    corroborating_sensor_types: int | None = Field(
+        default=None,
+        description="How many distinct sensor types have contributed a detection to this track's "
+        "recent history (app.fusion.corroborating_sensor_type_count's corroboration window) -- "
+        "computed fresh by GET /api/tracks/GET /api/tracks/{id}, not stored. Not populated on a "
+        "Track built any other way (e.g. inside app.tracking's own commit path), since it's a "
+        "read-time-only view, not part of a track's actual persisted state.",
+    )
+    verified: bool | None = Field(
+        default=None,
+        description="corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES -- the "
+        "same corroboration threshold app.incidents already uses to escalate incident severity, "
+        "not a second, differently-tuned definition of 'verified' invented just for this field. "
+        "The dashboard's Verified/Unverified track grouping is exactly this.",
+    )
 
 
 class TrackClassificationInput(BaseModel):

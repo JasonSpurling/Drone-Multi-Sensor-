@@ -151,3 +151,101 @@ def test_live_view_accepts_the_api_key_as_a_query_param_too(isolated_db, keys, m
 
         wrong_key = client.get("/api/sensors/cam-1/live", params={"api_key": "not-a-real-key"})
         assert wrong_key.status_code == 401
+
+
+def test_snapshot_404s_for_unregistered_sensor(isolated_db):
+    with TestClient(app) as client:
+        r = client.get("/api/sensors/does-not-exist/snapshot")
+        assert r.status_code == 404
+
+
+def test_snapshot_409s_when_no_stream_url_configured(isolated_db):
+    with TestClient(app) as client:
+        client.put(
+            "/api/sensor-registrations/cam-1",
+            json={"sensor_type": "camera", "latitude": 51.5, "longitude": -0.1},
+        )
+        r = client.get("/api/sensors/cam-1/snapshot")
+        assert r.status_code == 409
+
+
+def test_snapshot_501s_without_the_camera_extras_installed(isolated_db, monkeypatch):
+    monkeypatch.setitem(sys.modules, "cv2", None)
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        r = client.get("/api/sensors/cam-1/snapshot")
+        assert r.status_code == 501
+        assert "requirements-camera.txt" in r.json()["detail"]
+
+
+def test_snapshot_returns_one_real_jpeg_frame_with_a_fake_capture(isolated_db, monkeypatch):
+    class FakeVideoCapture:
+        def __init__(self, url):
+            self.url = url
+
+        def isOpened(self):
+            return True
+
+        def read(self):
+            return True, object()
+
+        def release(self):
+            pass
+
+    fake_cv2 = types.SimpleNamespace(
+        VideoCapture=FakeVideoCapture,
+        imencode=lambda ext, frame, params: (True, types.SimpleNamespace(tobytes=lambda: b"\xff\xd8onejpeg\xff\xd9")),
+        IMWRITE_JPEG_QUALITY=1,
+    )
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        r = client.get("/api/sensors/cam-1/snapshot")
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "image/jpeg"
+        assert r.content == b"\xff\xd8onejpeg\xff\xd9"
+
+
+def test_snapshot_502s_when_the_camera_never_produces_a_frame(isolated_db, monkeypatch):
+    class NeverReadsVideoCapture:
+        def __init__(self, url):
+            pass
+
+        def isOpened(self):
+            return True
+
+        def read(self):
+            return False, None
+
+        def release(self):
+            pass
+
+    fake_cv2 = types.SimpleNamespace(VideoCapture=NeverReadsVideoCapture, IMWRITE_JPEG_QUALITY=1)
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr("app.api.camera_live._SNAPSHOT_TIMEOUT_S", 0.05)
+
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        r = client.get("/api/sensors/cam-1/snapshot")
+        assert r.status_code == 502
+
+
+def test_snapshot_requires_no_special_auth_beyond_the_usual_header(isolated_db, keys, monkeypatch):
+    """Unlike /live, a snapshot is fetched via a JS button click (fetch()
+    with a normal header), never an <img src> -- so it uses plain
+    require_role, not require_role_allow_query_key, and a query-param key
+    should NOT work here.
+    """
+    monkeypatch.setitem(sys.modules, "cv2", None)
+    with TestClient(app) as client:
+        client.put(
+            "/api/sensor-registrations/cam-1",
+            json=CAMERA_REGISTRATION,
+            headers={"X-API-Key": "admin-key"},
+        )
+        via_header = client.get("/api/sensors/cam-1/snapshot", headers={"X-API-Key": "view-key"})
+        assert via_header.status_code == 501  # past auth
+
+        via_query_only = client.get("/api/sensors/cam-1/snapshot", params={"api_key": "view-key"})
+        assert via_query_only.status_code == 401

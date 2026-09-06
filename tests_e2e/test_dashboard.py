@@ -961,8 +961,8 @@ def test_track_details_copy_and_export_use_real_track_data(live_server, page):
 def test_track_details_shows_classification_confidence_meter(live_server, page):
     """A track's classification_confidence (app/fusion.py -- distinct from
     the classification label itself, which only ever upgrades) shows as
-    its own meter in the details panel's Track quality section, in the
-    Copy summary, and is a real percentage from the API, not a stub.
+    its own meter in the details panel's Quality tab, in the Copy summary,
+    and is a real percentage from the API, not a stub.
     """
     requests.post(
         live_server + "/api/detections",
@@ -976,12 +976,13 @@ def test_track_details_shows_classification_confidence_meter(live_server, page):
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector(".track-card[data-id]")
     page.click(".track-card[data-id]")
-    page.wait_for_selector(".kv-section:has-text('Track quality')")
+    page.click(".tab-btn[data-tab='quality']")
+    page.wait_for_selector("#details-tab-content .kv:has-text('Confidence')")
 
     confidence_pct = page.evaluate("Math.round(state.tracks[0].classification_confidence * 100)")
     assert confidence_pct == 100  # single fresh detection agreeing with itself
 
-    quality_text = page.locator(".kv-section:has-text('Track quality')").inner_text()
+    quality_text = page.locator("#details-tab-content").inner_text()
     assert "Confidence" in quality_text
     assert f"{confidence_pct}%" in quality_text
 

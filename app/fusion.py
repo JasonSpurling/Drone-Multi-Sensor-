@@ -15,9 +15,15 @@ from datetime import datetime
 
 from app.allowlist import is_authorized_detection
 from app.classification import classify
-from app.config import CLASSIFICATION_CONFIDENCE_DECAY_SECONDS, CLASSIFICATION_CONFIDENCE_FLOOR
+from app.config import (
+    CLASSIFICATION_CONFIDENCE_DECAY_SECONDS,
+    CLASSIFICATION_CONFIDENCE_FLOOR,
+    FUSION_HISTORY_LIMIT,
+    INCIDENT_CORROBORATION_MIN_SENSOR_TYPES,
+)
+from app.db import list_recent_detections
 from app.ml.model import predict as ml_predict
-from app.models import Classification, Detection, SensorType
+from app.models import Classification, Detection, SensorType, Track
 from app.rf_signatures import match_rf_signature
 
 # Relative trust per sensor type when weighting its vote against others'.
@@ -136,3 +142,29 @@ def decay_classification_confidence(raw_confidence: float | None, last_seen: dat
     age_s = max(0.0, (now - last_seen).total_seconds())
     decay_fraction = min(1.0, age_s / CLASSIFICATION_CONFIDENCE_DECAY_SECONDS)
     return raw_confidence + (CLASSIFICATION_CONFIDENCE_FLOOR - raw_confidence) * decay_fraction
+
+
+def corroborating_sensor_type_count(track: Track) -> int:
+    """Distinct sensor types among the same recent-detection window this
+    module's own classification fusion considers (FUSION_HISTORY_LIMIT)
+    -- multiple sensor *types* independently reporting on this track, not
+    just multiple detections from the same one repeating itself. Shared
+    by app.incidents (severity escalation) and GET /api/tracks (the
+    dashboard's Verified/Unverified grouping) so both mean the same thing
+    by "corroborated" rather than keeping two copies of this query that
+    could quietly drift apart.
+    """
+    if track.id is None or track.site_id is None:
+        return 0
+    history = list_recent_detections(track.id, track.site_id, FUSION_HISTORY_LIMIT)
+    return len({d.sensor_type for d in history})
+
+
+def is_verified(track: Track) -> bool:
+    """A track is "Verified" once INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
+    (default 2) distinct sensor types have independently reported on it
+    -- the same corroboration threshold app.incidents already uses to
+    escalate severity, not a second, differently-tuned definition of
+    "verified" invented just for the dashboard's grouping.
+    """
+    return corroborating_sensor_type_count(track) >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES

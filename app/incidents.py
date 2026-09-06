@@ -14,7 +14,6 @@ from app.config import (
     FORMATION_HEADING_TOLERANCE_DEG,
     FORMATION_MAX_SPACING_M,
     FORMATION_SPEED_TOLERANCE_MPS,
-    FUSION_HISTORY_LIMIT,
     INCIDENT_CORROBORATION_MIN_SENSOR_TYPES,
     LOITERING_MIN_DURATION_S,
     LOITERING_RADIUS_M,
@@ -30,6 +29,7 @@ from app.db import (
     list_recent_detections,
     update_incident,
 )
+from app.fusion import corroborating_sensor_type_count
 from app.geo import local_m_to_latlon
 from app.live import publish as publish_live_event
 from app.metrics import incidents_opened_total
@@ -82,19 +82,6 @@ _SEVERITY_ESCALATION = {
 }
 
 
-def _corroborating_sensor_type_count(track: Track) -> int:
-    """Distinct sensor types among the same recent-detection window
-    app.fusion's classification fusion itself considers
-    (FUSION_HISTORY_LIMIT) -- multiple sensor *types* independently
-    reporting on this track, not just multiple detections from the same
-    one repeating itself.
-    """
-    if track.id is None or track.site_id is None:
-        return 0
-    history = list_recent_detections(track.id, track.site_id, FUSION_HISTORY_LIMIT)
-    return len({d.sensor_type for d in history})
-
-
 def _severity_with_corroboration(
     track: Track, base_severity: IncidentSeverity
 ) -> tuple[IncidentSeverity, int]:
@@ -108,8 +95,12 @@ def _severity_with_corroboration(
     apart, since it was keyed only on the resulting label. Returns the
     (possibly escalated) severity alongside the sensor-type count that
     was actually checked, so a caller that escalates can say why.
+
+    corroborating_sensor_type_count itself lives in app/fusion.py, shared
+    with GET /api/tracks (the dashboard's Verified/Unverified grouping) --
+    not a second, differently-tuned copy of the same query kept here.
     """
-    sensor_type_count = _corroborating_sensor_type_count(track)
+    sensor_type_count = corroborating_sensor_type_count(track)
     if sensor_type_count >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES:
         return _SEVERITY_ESCALATION[base_severity], sensor_type_count
     return base_severity, sensor_type_count
