@@ -441,6 +441,42 @@ as a "Risk: highest first" option in the Sort control (see "Track list:
 alert indicator and sort" above -- same within-group-only reordering
 rule applies).
 
+### Risk explanation, confidence tier, zone status, and track timeline
+
+The details panel's subtitle row shows three read-time-only badges, all
+plain relabelings of fields the app already computes elsewhere -- none of
+them a new score or a fabricated signal:
+
+- **Confidence tier** ("Low"/"Moderate"/"High") is just
+  `Track.corroborating_sensor_types` relabeled: 1 sensor type = Low, 2 =
+  Moderate, 3+ = High. It is not a new confidence metric.
+- **Zone status** ("Inside protected zone"/"Approaching a protected
+  zone"/nothing) reuses the exact same restricted-zone containment
+  (`app.zones.zones_containing_point`) and proximity threshold
+  (`app.risk.is_approaching_zone`, the same tiers the risk score's
+  proximity term already uses) so the badge and the score can never
+  disagree about what "approaching" means.
+- **Risk N/10** is `Track.risk_score` itself, with a tooltip and a
+  dedicated panel on the Quality tab (`.risk-explain`) listing
+  `Track.risk_factors` -- the plain-English, per-point breakdown
+  `app.risk.assess_risk()` computes alongside the score (e.g. "Classified
+  as drone (+4)", "Verified by 2+ independent sensor types (+2)"). The
+  score and its stated reasons come from one function, so they can't drift
+  apart.
+
+The details panel's new **Timeline** tab (`renderTimelineTabContent`)
+lists this track's own real, chronological events -- when it was first
+detected, and when any of its own zone-incursion incidents opened or
+closed -- built entirely from data every viewer role already has access
+to. For an admin viewer only, it also best-effort-appends classification
+changes (Friend/Foe/Neutral calls) sourced from `GET /api/audit-log`
+(admin-only, deployment-wide, with no per-track filter, so this is fetched
+client-side and filtered to this track); it fails silently for any other
+role rather than weakening that endpoint's existing access control. This
+is deliberately not a fabricated camera-tracking event log ("target
+acquired," "camera assigned") -- every entry traces back to a record this
+app actually keeps.
+
 ### Connection status
 
 The topbar's small dot next to the app name (`#conn-status-dot`,
@@ -1119,6 +1155,14 @@ produces a decodable frame within 10s). Not a stored-image history --
 there's no capture pipeline or table behind it -- just "what does this
 camera see right now," as a still. Surfaced as a "Take snapshot" button
 under the dashboard's Image tab.
+
+The Live tab's `#camera-state-label` reports only what this app can
+actually observe about the feed itself: "Camera available -- connecting..."
+while the MJPEG `<img>` is loading, "Live" once it has actually loaded a
+frame, or "Camera unreachable" if it fails to load. This is deliberately
+**not** a closed-loop auto-tracking state machine (no
+Assigned/Slewing/Searching/Acquired/Following/Locked states) -- this app
+has no visual object tracking behind the camera, so it never claims one.
 
 ## Downstream C2 integration
 

@@ -17,12 +17,20 @@ from app.db import (
 from app.export import to_csv, to_gpx, to_kml
 from app.fusion import contributing_sensor_types, decay_classification_confidence
 from app.live import publish as publish_live_event
-from app.models import Classification, Detection, Track, TrackClassificationInput, TrackIgnoreInput, TrackStatus
-from app.risk import compute_risk_score
+from app.models import (
+    Classification,
+    Detection,
+    Track,
+    TrackClassificationInput,
+    TrackIgnoreInput,
+    TrackStatus,
+    ZoneType,
+)
+from app.risk import assess_risk, is_approaching_zone
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
-from app.zones import nearest_restricted_zone_distance_m
+from app.zones import nearest_restricted_zone_distance_m, zones_containing_point
 
 router = APIRouter()
 
@@ -51,12 +59,14 @@ def _with_decayed_confidence(track: Track) -> Track:
 def _with_computed_fields(track: Track) -> Track:
     """_with_decayed_confidence plus the read-time-only fields
     (corroborating_sensor_types, verified, contributing_sensor_types,
-    risk_score) GET /api/tracks and GET /api/tracks/{id} both need for the
-    dashboard's Verified/Unverified grouping and risk-sorted priority
-    queue -- two extra queries per track (list_recent_detections via
-    contributing_sensor_types, list_open_incidents_for_track for risk),
-    the same cost app.incidents already pays once per opened incident,
-    just now also paid per read here.
+    risk_score, risk_factors, zone_status) GET /api/tracks and GET
+    /api/tracks/{id} both need for the dashboard's Verified/Unverified
+    grouping, risk-sorted priority queue, and zone-status badge -- a
+    couple of extra queries per track (list_recent_detections via
+    contributing_sensor_types, list_open_incidents_for_track and
+    zones_containing_point for risk/zone status), the same cost
+    app.incidents already pays once per opened incident, just now also
+    paid per read here.
     """
     track = _with_decayed_confidence(track)
     types = contributing_sensor_types(track)
@@ -65,12 +75,19 @@ def _with_computed_fields(track: Track) -> Track:
     track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
     if track.id is not None and track.site_id is not None:
         open_incidents = list_open_incidents_for_track(track.id, track.site_id)
-        zone_distance = (
-            nearest_restricted_zone_distance_m(track.latitude, track.longitude, track.site_id)
-            if track.latitude is not None and track.longitude is not None
-            else None
-        )
-        track.risk_score = compute_risk_score(track, open_incidents, zone_distance)
+        zone_distance = None
+        if track.latitude is not None and track.longitude is not None:
+            zone_distance = nearest_restricted_zone_distance_m(track.latitude, track.longitude, track.site_id)
+            inside_restricted = any(
+                z.zone_type == ZoneType.RESTRICTED
+                for z in zones_containing_point(track.latitude, track.longitude, track.site_id, track.altitude_m)
+            )
+            track.zone_status = (
+                "inside" if inside_restricted else ("approaching" if is_approaching_zone(zone_distance) else "none")
+            )
+        assessment = assess_risk(track, open_incidents, zone_distance)
+        track.risk_score = assessment.score
+        track.risk_factors = assessment.factors
     return track
 
 

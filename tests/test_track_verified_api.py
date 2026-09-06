@@ -120,3 +120,28 @@ def test_classify_response_also_reports_verified(isolated_db):
         classified = client.post(f"/api/tracks/{track_id}/classify", json={"classification": "friendly"})
         assert classified.json()["verified"] is False
         assert classified.json()["corroborating_sensor_types"] == 1
+
+
+def test_risk_factors_lists_the_real_reasons_behind_the_score(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=_detection("radar-1", "radar"))
+        track_id = r.json()["track_id"]
+        track = client.get(f"/api/tracks/{track_id}").json()
+        assert track["risk_score"] > 0
+        assert any("drone" in f.lower() for f in track["risk_factors"])
+
+
+def test_zone_status_is_inside_within_the_seeded_restricted_zone(isolated_db):
+    with TestClient(app) as client:
+        # app/zones.seed.json's "Central London Restricted Zone" -- see
+        # test_track_ignore_api.py's identical coordinate reasoning.
+        r = client.post("/api/detections", json=_detection("radar-1", "radar", latitude=51.5, longitude=-0.1))
+        track_id = r.json()["track_id"]
+        assert client.get(f"/api/tracks/{track_id}").json()["zone_status"] == "inside"
+
+
+def test_zone_status_is_none_far_from_any_zone(isolated_db):
+    with TestClient(app) as client:
+        r = client.post("/api/detections", json=_detection("radar-1", "radar", latitude=10.0, longitude=10.0))
+        track_id = r.json()["track_id"]
+        assert client.get(f"/api/tracks/{track_id}").json()["zone_status"] == "none"

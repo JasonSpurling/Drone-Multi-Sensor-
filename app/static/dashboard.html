@@ -554,6 +554,14 @@
     color: var(--active); margin-bottom: 2px; display: block;
   }
   .detail-title-row { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+  .detail-subtitle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -4px 0 10px 0; }
+  .risk-inline { font-size: 11px; font-weight: 600; color: var(--muted); cursor: help; }
+  .risk-explain { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .risk-factor-list { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .timeline-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .timeline-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .timeline-list li:last-child { border-bottom: none; }
+  .timeline-time { color: var(--muted); font-size: 10px; margin-right: 6px; }
   .detail-actions { display: flex; gap: 6px; padding: 0 14px 8px 14px; }
   .detail-actions button { flex: 1; }
   .detail-actions.secondary { padding-top: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
@@ -906,6 +914,13 @@ const state = {
   // excluded from a given verified/unverified bucket, nothing excluded by
   // default, see #map-verify-filter's doc comment near its CSS.
   mapClassExcluded: { verified: new Set(), unverified: new Set() },
+  // Set by loadWhoami() once GET /api/me resolves -- null until then (or
+  // forever, best-effort, if that call fails). Only ever gates whether
+  // the Timeline tab *attempts* the admin-only GET /api/audit-log for
+  // classification-change entries; every other role still sees the rest
+  // of the timeline (detection/zone/incident events), which needs no
+  // special access.
+  myRole: null,
   // null == showing each track's live position; otherwise an index into
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
@@ -1066,6 +1081,7 @@ async function loadWhoami() {
   const logoutEl = document.getElementById("sso-logout-link");
   try {
     const me = await fetchJSON("/api/me");
+    state.myRole = me.role;
     whoamiEl.textContent = `${me.name} (${me.role})`;
     whoamiEl.style.display = "inline";
     // A "Log out" link only makes sense for an SSO session -- a static
@@ -1163,6 +1179,22 @@ function badge(text, color) {
 function badgeOutline(text, color) {
   return `<span class="badge-outline" style="color:${color}">${escapeHtml(text)}</span>`;
 }
+
+// A plain corroboration-count tier, not a confidence score of its own --
+// track.corroborating_sensor_types is the real number this reads off of
+// (the same one Verified/Unverified already uses); this only relabels it
+// the way an operator thinks about it ("how many independent sources
+// agree") rather than asking them to interpret a raw integer.
+function confidenceTier(sourceCount) {
+  if (sourceCount == null) return null;
+  if (sourceCount >= 3) return { label: "High confidence", color: "var(--active)" };
+  if (sourceCount === 2) return { label: "Moderate confidence", color: "var(--stale)" };
+  if (sourceCount === 1) return { label: "Low confidence", color: "var(--muted)" };
+  return null;
+}
+
+const ZONE_STATUS_LABEL = { inside: "Inside protected zone", approaching: "Approaching protected zone" };
+const ZONE_STATUS_COLOR = { inside: "var(--high)", approaching: "var(--stale)" };
 
 function headingArrow(headingDeg) {
   if (headingDeg == null) return "";
@@ -1285,7 +1317,18 @@ function ensureLiveViewElements() {
   liveViewImg.addEventListener("error", () => {
     liveViewFallback.style.display = "block";
     liveViewImg.style.display = "none";
+    setCameraStateLabel("Camera unreachable", "var(--high)");
   });
+  liveViewImg.addEventListener("load", () => setCameraStateLabel("Live", "var(--active)"));
+}
+
+// Only three honest states -- never "searching"/"acquired"/"following"/
+// "locked", which would imply closed-loop visual tracking this app
+// doesn't do. A no-op if the Live view tab isn't the one currently
+// showing (the element only exists in that tab's rendered content).
+function setCameraStateLabel(text, color) {
+  const el = document.getElementById("camera-state-label");
+  if (el) { el.textContent = text; el.style.color = color; }
 }
 
 // Same persistent-element/appendChild pattern as liveViewImg above, and
@@ -1346,6 +1389,13 @@ function attachLiveView(nearestCamera) {
   }
   slot.appendChild(liveViewImg);
   slot.appendChild(liveViewFallback);
+  // renderDetails() rebuilds the whole tab's HTML (including the state
+  // label's default "connecting…" text) on every refresh, even when the
+  // persistent <img> itself is already showing a live, unchanged stream
+  // -- restore the label to what's actually true right now rather than
+  // implying every poll re-connects from scratch.
+  if (liveViewFallback.style.display === "block") setCameraStateLabel("Camera unreachable", "var(--high)");
+  else if (liveViewImg.complete) setCameraStateLabel("Live", "var(--active)");
   const distanceEl = document.getElementById("live-view-distance");
   if (distanceEl) distanceEl.textContent = `${nearestCamera.sensorId} · ${Math.round(nearestCamera.distanceM)} m away`;
   attachInsetView(secondNearestCameraSensor(state.tracks.find((t) => t.id === state.selectedTrackId), nearestCamera.sensorId));
@@ -2121,6 +2171,7 @@ const DETAILS_TABS = [
   { key: "signal", label: "Signal" },
   { key: "radar", label: "Radar" },
   { key: "image", label: "Image" },
+  { key: "timeline", label: "Timeline" },
 ];
 
 function renderLiveTabContent({ nearestCamera }) {
@@ -2129,6 +2180,7 @@ function renderLiveTabContent({ nearestCamera }) {
   }
   return `
     <div id="live-view-slot"></div>
+    <div class="k" id="camera-state-label" style="margin-top:4px; font-size:11px; font-weight:600;">Camera available — connecting…</div>
     <div class="k" id="live-view-distance" style="margin-top:6px;"></div>
     <div class="kv" id="ptz-cue-row" style="margin-top:6px; display:none;">
       <div class="k" title="The pan/tilt this camera would need to point at the track right now (GET /api/tracks/{id}/cue/{sensor_id}) -- read-only: nothing here sends a command to the camera.">PTZ cue</div>
@@ -2155,6 +2207,13 @@ function renderQualityTabContent({ track, confidencePct, confidenceColor, maneuv
     <div class="sparkline-wrap">
       ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
     </div>
+    ${track.risk_score != null ? `
+    <div class="risk-explain">
+      <div class="k" style="margin-bottom:4px;">Risk: ${track.risk_score}/10</div>
+      <ul class="risk-factor-list">
+        ${(track.risk_factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}
+      </ul>
+    </div>` : ""}
   `;
 }
 
@@ -2198,9 +2257,74 @@ function renderImageTabContent({ nearestCamera }) {
   `;
 }
 
+// A real chronological event list from data every viewer role already has
+// access to -- track creation plus this track's own incidents (opened and,
+// if applicable, closed/resolved) -- never a fabricated "camera assigned"/
+// "target acquired" style entry this app has no closed-loop capability to
+// back. Classification-change entries (from the admin-only audit log) are
+// appended afterward, asynchronously, only for an admin viewer -- see
+// fetchAndAppendTimelineAuditEntries below.
+function timelineEvents(track, related) {
+  const events = [{ at: track.first_seen, text: "Track first detected" }];
+  related.forEach((i) => {
+    const zoneLabel = i.incident_type.replace(/_/g, " ");
+    events.push({ at: i.opened_at, text: `${zoneLabel} incident opened (${i.severity})` });
+    if (i.closed_at) {
+      const closedLabel = i.description && i.description.includes("auto-closed") ? "auto-closed" : "closed";
+      events.push({ at: i.closed_at, text: `Incident ${closedLabel}` });
+    }
+  });
+  return events.sort((a, b) => (a.at < b.at ? -1 : 1));
+}
+
+function renderTimelineTabContent({ track, related }) {
+  const events = timelineEvents(track, related);
+  const rows = events
+    .map((e) => `<li data-at="${escapeHtml(e.at)}"><span class="timeline-time">${fmtTime(e.at)}</span> ${escapeHtml(e.text)}</li>`)
+    .join("");
+  const adminNote = state.myRole === "admin"
+    ? `<li id="timeline-audit-loading" class="tab-empty" style="padding:4px 0;">Loading operator actions…</li>`
+    : "";
+  return `<ul class="timeline-list" id="timeline-list">${rows}${adminNote}</ul>`;
+}
+
+// Classification/ignore changes come from the admin-only audit log (GET
+// /api/audit-log has no per-track filter, so this fetches a recent window
+// and filters client-side) -- appended once loaded rather than blocking
+// the synchronous tab render above, and never attempted at all for a
+// non-admin viewer (who'd just get a 403). A best-effort addition: the
+// rest of the timeline (detection/incident events) is already complete
+// and correct without it.
+async function fetchAndAppendTimelineAuditEntries(trackId) {
+  if (state.myRole !== "admin") return;
+  try {
+    const entries = await fetchJSON("/api/audit-log?limit=200");
+    const mine = entries.filter((e) => e.target === String(trackId) && e.action.startsWith("track."));
+    const list = document.getElementById("timeline-list");
+    const loading = document.getElementById("timeline-audit-loading");
+    if (!list) return; // the operator switched tabs/tracks before this resolved
+    if (loading) loading.remove();
+    const existing = Array.from(list.querySelectorAll("li[data-at]")).map((li) => ({
+      at: li.dataset.at, html: li.outerHTML,
+    }));
+    const auditRows = mine.map((e) => ({
+      at: e.occurred_at,
+      html: `<li data-at="${escapeHtml(e.occurred_at)}"><span class="timeline-time">${fmtTime(e.occurred_at)}</span> `
+        + `${escapeHtml(e.action.replace("track.", ""))}${e.detail ? " (" + escapeHtml(e.detail) + ")" : ""} `
+        + `by ${escapeHtml(e.actor)}</li>`,
+    }));
+    const merged = [...existing, ...auditRows].sort((a, b) => (a.at < b.at ? -1 : 1));
+    list.innerHTML = merged.map((r) => r.html).join("");
+  } catch (e) {
+    const loading = document.getElementById("timeline-audit-loading");
+    if (loading) loading.remove(); // fine as-is without this -- not worth an error toast
+    console.error(e);
+  }
+}
+
 const DETAILS_TAB_RENDERERS = {
   live: renderLiveTabContent, quality: renderQualityTabContent, signal: renderSignalTabContent,
-  radar: renderRadarTabContent, image: renderImageTabContent,
+  radar: renderRadarTabContent, image: renderImageTabContent, timeline: renderTimelineTabContent,
 };
 
 function renderDetailsTabContent(tabKey, ctx) {
@@ -2278,6 +2402,18 @@ function renderDetails() {
         ${badge(track.classification, CLASS_COLOR[track.classification])}
         <span>Track ${track.id}</span>
       </div>
+      <div class="detail-subtitle-row">
+        ${(() => {
+          const tier = confidenceTier(track.corroborating_sensor_types);
+          return tier ? badgeOutline(tier.label, tier.color) : "";
+        })()}
+        ${track.zone_status && ZONE_STATUS_LABEL[track.zone_status]
+          ? badgeOutline(ZONE_STATUS_LABEL[track.zone_status], ZONE_STATUS_COLOR[track.zone_status])
+          : ""}
+        ${track.risk_score != null
+          ? `<span class="risk-inline" title="${escapeHtml((track.risk_factors || []).join("\n"))}">Risk ${track.risk_score}/10</span>`
+          : ""}
+      </div>
     </div>
 
     <div class="detail-actions">
@@ -2347,7 +2483,7 @@ function renderDetails() {
         ${DETAILS_TABS.map((t) => `<button class="tab-btn ${state.detailsTab === t.key ? "active" : ""}" data-tab="${t.key}" role="tab" aria-selected="${state.detailsTab === t.key}">${t.label}</button>`).join("")}
       </div>
       <div id="details-tab-content">
-        ${renderDetailsTabContent(state.detailsTab, { track, nearestCamera, nearestSensor, signalDetection, confidencePct, confidenceColor, maneuverPct, meterColor })}
+        ${renderDetailsTabContent(state.detailsTab, { track, nearestCamera, nearestSensor, signalDetection, confidencePct, confidenceColor, maneuverPct, meterColor, related })}
       </div>
     </div>
 
@@ -2376,6 +2512,7 @@ function renderDetails() {
   } else {
     stopLiveView();
   }
+  if (state.detailsTab === "timeline") fetchAndAppendTimelineAuditEntries(track.id);
   el.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.detailsTab = btn.dataset.tab;

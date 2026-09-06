@@ -8,6 +8,8 @@ fields, never a black box.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.models import Classification, Incident, IncidentSeverity, Track
 
 # How urgent each classification is on its own, before any corroboration
@@ -60,26 +62,82 @@ def _zone_proximity_risk(distance_m: float | None) -> int:
     return 0
 
 
-def compute_risk_score(
+def is_approaching_zone(distance_m: float | None) -> bool:
+    """True within the same proximity range _zone_proximity_risk rewards
+    -- the single shared definition of "close enough to a protected zone
+    to be worth calling out," used for Track.zone_status's 'approaching'
+    value as well as the risk score itself, so the two never disagree.
+    """
+    return _zone_proximity_risk(distance_m) > 0
+
+
+@dataclass(frozen=True)
+class RiskAssessment:
+    score: int
+    # Plain-English reasons, one per factor that actually contributed
+    # (never a zero-point factor) -- the "why is this ranked here" a risk-
+    # explanation panel needs, computed alongside the score itself rather
+    # than a second function that could quietly drift out of sync with it.
+    factors: list[str]
+
+
+def assess_risk(
     track: Track, open_incidents: list[Incident], nearest_restricted_zone_distance_m: float | None = None
-) -> int:
-    """0-10 point score, higher = more urgent for an operator to look at.
+) -> RiskAssessment:
+    """The single source of truth for both Track.risk_score and
+    Track.risk_factors -- see compute_risk_score below for the score-only
+    convenience wrapper most callers actually want.
 
     An operator's Ignore action (Track.ignored) always scores 0 -- they've
     deliberately said this track shouldn't compete for attention, so the
     score reflects that outright rather than just quietly ranking lower.
     """
     if track.ignored:
-        return 0
-    score = CLASSIFICATION_RISK.get(track.classification, 0)
+        return RiskAssessment(score=0, factors=["Ignored by an operator"])
+
+    factors: list[str] = []
+    score = 0
+
+    classification_points = CLASSIFICATION_RISK.get(track.classification, 0)
+    if classification_points:
+        factors.append(f"Classified as {track.classification.value} (+{classification_points})")
+        score += classification_points
+
     if track.verified:
+        source_count = track.corroborating_sensor_types or 2
+        factors.append(f"Verified by {source_count}+ independent sensor types (+{VERIFIED_BONUS})")
         score += VERIFIED_BONUS
+
     if open_incidents:
-        score += max(INCIDENT_SEVERITY_RISK.get(i.severity, 0) for i in open_incidents)
-    score += _zone_proximity_risk(nearest_restricted_zone_distance_m)
-    # Capped at the advertised 0-10 range (see Track.risk_score's
-    # docstring) -- classification + verified + incident + proximity can
-    # otherwise sum past it for a track that's every kind of urgent at
-    # once; the cap only ever compresses an already-maximal case, never
-    # changes the ranking between two tracks below it.
-    return min(score, 10)
+        worst = max(open_incidents, key=lambda i: INCIDENT_SEVERITY_RISK.get(i.severity, 0))
+        incident_points = INCIDENT_SEVERITY_RISK.get(worst.severity, 0)
+        if incident_points:
+            incident_label = worst.incident_type.value.replace("_", " ")
+            factors.append(f"Open {worst.severity.value}-severity {incident_label} incident (+{incident_points})")
+            score += incident_points
+
+    proximity_points = _zone_proximity_risk(nearest_restricted_zone_distance_m)
+    if proximity_points and nearest_restricted_zone_distance_m is not None:
+        distance = round(nearest_restricted_zone_distance_m)
+        factors.append(f"Within {distance}m of a protected zone (+{proximity_points})")
+        score += proximity_points
+
+    if not factors:
+        factors.append("No risk factors currently present")
+
+    # Capped at the advertised 0-10 range -- classification + verified +
+    # incident + proximity can otherwise sum past it for a track that's
+    # every kind of urgent at once; the cap only ever compresses an
+    # already-maximal case, never changes the ranking between two tracks
+    # below it, and never removes a factor from the explanation above.
+    return RiskAssessment(score=min(score, 10), factors=factors)
+
+
+def compute_risk_score(
+    track: Track, open_incidents: list[Incident], nearest_restricted_zone_distance_m: float | None = None
+) -> int:
+    """0-10 point score, higher = more urgent for an operator to look at.
+    See assess_risk above for the same score plus a factor-by-factor
+    explanation.
+    """
+    return assess_risk(track, open_incidents, nearest_restricted_zone_distance_m).score

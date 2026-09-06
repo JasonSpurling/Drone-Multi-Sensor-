@@ -14,7 +14,7 @@ from app.models import (
     Track,
     TrackStatus,
 )
-from app.risk import compute_risk_score
+from app.risk import assess_risk, compute_risk_score
 
 TRACK_DEFAULTS = {
     "track_uid": "t-1",
@@ -100,3 +100,30 @@ def test_score_is_capped_at_ten_even_when_every_factor_maxes_out():
         track, [make_incident(IncidentSeverity.CRITICAL)], nearest_restricted_zone_distance_m=10.0
     )
     assert score == 10  # 4 + 2 + 4 + 2 = 12, capped
+
+
+def test_assess_risk_lists_one_factor_per_nonzero_contribution():
+    track = make_track(classification=Classification.DRONE, verified=True)
+    result = assess_risk(
+        track, [make_incident(IncidentSeverity.HIGH)], nearest_restricted_zone_distance_m=50.0
+    )
+    assert result.score == 10  # 4 + 2 + 3 + 2 = 11, capped
+    assert len(result.factors) == 4
+    assert any("drone" in f.lower() for f in result.factors)
+    assert any("verified" in f.lower() for f in result.factors)
+    assert any("high" in f.lower() and "incident" in f.lower() for f in result.factors)
+    assert any("50m" in f for f in result.factors)
+
+
+def test_assess_risk_zero_score_names_no_factors_present():
+    track = make_track(classification=Classification.FRIENDLY)
+    result = assess_risk(track, [])
+    assert result.score == 0
+    assert result.factors == ["No risk factors currently present"]
+
+
+def test_assess_risk_ignored_track_names_that_as_the_only_factor():
+    track = make_track(classification=Classification.DRONE, verified=True, ignored=True)
+    result = assess_risk(track, [make_incident(IncidentSeverity.CRITICAL)])
+    assert result.score == 0
+    assert result.factors == ["Ignored by an operator"]

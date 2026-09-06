@@ -1322,4 +1322,85 @@ def test_notification_bell_shows_a_real_new_alert_and_clears_on_open(live_server
     # Clicking elsewhere closes the panel.
     page.click("#app-shell")
     page.wait_for_timeout(100)
+
+
+def test_details_subtitle_shows_confidence_tier_zone_status_and_risk_explanation(live_server, page):
+    """The details panel subtitle row's confidence-tier badge and zone-status
+    badge, plus the Quality tab's risk-explanation panel, are all relabelings
+    of real, already-computed fields (corroborating_sensor_types, zone_status,
+    risk_score/risk_factors) -- not a new fabricated score. A 2-sensor-type
+    track sitting inside the seeded restricted zone should show "Moderate
+    confidence", "Inside protected zone", and a risk breakdown that actually
+    accounts for the total.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    tracks = requests.get(live_server + "/api/tracks", timeout=5).json()
+    track_id = tracks[0]["id"]
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "cam-1", "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "confidence": 0.9, "track_id": track_id,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".verify-tab-btn[data-verify='verified']")  # 2 sensor types here, not the default Unverified tab
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".detail-subtitle-row")
+
+    subtitle = page.locator(".detail-subtitle-row").inner_text()
+    assert "Moderate confidence" in subtitle
+    assert "Inside protected zone" in subtitle
+    assert "Risk" in subtitle
+
+    page.click(".tab-btn[data-tab='quality']")
+    page.wait_for_selector(".risk-explain")
+    risk_text = page.locator(".risk-explain").inner_text()
+    assert "Classified as drone" in risk_text
+    assert "Verified by" in risk_text
+    assert "protected zone" in risk_text
+
+
+def test_details_timeline_tab_shows_real_detection_and_incident_events(live_server, page):
+    """The Timeline tab is built entirely from data the track/incident
+    endpoints already expose -- first-seen and this track's own zone
+    incidents opening/closing -- never a fabricated "camera assigned" or
+    "target acquired" event a closed-loop auto-tracking system would need.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.click(".tab-btn[data-tab='timeline']")
+    page.wait_for_selector(".timeline-list")
+    page.wait_for_timeout(300)
+
+    timeline_text = page.locator(".timeline-list").inner_text()
+    assert "Track first detected" in timeline_text
+    assert "zone incursion incident opened" in timeline_text
+
+
+def test_live_tab_shows_an_honest_camera_state_label_not_a_fake_tracking_state(live_server, page):
+    """The Live view's camera-state label only ever claims one of three real
+    states this app can actually observe (connecting, Live once the stream
+    image loads, or Camera unreachable on a load error) -- never the fake
+    Available/Slewing/Searching/Acquired/Following/Locked auto-tracking
+    machine a real closed-loop PTZ system would need.
+    """
+    requests.put(live_server + "/api/sensor-registrations/cam-1", json={
+        "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "camera_stream_url": "rtsp://cam1/x",
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#camera-state-label")
+    page.wait_for_timeout(500)
+
+    label_text = page.locator("#camera-state-label").inner_text()
+    assert label_text in ("Camera available — connecting…", "Live", "Camera unreachable")
     assert page.locator("#notif-panel").is_hidden()

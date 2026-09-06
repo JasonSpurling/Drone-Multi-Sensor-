@@ -233,6 +233,20 @@ class Track(BaseModel):
         "trained model to actually back. Read-time-only, same as corroborating_sensor_types/verified "
         "above; 0 for an ignored track regardless of the rest.",
     )
+    risk_factors: list[str] | None = Field(
+        default=None,
+        description="app.risk.assess_risk's plain-English reasons behind risk_score, one per factor "
+        "that actually contributed (never a zero-point one) -- e.g. ['Classified as drone (+4)', "
+        "'Within 80m of a protected zone (+1)']. Powers the dashboard's risk-explanation display; "
+        "read-time-only, same as risk_score.",
+    )
+    zone_status: str | None = Field(
+        default=None,
+        description="This track's relationship to the nearest active restricted zone right now: "
+        "'inside' (a real point-in-polygon containment, app.zones.zones_containing_point), "
+        "'approaching' (outside, but within the same proximity range app.risk's zone-proximity bonus "
+        "uses), or 'none'. Read-time-only, same as risk_score.",
+    )
     ignored: bool = Field(
         default=False,
         description="An operator's deliberate 'stop alerting on this' suppression -- unlike "
