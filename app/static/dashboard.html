@@ -2216,6 +2216,11 @@ function renderAlertBanner() {
   const plural = unacknowledged.length === 1 ? "" : "s";
   banner.textContent = `⚠ ${unacknowledged.length} UNACKNOWLEDGED ALERT${plural} — `
     + `${worst.severity.toUpperCase()}: ${worst.description || worst.incident_type}`;
+  // The click handler below reads this to jump straight to the actual
+  // track behind the worst unacknowledged alert, not just the Alerts
+  // list -- "—" (never a real id) when this incident has no associated
+  // track to select.
+  banner.dataset.worstTrackId = worst.track_id != null ? String(worst.track_id) : "";
   banner.classList.add("show");
   document.body.classList.add("has-alert-banner");
 }
@@ -4245,12 +4250,20 @@ async function refresh() {
     renderDetails();
     renderSensors();
     renderZones();
-    const activeCount = incidents.filter((i) => i.status !== "resolved").length;
-    const alertPart = activeCount > 0
-      ? `<span style="color:var(--high); font-weight:700;">${activeCount} active alert${activeCount === 1 ? "" : "s"}</span>`
+    const active = incidents.filter((i) => i.status !== "resolved");
+    const alertPart = active.length > 0
+      ? `<span style="color:var(--high); font-weight:700;">${active.length} active alert${active.length === 1 ? "" : "s"}</span>`
       : "0 active alerts";
+    const sensorsOnline = sensors.filter((s) => s.status === "online").length;
+    const sensorsPart = sensors.length > 0 ? ` · sensors ${sensorsOnline}/${sensors.length} online` : "";
+    const highestSeverity = active.length > 0
+      ? active.slice().sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0].severity
+      : null;
+    const highestPart = highestSeverity
+      ? ` · highest priority <span style="color:${SEVERITY_COLOR[highestSeverity]}; font-weight:700;">${highestSeverity.toUpperCase()}</span>`
+      : "";
     document.getElementById("status-line").innerHTML =
-      `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${alertPart}`;
+      `updated ${new Date().toLocaleTimeString()}${sensorsPart} · ${tracks.length} tracks · ${alertPart}${highestPart}`;
     updateConnectionChip(false);
   } catch (e) {
     if (e instanceof AuthError) {
@@ -4386,7 +4399,20 @@ function updateMapVerifyFilter(plottable) {
   renderMapVerifyRow("verified", plottable.filter((t) => t.verified));
   renderMapVerifyRow("unverified", plottable.filter((t) => !t.verified));
 }
-document.getElementById("alert-banner").addEventListener("click", () => showPanel("alerts"));
+document.getElementById("alert-banner").addEventListener("click", (e) => {
+  // The worst unacknowledged alert's own track, when it has one, is a
+  // more useful landing spot than just the Alerts list -- selecting it
+  // already centers the map and opens its details panel (selectTrack's
+  // existing behavior), which answers "what is this" faster than a list
+  // the operator would still have to click into.
+  const trackId = e.currentTarget.dataset.worstTrackId;
+  if (trackId) {
+    showPanel("tracks");
+    selectTrack(Number(trackId));
+  } else {
+    showPanel("alerts");
+  }
+});
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.
 document.addEventListener("keydown", (e) => {

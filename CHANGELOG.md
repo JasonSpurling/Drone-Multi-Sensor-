@@ -58,6 +58,7 @@ section with the version and date, bump `__version__`, and start a fresh
 - The Uncertainty map toggle now applies to every visible track (previously only the selected one), still drawn at each track's real `position_uncertainty_m` radius rather than a fabricated tier. A new Track labels control (off/compact/full, cycled by click) shows an always-visible per-track map label instead of only on hover.
 - The Sensor Health panel now shows one card per sensor instead of a table; clicking a card with a known position flies the map to it and opens its real popup.
 - "Simulate tracks" moved from the Tracks panel's empty state into a developer-only control at the bottom of the Sensor Health panel -- same capability, no longer a demo/test button sitting next to live security data. The Tracks panel's own empty state is now a smaller, more contextual message pointing at Sensor Health instead.
+- The topbar status line is now an at-a-glance operational summary (`updated HH:MM:SS · sensors X/Y online · N tracks · M active alerts · highest priority LEVEL`), not just a timestamp and track/alert count. Clicking the red topbar alert banner now selects the worst unacknowledged incident's own track (centering the map and opening its details panel) when it has one, instead of only opening the Alerts list.
 
 ## [0.2.0] - 2026-08-31
 

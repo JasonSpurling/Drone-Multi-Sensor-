@@ -490,6 +490,26 @@ is deliberately not a fabricated camera-tracking event log ("target
 acquired," "camera assigned") -- every entry traces back to a record this
 app actually keeps.
 
+### Topbar status line and alert banner
+
+`#status-line` is an at-a-glance operational summary, not just a
+timestamp: `updated HH:MM:SS · sensors X/Y online · N tracks · M active
+alerts · highest priority LEVEL` -- sensor online count from `GET
+/api/sensors`, active-alert count and highest severity from
+`state.incidents` (`status !== "resolved"`), all real fields already
+computed for other parts of the dashboard, just not previously
+summarized in one place. The `highest priority` segment only appears
+once there's at least one active alert to report on.
+
+The red topbar alert banner (shown while at least one incident is
+`open`/unacknowledged) is now also a shortcut: clicking it selects the
+worst unacknowledged incident's own track when it has one (centering the
+map and opening that track's details panel, via the same `selectTrack()`
+every other selection path uses) rather than only opening the Alerts
+list -- a faster path to "what is this" than a list the operator would
+still have to click into. An incident with no associated track still
+falls back to opening the Alerts panel.
+
 ### Connection status
 
 The topbar's small dot next to the app name (`#conn-status-dot`,

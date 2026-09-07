@@ -1151,11 +1151,14 @@ def test_a_failed_action_shows_a_visible_error_toast_not_just_console(live_serve
     assert "couldn't acknowledge" in page.locator("#error-toast").inner_text().lower()
 
 
-def test_alert_banner_shows_for_an_open_incident_and_links_to_the_alerts_panel(live_server, page):
+def test_alert_banner_shows_for_an_open_incident_and_jumps_to_its_track(live_server, page):
     """The topbar's red ALERT banner (state.incidents-driven, see
     renderAlertBanner()) reflects real open (unacknowledged) incidents --
     it should be absent with none, appear once one opens, and disappear
     again once it's acknowledged, rather than being static decoration.
+    Clicking it jumps straight to the worst unacknowledged incident's own
+    track (selecting it, centering the map, opening its details panel) --
+    a faster answer to "what is this" than only opening the Alerts list.
     """
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#tracks-list")
@@ -1168,9 +1171,12 @@ def test_alert_banner_shows_for_an_open_incident_and_links_to_the_alerts_panel(l
     assert "restricted zone" in banner_text.lower()
 
     page.click("#alert-banner")
-    page.wait_for_selector(".alert-item")
-    assert page.locator('.rail-btn[data-panel="alerts"]').get_attribute("aria-pressed") == "true"
+    page.wait_for_selector("#track-details .detail-title-row")
+    assert page.locator('.rail-btn[data-panel="tracks"]').get_attribute("aria-pressed") == "true"
+    assert page.locator(".track-card.selected").count() == 1
 
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
     page.click("button[data-ack-id]")
     page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
     # Acknowledged (not resolved) no longer needs to interrupt the whole
@@ -1552,6 +1558,26 @@ def test_details_panel_sections_follow_identity_telemetry_action_order(live_serv
     assert titles.index("identity") < titles.index("telemetry") < titles.index("action")
 
 
+def test_topbar_status_line_summarizes_sensors_tracks_alerts_and_highest_priority(live_server, page):
+    """#status-line was previously just "updated HH:MM:SS · N tracks · M
+    active alerts" -- passive, not an at-a-glance operational summary. It
+    now also reports real sensor online/total counts and the highest
+    severity among active (non-resolved) alerts, all derived from the
+    same state already backing the rest of the dashboard.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_timeout(200)
+
+    status_text = page.locator("#status-line").inner_text()
+    assert "sensors 1/1 online" in status_text
+    assert "1 tracks" in status_text
+    assert "1 active alert" in status_text
+    assert "highest priority" in status_text.lower()
+    assert "HIGH" in status_text
+
+
 def test_track_row_shows_zone_distance_altitude_heading_and_a_risk_badge(live_server, page):
     """Track rows now surface distance-to-nearest-zone, altitude, and
     heading (previously just raw lat/lon) -- real fields the details panel
@@ -1622,6 +1648,11 @@ def test_map_popup_card_shows_confidence_and_zone_status(live_server, page):
     page.wait_for_selector(".track-card[data-id]")
     page.click(".track-card[data-id]")
     page.wait_for_selector(".track-tooltip-selected")
-    tooltip_text = page.locator(".track-tooltip-selected").inner_text()
+    # .last, not the bare locator -- Leaflet can briefly leave a
+    # fading-out previous tooltip node in the DOM (a real render-timing
+    # race, not specific to this field) while renderMap() re-runs on the
+    # next poll/WebSocket push; the same pattern the pre-existing
+    # map-marker-tooltip test already uses for exactly this reason.
+    tooltip_text = page.locator(".track-tooltip-selected").last.inner_text()
     assert "Confidence" in tooltip_text
     assert "Inside protected zone" in tooltip_text
