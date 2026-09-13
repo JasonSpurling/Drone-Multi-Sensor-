@@ -52,28 +52,6 @@ jobs:
         with:
           name: visual-regression-failures
           path: tests_e2e/.visual_failures/
-      # TEMPORARY diagnostic: captures CI's own Chromium render as the
-      # baseline PNGs and base64-dumps them straight into the job log
-      # (reachable via the GitHub API even though this sandbox's own
-      # egress policy blocks the artifact-download URL's Azure Blob
-      # Storage host) -- removes any guesswork about what CI's actual
-      # environment renders. Removed once the captured baselines are
-      # reviewed and committed. One consolidated step (not several) so
-      # there's no ambiguity about whether an intermediate step ran.
-      - name: Capture CI-rendered visual baselines (diagnostic)
-        if: always()
-        run: |
-          echo "capture-step: starting"
-          UPDATE_VISUAL_BASELINES=1 python -m pytest tests_e2e/test_visual_regression.py -v || true
-          echo "capture-step: pytest done, dumping baseline PNGs"
-          for f in tests_e2e/visual_baselines/icon_rail_with_active_alert.png tests_e2e/visual_baselines/map_layer_toggles.png; do
-            echo "===BEGIN $f==="
-            base64 -w 0 "$f"
-            echo ""
-            echo "===END $f==="
-          done
-          echo "capture-step: done"
-
   load-smoke:
     runs-on: ubuntu-latest
     steps:
