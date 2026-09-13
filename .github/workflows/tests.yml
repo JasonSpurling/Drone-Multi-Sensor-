@@ -61,6 +61,7 @@ jobs:
       # reviewed and committed. One consolidated step (not several) so
       # there's no ambiguity about whether an intermediate step ran.
       - name: Capture CI-rendered visual baselines (diagnostic)
+        if: always()
         run: |
           echo "capture-step: starting"
           UPDATE_VISUAL_BASELINES=1 python -m pytest tests_e2e/test_visual_regression.py -v || true
