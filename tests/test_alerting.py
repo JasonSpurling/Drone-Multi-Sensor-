@@ -123,6 +123,27 @@ def test_sms_skips_below_critical_by_default(captured_requests, monkeypatch):
     assert captured_requests == []
 
 
+def test_sms_delivery_failure_to_one_number_does_not_block_the_rest(monkeypatch, caplog):
+    monkeypatch.setattr("app.alerting.TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setattr("app.alerting.TWILIO_AUTH_TOKEN", "authtoken")
+    monkeypatch.setattr("app.alerting.TWILIO_FROM_NUMBER", "+15550001111")
+    monkeypatch.setattr("app.alerting.SMS_TO_NUMBERS", ["+15550002222", "+15550003333"])
+    monkeypatch.setattr("app.alerting.SMS_MIN_SEVERITY", "critical")
+
+    import urllib.error
+
+    def failing_urlopen(request, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", failing_urlopen)
+
+    with caplog.at_level("WARNING"):
+        alerting.notify_sms(make_incident(IncidentSeverity.CRITICAL))  # must not raise
+
+    assert "SMS alert to +15550002222 failed" in caplog.text
+    assert "SMS alert to +15550003333 failed" in caplog.text
+
+
 def test_a_failed_channel_does_not_crash_or_block_the_others(captured_requests, monkeypatch):
     monkeypatch.setattr("app.alerting.SLACK_WEBHOOK_URL", "https://hooks.slack.example/xyz")
     monkeypatch.setattr("app.alerting.SLACK_MIN_SEVERITY", "low")
@@ -197,3 +218,83 @@ def test_meshtastic_send_failure_does_not_raise(monkeypatch):
     # Must not raise -- a dead/unreachable Meshtastic node shouldn't crash
     # incident handling, same contract as every other channel.
     alerting.notify_meshtastic(make_incident(IncidentSeverity.HIGH))
+
+
+def test_send_meshtastic_text_uses_the_real_tcp_interface(monkeypatch):
+    # The only test in this file exercising _send_meshtastic_text itself
+    # rather than monkeypatching it away -- meshtastic (requirements-
+    # meshtastic.txt, an optional extra) isn't installed in this
+    # environment, so a fake module stands in, the same sys.modules-
+    # injection pattern this repo's other optional-hardware adapter tests
+    # use (cv2, onvif, sounddevice, ...).
+    import sys
+    import types
+
+    sent = {}
+    closed = []
+
+    class _FakeTCPInterface:
+        def __init__(self, hostname, portNumber=None):
+            sent["hostname"] = hostname
+            sent["port"] = portNumber
+
+        def sendText(self, text, channelIndex=None):
+            sent["text"] = text
+            sent["channel_index"] = channelIndex
+
+        def close(self):
+            closed.append(True)
+
+    fake_tcp_interface = types.ModuleType("meshtastic.tcp_interface")
+    fake_tcp_interface.TCPInterface = _FakeTCPInterface
+    fake_meshtastic = types.ModuleType("meshtastic")
+    fake_meshtastic.tcp_interface = fake_tcp_interface
+    monkeypatch.setitem(sys.modules, "meshtastic", fake_meshtastic)
+    monkeypatch.setitem(sys.modules, "meshtastic.tcp_interface", fake_tcp_interface)
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+    monkeypatch.setattr("app.alerting.MESHTASTIC_PORT", 4403)
+    monkeypatch.setattr("app.alerting.MESHTASTIC_CHANNEL_INDEX", 2)
+
+    alerting._send_meshtastic_text("test alert")
+
+    assert sent == {"hostname": "192.168.1.50", "port": 4403, "text": "test alert", "channel_index": 2}
+    assert closed == [True]  # the interface is always closed, even on the success path
+
+
+def test_send_meshtastic_text_closes_the_interface_even_if_send_fails(monkeypatch):
+    import sys
+    import types
+
+    closed = []
+
+    class _FakeTCPInterface:
+        def __init__(self, hostname, portNumber=None):
+            pass
+
+        def sendText(self, text, channelIndex=None):
+            raise OSError("connection refused")
+
+        def close(self):
+            closed.append(True)
+
+    fake_tcp_interface = types.ModuleType("meshtastic.tcp_interface")
+    fake_tcp_interface.TCPInterface = _FakeTCPInterface
+    fake_meshtastic = types.ModuleType("meshtastic")
+    fake_meshtastic.tcp_interface = fake_tcp_interface
+    monkeypatch.setitem(sys.modules, "meshtastic", fake_meshtastic)
+    monkeypatch.setitem(sys.modules, "meshtastic.tcp_interface", fake_tcp_interface)
+    monkeypatch.setattr("app.alerting.MESHTASTIC_HOSTNAME", "192.168.1.50")
+
+    with pytest.raises(OSError, match="connection refused"):
+        alerting._send_meshtastic_text("test alert")
+
+    assert closed == [True]
+
+
+def test_post_json_merges_extra_headers_with_the_default_content_type(captured_requests):
+    alerting._post_json(
+        "https://hooks.example/webhook", {"a": 1}, headers={"Authorization": "Bearer token123"}
+    )
+    assert len(captured_requests) == 1
+    assert captured_requests[0].headers["authorization"] == "Bearer token123"
+    assert captured_requests[0].headers["content-type"] == "application/json"

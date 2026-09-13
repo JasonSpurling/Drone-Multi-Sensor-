@@ -16,7 +16,13 @@ from app.models import (
     Track,
     TrackStatus,
 )
-from app.tracking import associate_detection, expire_stale_tracks, haversine_distance_m
+from app.tracking import (
+    _find_matching_track,
+    _spawn_track,
+    associate_detection,
+    expire_stale_tracks,
+    haversine_distance_m,
+)
 
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -82,6 +88,37 @@ def test_far_detection_creates_separate_track(site_id):
     assert len(list_tracks(site_id=site_id)) == 2
 
 
+def test_detection_within_the_coarse_gate_but_outside_the_mahalanobis_gate_creates_a_separate_track(site_id):
+    # ~300m offset clears the coarse pre-filter (500m default) but, with a
+    # tight measurement uncertainty from a high-confidence detection, is
+    # still statistically far enough (squared Mahalanobis distance) to
+    # fail the IMM gate -- must fall through to spawning a new track
+    # rather than silently accepting a bad match just because it passed
+    # the coarse distance check.
+    first = associate_detection(make_detection(site_id, confidence=0.99))
+    second = associate_detection(
+        make_detection(
+            site_id, confidence=0.99, timestamp=BASE_TIME + timedelta(milliseconds=100), latitude=51.5044,
+        )
+    )
+    assert second.track_id != first.track_id
+    assert len(list_tracks(site_id=site_id)) == 2
+
+
+def test_a_track_with_no_resolved_position_is_never_matched_against(site_id):
+    # An RF/acoustic sensor's azimuth-only detection can spawn a track
+    # with no lat/lon at all (see _spawn_track) -- such a track can never
+    # be re-matched (there's no position to gate against), so a
+    # subsequent normal, positioned detection must spawn its own track
+    # rather than erroring or silently attaching to the position-less one.
+    first = associate_detection(
+        make_detection(site_id, sensor_type=SensorType.RF, latitude=None, longitude=None, azimuth_deg=90.0)
+    )
+    second = associate_detection(make_detection(site_id, timestamp=BASE_TIME + timedelta(seconds=1)))
+    assert second.track_id != first.track_id
+    assert len(list_tracks(site_id=site_id)) == 2
+
+
 def test_detection_outside_time_gate_creates_separate_track(site_id):
     first = associate_detection(make_detection(site_id))
     second = associate_detection(
@@ -89,6 +126,33 @@ def test_detection_outside_time_gate_creates_separate_track(site_id):
     )
     assert second.track_id != first.track_id
     assert len(list_tracks(site_id=site_id)) == 2
+
+
+def test_a_track_still_active_but_outside_its_own_time_gate_is_not_matched(monkeypatch, site_id):
+    # Default config has TRACK_STALE_SECONDS == TRACK_TIME_GATE_SECONDS
+    # (both 30s), so any detection late enough to fail the time gate has
+    # already had its target track expired to LOST by expire_stale_tracks
+    # -- excluded from the active-track query before the time-gate check
+    # in _find_matching_track ever runs. Widening the stale window here
+    # isolates that inner check: the track is still ACTIVE (and so still
+    # considered) but the gap is long enough to fail its own time gate.
+    monkeypatch.setattr("app.tracking.TRACK_TIME_GATE_SECONDS", 10.0)
+    monkeypatch.setattr("app.tracking.TRACK_STALE_SECONDS", 120.0)
+
+    first = associate_detection(make_detection(site_id))
+    second = associate_detection(make_detection(site_id, timestamp=BASE_TIME + timedelta(seconds=50)))
+
+    assert second.track_id != first.track_id
+    tracks = list_tracks(site_id=site_id)
+    assert len(tracks) == 2
+    assert all(t.status == TrackStatus.ACTIVE for t in tracks)  # neither was expired
+
+
+def test_associate_detection_requires_a_site_id(site_id):
+    detection = make_detection(site_id)
+    detection.site_id = None
+    with pytest.raises(ValueError, match=r"requires detection\.site_id"):
+        associate_detection(detection)
 
 
 def test_track_upgrades_from_unknown_to_drone(site_id):
@@ -367,3 +431,40 @@ def test_aircraft_category_is_not_cleared_by_a_later_detection_without_one(site_
     )
     track = list_tracks(site_id=site_id)[0]
     assert track.aircraft_category == "A7"
+
+
+def test_find_matching_track_returns_none_without_a_resolved_position():
+    detection = make_detection(1, latitude=None, longitude=None)
+    assert _find_matching_track(detection, measurement_variance=100.0) is None
+
+
+def test_find_matching_track_returns_none_without_a_site_id():
+    detection = make_detection(1)
+    detection.site_id = None
+    assert _find_matching_track(detection, measurement_variance=100.0) is None
+
+
+def test_find_matching_track_skips_a_track_with_no_kalman_state(site_id):
+    # A track can exist (ACTIVE, positioned) with no Kalman state row only
+    # in a hand-crafted/direct-DB scenario -- every real path that gives a
+    # track a position also saves a filter for it in the same step (see
+    # _spawn_track). Still must be handled defensively rather than
+    # crashing on get_kalman_state's None result.
+    from app.db import create_track
+
+    create_track(
+        Track(
+            site_id=site_id, track_uid="no-filter", first_seen=BASE_TIME, last_seen=BASE_TIME,
+            status=TrackStatus.ACTIVE, classification=Classification.UNKNOWN,
+            latitude=51.5, longitude=-0.1,
+        )
+    )
+    detection = make_detection(site_id, timestamp=BASE_TIME + timedelta(seconds=1))
+    assert _find_matching_track(detection, measurement_variance=100.0) is None
+
+
+def test_spawn_track_requires_a_site_id():
+    detection = make_detection(1)
+    detection.site_id = None
+    with pytest.raises(ValueError, match=r"requires detection\.site_id"):
+        _spawn_track(detection, measurement_variance=100.0)

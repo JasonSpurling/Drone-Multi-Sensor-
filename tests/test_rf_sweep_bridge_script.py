@@ -157,6 +157,22 @@ def test_watch_skips_malformed_lines_without_crashing(monkeypatch):
     assert len(posted) == 1
 
 
+def test_watch_handles_empty_stdin_without_crashing(monkeypatch):
+    # Nothing at all on stdin -- the final "flush whatever's left" call at
+    # EOF gets an empty pending_bins list; must not crash trying to
+    # process a sweep with nothing in it.
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    posted = []
+    monkeypatch.setattr(
+        "app.adapters.rf_sweep_bridge.post_detection",
+        lambda url, payload, api_key, max_retries, retry_backoff_s: posted.append(payload),
+    )
+
+    watch(_bridge_args())
+
+    assert posted == []
+
+
 def test_main_parses_args_and_invokes_watch(monkeypatch):
     captured_args = {}
     monkeypatch.setattr("app.adapters.rf_sweep_bridge.watch", lambda args: captured_args.update(vars(args)))

@@ -11,7 +11,7 @@ import csv
 
 import pytest
 
-from app.ml.train import load_csv, train
+from app.ml.train import load_csv, main, train
 
 pytest.importorskip("sklearn")
 
@@ -158,3 +158,44 @@ def test_train_uses_balanced_class_weight(tmp_path):
 
     model = joblib.load(model_path)
     assert model.named_steps["classifier"].class_weight == "balanced"
+
+
+def test_main_parses_args_and_invokes_train(tmp_path, monkeypatch):
+    csv_path = tmp_path / "labeled.csv"
+    _write_csv(csv_path, _ROWS)
+    model_path = tmp_path / "model.joblib"
+    captured = {}
+    monkeypatch.setattr(
+        "app.ml.train.train",
+        lambda csv_path, out_path, test_size, random_state: captured.update(
+            csv_path=csv_path, out_path=out_path, test_size=test_size, random_state=random_state
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["train", "--csv", str(csv_path), "--out", str(model_path), "--test-size", "0.3", "--random-state", "7"],
+    )
+
+    main()
+
+    assert captured == {
+        "csv_path": str(csv_path), "out_path": str(model_path), "test_size": 0.3, "random_state": 7,
+    }
+
+
+def test_main_uses_documented_defaults(tmp_path, monkeypatch):
+    csv_path = tmp_path / "labeled.csv"
+    _write_csv(csv_path, _ROWS)
+    model_path = tmp_path / "model.joblib"
+    captured = {}
+    monkeypatch.setattr(
+        "app.ml.train.train",
+        lambda csv_path, out_path, test_size, random_state: captured.update(
+            test_size=test_size, random_state=random_state
+        ),
+    )
+    monkeypatch.setattr("sys.argv", ["train", "--csv", str(csv_path), "--out", str(model_path)])
+
+    main()
+
+    assert captured == {"test_size": 0.2, "random_state": 42}
