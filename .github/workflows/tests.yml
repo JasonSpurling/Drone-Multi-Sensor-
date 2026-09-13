@@ -52,6 +52,18 @@ jobs:
         with:
           name: visual-regression-failures
           path: tests_e2e/.visual_failures/
+      # TEMPORARY diagnostic: captures CI's own Chromium render as the
+      # baseline PNGs, uploaded so they can be pulled down and used as the
+      # new committed baselines directly -- removes any guesswork about
+      # what CI's actual environment renders (see the upload-artifact step
+      # above and its surrounding investigation). Removed once done.
+      - run: UPDATE_VISUAL_BASELINES=1 python -m pytest tests_e2e/test_visual_regression.py -v
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-rendered-visual-baselines
+          path: tests_e2e/visual_baselines/
           if-no-files-found: ignore
 
   load-smoke:

@@ -138,6 +138,17 @@ _DIFF_RATIO_TOLERANCE = 0.005
 # this floor filters the former without blinding the ratio check to the
 # latter.
 _PER_PIXEL_TOLERANCE = 40
+# Pixels of width/height drift tolerated before a size difference hard-fails
+# outright (bypassing the ratio check below entirely). A content-driven
+# `width: fit-content`-style element's rendered size can legitimately shift
+# by a pixel or two between CI runs of identical content purely from
+# sub-pixel font-metric rounding (observed: 455px -> 456px across two CI
+# runs with no diff in between) -- the same class of noise
+# _PER_PIXEL_TOLERANCE already exists to absorb, just manifesting as a
+# dimension change instead of a color change. A real layout regression
+# (a misplaced badge, an added/removed button) moves things by much more
+# than this.
+_SIZE_TOLERANCE_PX = 3
 
 
 def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
@@ -174,10 +185,25 @@ def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
     expected = Image.open(baseline_path).convert("RGB")
 
     if actual.size != expected.size:
-        pytest.fail(
-            f"{name}: size changed ({expected.size} -> {actual.size}) -- "
-            f"review and, if intentional, regenerate with UPDATE_VISUAL_BASELINES=1"
-        )
+        width_diff = abs(actual.size[0] - expected.size[0])
+        height_diff = abs(actual.size[1] - expected.size[1])
+        if width_diff > _SIZE_TOLERANCE_PX or height_diff > _SIZE_TOLERANCE_PX:
+            pytest.fail(
+                f"{name}: size changed ({expected.size} -> {actual.size}) -- "
+                f"review and, if intentional, regenerate with UPDATE_VISUAL_BASELINES=1"
+            )
+        # Within tolerance -- pad both onto a shared canvas (not resize,
+        # which would blur/distort every pixel) so the pixel-ratio diff
+        # below still has two same-size images to compare.
+        canvas_size = (max(actual.size[0], expected.size[0]), max(actual.size[1], expected.size[1]))
+
+        def _pad(img: Image.Image) -> Image.Image:
+            canvas = Image.new("RGB", canvas_size, (255, 255, 255))
+            canvas.paste(img, (0, 0))
+            return canvas
+
+        actual = _pad(actual)
+        expected = _pad(expected)
 
     diff = ImageChops.difference(actual, expected)
     # A pixel counts as "different" if its worst-case channel delta exceeds
