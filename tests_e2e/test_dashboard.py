@@ -187,17 +187,26 @@ def test_search_filters_the_tracks_table(live_server, page):
     assert page.locator(".track-card[data-id]").count() == 1
 
 
-def test_empty_tracks_panel_offers_a_simulate_button_that_actually_seeds_a_track(live_server, page):
-    """Regression test: the tracks empty state used to be a bare "No
-    tracks match." with no way to tell "nothing has arrived yet" apart
-    from "your filter excludes everything," and no obvious next step for
-    someone looking at an otherwise-empty dashboard for the first time.
+def test_empty_tracks_panel_is_compact_and_points_at_sensor_health(live_server, page):
+    """The tracks empty state used to be a bare "No tracks match." with no
+    way to tell "nothing has arrived yet" apart from "your filter excludes
+    everything," and no obvious next step -- it's now a smaller, contextual
+    message (not a big production-facing button) pointing at the Sensors
+    panel, which is where the (developer-only) simulate control now lives.
     """
     page.goto(live_server, wait_until="networkidle")
-    page.wait_for_selector("#simulate-tracks-btn")
-    assert "Waiting for sensor data" in page.locator("#tracks-list").inner_text()
+    page.wait_for_selector("#view-sensor-health-btn")
+    assert "No active tracks" in page.locator("#tracks-list").inner_text()
+    # All panels render into the DOM at once (only one is visible at a
+    # time, see #view-tracks/#view-sensors in showPanel()) -- the button
+    # existing off-screen in the not-yet-shown Sensors panel is fine; what
+    # matters is it's not visible in the Tracks panel's own empty state.
+    assert page.locator("#simulate-tracks-btn").is_hidden()
 
+    page.click("#view-sensor-health-btn")
+    page.wait_for_selector("#simulate-tracks-btn")
     page.click("#simulate-tracks-btn")
+    page.click(".rail-btn[data-panel='tracks']")
     page.wait_for_selector(".track-card[data-id]", timeout=10000)
     assert page.locator(".track-card[data-id]").count() >= 1
 
@@ -226,14 +235,25 @@ def test_registered_but_silent_sensor_shows_as_missing(live_server, page):
 
     page.goto(live_server, wait_until="networkidle")
     page.click(".rail-btn[data-panel=sensors]")
-    page.wait_for_selector("#sensors-table table")
-    row_text = page.locator("#sensors-table tbody tr").inner_text()
+    page.wait_for_selector("#sensors-table .sensor-card")
+    row_text = page.locator("#sensors-table .sensor-card").inner_text()
     assert "radar-ghost" in row_text
     assert "missing" in row_text
+    assert "51.5100, -0.1200" in row_text  # its registered position, not "not registered"
 
     page.wait_for_function("sensorLayer.getLayers().length === 1")
     popup_html = page.evaluate("sensorLayer.getLayers()[0].getPopup().getContent()")
     assert "never reported a detection" in popup_html
+
+
+def test_sensor_without_a_registered_position_shows_not_registered(live_server, page):
+    _seed_moving_track(live_server)  # radar-1, never registered a position
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".rail-btn[data-panel=sensors]")
+    page.wait_for_selector("#sensors-table .sensor-card")
+    row_text = page.locator("#sensors-table .sensor-card").inner_text()
+    assert "radar-1" in row_text
+    assert "not registered" in row_text.lower()
 
 
 def test_empty_zones_panel_points_at_the_new_zone_button(live_server_no_seed_zones, page):
@@ -282,9 +302,14 @@ def test_filter_chips_show_live_counts(live_server, page):
 def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail(live_server, page):
     """Regression test: #details-panel used to be right-anchored at a
     fixed 360px width regardless of viewport, so on a narrow (phone-width)
-    screen its left edge landed under the icon rail (which sits on top,
-    z-index-wise) -- silently clipping its own back button out of reach.
-    The max-width: 760px layout must keep it fully inside the viewport.
+    screen its left edge landed under the icon rail (back when panel
+    switching lived in a rail floating over the map) -- silently clipping
+    its own back button out of reach. Panel switching now lives in the
+    persistent top nav bar instead (#icon-rail, moved there so it reads as
+    standard console chrome rather than a floating overlay) -- the
+    equivalent regression today would be the details panel's top edge
+    landing underneath that bar instead. The max-width: 760px layout must
+    keep it fully inside the viewport, below the nav.
     """
     _seed_moving_track(live_server)
     page.set_viewport_size({"width": 390, "height": 844})
@@ -297,13 +322,14 @@ def test_narrow_viewport_details_panel_back_button_is_not_clipped_under_the_rail
     back_button = page.locator("#details-back")
     box = back_button.bounding_box()
     assert box is not None
-    assert box["x"] >= 0  # not pushed off-screen or under the rail's left edge
+    assert box["x"] >= 0  # not pushed off-screen
 
-    # The rail must stay clickable (it sits on top, but with the panel's
-    # back button now inside the viewport, the two shouldn't overlap).
-    rail_box = page.locator(".rail-btn[data-panel=tracks]").bounding_box()
-    assert rail_box is not None
-    assert box["x"] >= rail_box["x"] + rail_box["width"]
+    # The nav bar sits on top (it's the persistent top bar); the details
+    # panel below it must start clear of the nav's bottom edge, not
+    # underneath it.
+    nav_box = page.locator("#icon-rail").bounding_box()
+    assert nav_box is not None
+    assert box["y"] >= nav_box["y"] + nav_box["height"]
 
 
 def test_narrow_viewport_collapsing_the_left_panel_reveals_the_map(live_server, page):
@@ -387,6 +413,56 @@ def test_polling_pauses_while_the_tab_is_hidden(live_server, page):
     assert request_count["n"] >= 1  # the immediate refresh on becoming visible again
 
 
+def test_connection_status_dot_reflects_real_websocket_and_poll_state(live_server, page):
+    """#conn-status-dot (updateConnectionChip()) used to be a hardcoded
+    always-green "live" dot regardless of whether anything was actually
+    connected. It should read "connected" once the real WebSocket is
+    open, and "degraded" once that socket actually closes -- not just
+    stay green forever.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_function("liveSocket !== null && liveSocket.readyState === WebSocket.OPEN")
+    page.wait_for_timeout(200)
+
+    dot = page.locator("#conn-status-dot")
+    assert "degraded" not in dot.get_attribute("class")
+    assert "unavailable" not in dot.get_attribute("class")
+    assert "connected" in dot.get_attribute("aria-label").lower()
+
+    page.evaluate("liveSocket.close()")
+    page.wait_for_function("document.getElementById('conn-status-dot').classList.contains('degraded')")
+    assert "degraded" in dot.get_attribute("aria-label").lower()
+
+
+def test_coasting_track_shows_a_dashed_estimated_position_on_the_map(live_server, page):
+    """isCoasting()/renderMap()'s dead-reckoning line: a track that's
+    gone quiet (but is still server-side "active") should get a dashed
+    line + "estimated position" marker on the map extrapolated from its
+    last known heading/speed -- not just sit at a now-stale position with
+    no indication the plotted spot is no longer current.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    # No real way to make server time pass in a live_server test -- instead
+    # backdate the already-fetched track's last_seen past COASTING_THRESHOLD_S
+    # and re-render, the same technique test_polling_pauses... uses to drive
+    # this app's own client-side clock-dependent logic directly.
+    page.evaluate("""
+        () => {
+            const t = state.tracks[0];
+            t.last_seen = new Date(Date.now() - (COASTING_THRESHOLD_S + 5) * 1000).toISOString();
+            renderMap();
+            renderTracks();
+        }
+    """)
+
+    assert page.evaluate("isCoasting(state.tracks[0])") is True
+    page.wait_for_selector(".track-tooltip:has-text('estimated position')")
+    assert "coasting" in page.locator(".track-card-sub").first.inner_text().lower()
+
+
 def test_icon_only_buttons_have_accessible_names(live_server, page):
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector("#tracks-list")
@@ -466,6 +542,36 @@ def test_alerts_panel_can_acknowledge_and_resolve_an_incident(live_server, page)
     assert page.evaluate("state.incidents.find(i => i.status === 'resolved').closed_at") is not None
 
 
+def test_alerts_panel_offers_start_investigation_between_acknowledge_and_resolve(live_server, page):
+    """IncidentStatus.INVESTIGATING is a real, server-enforced status
+    between acknowledged and resolved (POST /api/incidents/{id}/
+    investigate, only reachable from 'acknowledged') -- surfaced as a
+    "Start investigation" button, and the alert row also now shows who
+    acknowledged it and a working link to the related track.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    assert page.locator("button[data-investigate-id]").count() == 0  # not yet acknowledged
+
+    page.click("button[data-ack-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
+    assert "acknowledged by" in page.locator(".alert-item").inner_text().lower()
+    assert page.locator("button[data-investigate-id]").count() == 1
+
+    page.click("button[data-investigate-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("investigating")')
+    assert page.locator("button[data-investigate-id]").count() == 0
+    assert page.locator("button[data-resolve-id]").count() == 1  # still resolvable
+
+    page.click("a[data-view-track-id]")
+    page.wait_for_selector(".detail-title-row")
+    assert page.locator("#track-details").is_visible()
+
+
 def test_zone_incident_auto_resolves_once_the_track_leaves_the_zone(live_server, page):
     """check_zone_incidents() only ever opened an incident on entry --
     nothing closed it back out once the track's position left again.
@@ -543,6 +649,54 @@ def test_after_action_report_button_populates_a_printable_summary(live_server, p
     assert "After-Action Report" in report_text
     assert "zone incursion" in report_text.lower()
     assert "radar-1" in report_text
+
+
+def test_after_action_report_surfaces_a_real_decoded_identity_fragment(live_server, page):
+    """app.reporting._extract_identification: a real per-aircraft identity
+    field a sensor already decoded (here, a DJI DroneID-style
+    serial_number in raw_data) should show up in the report's new
+    Identification section -- not a manufacturer/model guess this app
+    has no data to back.
+    """
+    page.add_init_script("window.print = () => {};")
+    requests.post(live_server + "/api/detections", json={
+        **INSIDE_RESTRICTED_ZONE,
+        "raw_data": {"serial_number": "0W9DH1A0010SNL"},
+    }, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector("button[data-report-id]")
+    page.click("button[data-report-id]")
+    page.wait_for_function("document.getElementById('print-report').innerHTML.length > 0")
+
+    report_text = page.locator("#print-report").inner_text()
+    assert "Identification" in report_text
+    assert "0W9DH1A0010SNL" in report_text
+
+
+def test_track_sort_offers_a_risk_option_and_reorders_by_it(live_server, page):
+    """track.risk_score (app.risk.compute_risk_score) -- a plain point
+    score, not a proprietary ML ranking -- is a selectable sort, same as
+    the existing Alerts-first/Altitude/Speed options.
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()  # inside the seeded restricted zone -> higher risk
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-2", "sensor_type": "radar", "latitude": 52.0, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()  # outside any zone -> lower risk
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    assert page.locator("#track-sort option[value='risk']").count() == 1
+
+    page.select_option("#track-sort", "risk")
+    page.wait_for_timeout(200)
+    risk_attrs = page.locator(".track-card[data-id]").evaluate_all("els => els.map(e => e.dataset.risk)")
+    risks = [int(r) for r in risk_attrs if r]
+    assert risks == sorted(risks, reverse=True)
 
 
 def test_map_offline_banner_appears_after_repeated_tile_failures_and_clears_on_recovery(live_server, page):
@@ -955,8 +1109,8 @@ def test_track_details_copy_and_export_use_real_track_data(live_server, page):
 def test_track_details_shows_classification_confidence_meter(live_server, page):
     """A track's classification_confidence (app/fusion.py -- distinct from
     the classification label itself, which only ever upgrades) shows as
-    its own meter in the details panel's Track quality section, in the
-    Copy summary, and is a real percentage from the API, not a stub.
+    its own meter in the details panel's Quality tab, in the Copy summary,
+    and is a real percentage from the API, not a stub.
     """
     requests.post(
         live_server + "/api/detections",
@@ -970,12 +1124,13 @@ def test_track_details_shows_classification_confidence_meter(live_server, page):
     page.goto(live_server, wait_until="networkidle")
     page.wait_for_selector(".track-card[data-id]")
     page.click(".track-card[data-id]")
-    page.wait_for_selector(".kv-section:has-text('Track quality')")
+    page.click(".tab-btn[data-tab='quality']")
+    page.wait_for_selector("#details-tab-content .kv:has-text('Confidence')")
 
     confidence_pct = page.evaluate("Math.round(state.tracks[0].classification_confidence * 100)")
     assert confidence_pct == 100  # single fresh detection agreeing with itself
 
-    quality_text = page.locator(".kv-section:has-text('Track quality')").inner_text()
+    quality_text = page.locator("#details-tab-content").inner_text()
     assert "Confidence" in quality_text
     assert f"{confidence_pct}%" in quality_text
 
@@ -994,3 +1149,510 @@ def test_a_failed_action_shows_a_visible_error_toast_not_just_console(live_serve
     page.evaluate("acknowledge(999999)")
     page.wait_for_selector("#error-toast.show")
     assert "couldn't acknowledge" in page.locator("#error-toast").inner_text().lower()
+
+
+def test_alert_banner_shows_for_an_open_incident_and_jumps_to_its_track(live_server, page):
+    """The topbar's red ALERT banner (state.incidents-driven, see
+    renderAlertBanner()) reflects real open (unacknowledged) incidents --
+    it should be absent with none, appear once one opens, and disappear
+    again once it's acknowledged, rather than being static decoration.
+    Clicking it jumps straight to the worst unacknowledged incident's own
+    track (selecting it, centering the map, opening its details panel) --
+    a faster answer to "what is this" than only opening the Alerts list.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#tracks-list")
+    assert not page.locator("#alert-banner").is_visible()
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.wait_for_selector("#alert-banner.show")
+    banner_text = page.locator("#alert-banner").inner_text()
+    assert "UNACKNOWLEDGED ALERT" in banner_text
+    assert "restricted zone" in banner_text.lower()
+
+    page.click("#alert-banner")
+    page.wait_for_selector("#track-details .detail-title-row")
+    assert page.locator('.rail-btn[data-panel="tracks"]').get_attribute("aria-pressed") == "true"
+    assert page.locator(".track-card.selected").count() == 1
+
+    page.click('.rail-btn[data-panel="alerts"]')
+    page.wait_for_selector(".alert-item")
+    page.click("button[data-ack-id]")
+    page.wait_for_selector('.alert-item .badge-outline:has-text("acknowledged")')
+    # Acknowledged (not resolved) no longer needs to interrupt the whole
+    # screen -- the rail's own badge (still "active" while acknowledged)
+    # is a distinct, separate signal from this banner.
+    assert not page.locator("#alert-banner").is_visible()
+
+
+def test_map_verify_filter_toggles_which_diamonds_plot(live_server, page):
+    """The bottom map-level Verified/Unverified filter (state.
+    mapClassExcluded) is independent of the Tracks panel's own Verified/
+    Unverified sub-tabs -- it decides which markers render on the map, per
+    classification color, defaults to showing everything, and should
+    never affect the list.
+    """
+    _seed_moving_track(live_server)  # single radar sensor -> unverified, classifies as drone
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_selector("#map-verify-filter")
+
+    chip = page.locator('.map-verify-chip[data-bucket="unverified"][data-class="drone"]')
+    page.wait_for_selector('.map-verify-chip[data-bucket="unverified"][data-class="drone"]')
+    assert "1" in chip.inner_text()
+    assert "active" in chip.get_attribute("class")
+    assert page.locator('.map-verify-chip[data-bucket="verified"]').count() == 0
+
+    chip.click()
+    assert "excluded" in page.locator(
+        '.map-verify-chip[data-bucket="unverified"][data-class="drone"]'
+    ).get_attribute("class")
+    # The list is untouched by the map-only filter -- still counts as
+    # unverified in the Tracks panel's own tab.
+    page.click(".verify-tab-btn[data-verify='unverified']")
+    assert page.locator(".track-card[data-id]").count() == 1
+
+
+def test_live_view_shows_an_inset_thumbnail_only_when_a_second_real_camera_exists(live_server, page):
+    """The details panel's Live view inset thumbnail (secondNearestCameraSensor())
+    should never appear for a track with only one nearby camera -- that would be
+    a fake duplicate of the main feed -- but should appear once a second,
+    genuinely distinct camera sensor is registered nearby.
+    """
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-1",
+        json={"sensor_type": "camera", "latitude": 51.5, "longitude": -0.1, "camera_stream_url": "rtsp://cam1/x"},
+        timeout=5,
+    ).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#live-view-slot")
+    page.wait_for_timeout(300)
+    assert page.locator(".inset-view-img").count() == 0
+
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-2",
+        json={"sensor_type": "camera", "latitude": 51.5002, "longitude": -0.1002, "camera_stream_url": "rtsp://cam2/x"},
+        timeout=5,
+    ).raise_for_status()
+    page.evaluate("refresh()")  # force a refresh rather than waiting out the real 15s poll interval
+    page.wait_for_selector(".inset-view-img")
+
+
+def test_friend_foe_neutral_and_ignore_buttons_drive_the_real_endpoints(live_server, page):
+    """Friend/Foe (POST /api/tracks/{id}/classify) and Ignore (POST
+    /api/tracks/{id}/ignore) are real operator overrides, not decoration
+    -- each click should be reflected back from the API on the next
+    refresh, including Neutral clearing a previous Friend/Foe call.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#classify-friendly-btn")
+
+    page.click("#classify-friendly-btn")
+    page.wait_for_selector('.badge:has-text("friendly")')
+
+    # Foe is the one classification that asks for confirmation first
+    # (window.confirm) -- Playwright auto-dismisses dialogs unless handled.
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.click("#classify-foe-btn")
+    page.wait_for_selector('.badge:has-text("drone")')
+
+    page.click("#classify-neutral-btn")
+    page.wait_for_selector('.badge:has-text("unknown")')
+
+    assert "Ignore" in page.locator("#ignore-toggle-btn").inner_text()
+    page.click("#ignore-toggle-btn")  # opens the duration menu
+    page.click("#ignore-duration-menu button[data-ignore-minutes='']")  # Indefinitely
+    page.wait_for_selector("#ignore-toggle-btn:text-is('Unignore')")
+    assert page.locator(".track-card.ignored").count() == 1
+    assert page.locator(".ignored-badge").count() == 1
+
+    page.click("#ignore-toggle-btn")  # now a direct Unignore, no menu
+    # :text-is is an exact match -- "Unignore" contains "Ignore" as a
+    # substring, so a has-text wait here would resolve on the stale state.
+    page.wait_for_selector("#ignore-toggle-btn:text-is('Ignore ▾')")
+    assert page.locator(".track-card.ignored").count() == 0
+
+
+def test_ignore_for_a_fixed_duration_shows_the_remaining_time(live_server, page):
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#ignore-toggle-btn")
+
+    page.click("#ignore-toggle-btn")
+    page.click("#ignore-duration-menu button[data-ignore-minutes='30']")
+    page.wait_for_selector("#ignore-toggle-btn:has-text('Unignore')")
+    # 30 minutes rounds to "30m" via fmtUntil -- not "expired" or blank.
+    assert "30m" in page.locator("#ignore-toggle-btn").inner_text()
+
+
+def test_track_card_shows_a_duration_and_a_ptz_badge_when_a_camera_is_near(live_server, page):
+    requests.put(
+        live_server + "/api/sensor-registrations/camera-1",
+        json={"sensor_type": "camera", "latitude": 51.4970, "longitude": -0.1150, "camera_stream_url": "rtsp://cam/x"},
+        timeout=5,
+    ).raise_for_status()
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    assert page.locator(".ptz-badge").count() == 1
+    meta_text = page.locator(".track-card-meta").first.inner_text()
+    assert "dur " in meta_text
+
+
+def test_map_marker_tooltip_shows_verified_state_and_contributing_sensors_once_selected(live_server, page):
+    """Selecting a track's map marker (trackMapPopupHtml(), folded into
+    its permanent tooltip -- see renderMap()'s comment for why not a
+    Leaflet popup) surfaces real per-track sensor corroboration --
+    track.contributing_sensor_types -- not a fixed/fake icon set.
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "cam-1", "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    # Two distinct sensor types -> verified, so it's on the Verified tab,
+    # not the default Unverified one.
+    page.click(".verify-tab-btn[data-verify='verified']")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".leaflet-marker-icon")
+    page.wait_for_selector(".track-tooltip-selected")
+    # Leaflet's zoom-animated tooltip lets a just-removed one briefly
+    # coexist with its replacement in the DOM -- .last is the current one.
+    tooltip_text = page.locator(".track-tooltip-selected").last.inner_text()
+    assert "Verified" in tooltip_text
+    assert "radar" in tooltip_text
+    assert "camera" in tooltip_text
+
+
+def test_notification_bell_shows_a_real_new_alert_and_clears_on_open(live_server, page):
+    """detectAndRecordNotifications() -- a real, locally-observed state
+    transition (a new incident opening between one poll and the next),
+    not a fabricated notification feed. The very first refresh only
+    establishes the baseline, so nothing appears until a genuine second
+    transition happens.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#notif-bell-btn")
+    assert "show" not in (page.locator("#notif-badge").get_attribute("class") or "")
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.evaluate("refresh()")
+    page.wait_for_selector("#notif-badge.show")
+    assert page.locator("#notif-badge").inner_text() == "1"
+
+    page.click("#notif-bell-btn")
+    page.wait_for_selector("#notif-panel:not([hidden])")
+    panel_text = page.locator("#notif-panel").inner_text()
+    assert "New alert" in panel_text
+    assert "restricted zone" in panel_text.lower()
+
+    # Opening the panel marks everything read -- the badge should clear.
+    assert "show" not in (page.locator("#notif-badge").get_attribute("class") or "")
+
+    # Clicking elsewhere closes the panel.
+    page.click("#app-shell")
+    page.wait_for_timeout(100)
+
+
+def test_details_subtitle_shows_confidence_tier_zone_status_and_risk_explanation(live_server, page):
+    """The details panel subtitle row's confidence-tier badge and zone-status
+    badge, plus the Quality tab's risk-explanation panel, are all relabelings
+    of real, already-computed fields (corroborating_sensor_types, zone_status,
+    risk_score/risk_factors) -- not a new fabricated score. A 2-sensor-type
+    track sitting inside the seeded restricted zone should show "Moderate
+    confidence", "Inside protected zone", and a risk breakdown that actually
+    accounts for the total.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    tracks = requests.get(live_server + "/api/tracks", timeout=5).json()
+    track_id = tracks[0]["id"]
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "cam-1", "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "confidence": 0.9, "track_id": track_id,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.click(".verify-tab-btn[data-verify='verified']")  # 2 sensor types here, not the default Unverified tab
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".detail-subtitle-row")
+
+    subtitle = page.locator(".detail-subtitle-row").inner_text()
+    assert "Moderate confidence" in subtitle
+    assert "Inside protected zone" in subtitle
+    assert "Risk" in subtitle
+
+    page.click(".tab-btn[data-tab='quality']")
+    page.wait_for_selector(".risk-explain")
+    risk_text = page.locator(".risk-explain").inner_text()
+    assert "Classified as drone" in risk_text
+    assert "Verified by" in risk_text
+    assert "protected zone" in risk_text
+
+
+def test_details_timeline_tab_shows_real_detection_and_incident_events(live_server, page):
+    """The Timeline tab is built entirely from data the track/incident
+    endpoints already expose -- first-seen and this track's own zone
+    incidents opening/closing -- never a fabricated "camera assigned" or
+    "target acquired" event a closed-loop auto-tracking system would need.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.click(".tab-btn[data-tab='timeline']")
+    page.wait_for_selector(".timeline-list")
+    page.wait_for_timeout(300)
+
+    timeline_text = page.locator(".timeline-list").inner_text()
+    assert "Track first detected" in timeline_text
+    assert "zone incursion incident opened" in timeline_text
+
+
+def test_live_tab_shows_an_honest_camera_state_label_not_a_fake_tracking_state(live_server, page):
+    """The Live view's camera-state label only ever claims one of three real
+    states this app can actually observe (connecting, Live once the stream
+    image loads, or Camera unreachable on a load error) -- never the fake
+    Available/Slewing/Searching/Acquired/Following/Locked auto-tracking
+    machine a real closed-loop PTZ system would need.
+    """
+    requests.put(live_server + "/api/sensor-registrations/cam-1", json={
+        "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "camera_stream_url": "rtsp://cam1/x",
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#camera-state-label")
+    page.wait_for_timeout(500)
+
+    label_text = page.locator("#camera-state-label").inner_text()
+    assert label_text in ("Camera available — connecting…", "Live", "Camera unreachable")
+    assert page.locator("#notif-panel").is_hidden()
+
+
+def test_map_zones_and_labels_toggles_control_the_zone_layer_independently(live_server, page):
+    """The Zones/Labels map-layer toggles (added alongside the existing
+    Trails/Vectors/Uncertainty/Sensors ones) should behave independently:
+    turning Zones off removes the zone polygon entirely, while turning only
+    Labels off keeps the polygon but drops its always-visible name tooltip.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_timeout(500)
+    assert page.evaluate("zoneLayer.getLayers().length") == 1
+    assert page.locator(".zone-label").count() == 1
+
+    page.click("#toggle-zones")
+    page.wait_for_timeout(300)
+    assert page.evaluate("zoneLayer.getLayers().length") == 0
+
+    page.click("#toggle-zones")
+    page.click("#toggle-labels")
+    page.wait_for_timeout(300)
+    assert page.evaluate("zoneLayer.getLayers().length") == 1
+    assert page.locator(".zone-label").count() == 0
+
+
+def test_notification_drawer_shows_severity_state_and_can_be_acknowledged(live_server, page):
+    """Each notification now carries a real severity color, a lifecycle
+    state (Unread/Read/Acknowledged/Resolved) computed from the actual
+    incident it's linked to, and an Acknowledge button that drives the same
+    real POST /api/incidents/{id}/acknowledge endpoint the Alerts panel
+    uses -- not just a local flag.
+    """
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector("#notif-bell-btn")
+
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.evaluate("refresh()")
+    page.wait_for_selector("#notif-badge.show")
+
+    page.click("#notif-bell-btn")
+    page.wait_for_selector(".notif-item")
+    item = page.locator(".notif-item").first
+    assert item.locator(".notif-sev-dot").count() == 1
+    assert "Acknowledged" not in item.locator(".notif-state-chip").inner_text()
+
+    item.locator("button[data-notif-ack]").click()
+    page.wait_for_timeout(500)
+    # acknowledge() calls refresh(), which rebuilds the panel from state.incidents
+    page.click("#notif-bell-btn")
+    page.click("#notif-bell-btn")
+    page.wait_for_selector(".notif-item")
+    chip_text = page.locator(".notif-item").first.locator(".notif-state-chip").inner_text()
+    assert "acknowledged" in chip_text.lower()
+
+    incidents = requests.get(live_server + "/api/incidents", timeout=5).json()
+    assert incidents[0]["status"] == "acknowledged"
+
+
+def test_visual_verification_dialog_records_a_real_result(live_server, page):
+    """The Live view's Visual verification control is a structured,
+    human-driven judgment (Confirmed/Different object/False detection/
+    Unable to determine, plus a note) posted to a real endpoint -- not a
+    single button that auto-declares the track verified, and not the fake
+    PTZ auto-tracking confirmation states this app has no capability to
+    back.
+    """
+    requests.put(live_server + "/api/sensor-registrations/cam-1", json={
+        "sensor_type": "camera", "latitude": 51.5001, "longitude": -0.1001,
+        "camera_stream_url": "rtsp://cam1/x",
+    }, timeout=5).raise_for_status()
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+    tracks = requests.get(live_server + "/api/tracks", timeout=5).json()
+    track_id = tracks[0]["id"]
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector("#visual-verify-btn")
+    page.click("#visual-verify-btn")
+    page.wait_for_selector("#visual-verify-form:not([hidden])")
+    page.check("input[name='visual-verify-result'][value='false_detection']")
+    page.fill("#visual-verify-note", "No object visible in frame")
+    page.click("#visual-verify-submit")
+    page.wait_for_selector("#visual-verify-status:not([style*='display: none'])")
+    assert "Recorded" in page.locator("#visual-verify-status").inner_text()
+
+    entries = requests.get(live_server + "/api/audit-log", timeout=5).json()
+    mine = [e for e in entries if e["target"] == str(track_id) and e["action"] == "track.visual_verify"]
+    assert len(mine) == 1
+    assert mine[0]["detail"] == "false_detection: No object visible in frame"
+
+
+def test_details_panel_sections_follow_identity_telemetry_action_order(live_server, page):
+    """The details panel reads top-to-bottom as Identity -> Telemetry ->
+    Action, per the intended "identify the object, understand its
+    movement, decide what to do" flow -- action buttons no longer sit
+    above the identity/telemetry data they act on.
+    """
+    _seed_moving_track(live_server)
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".kv-section-title")
+
+    titles = [t.strip().lower() for t in page.locator(".kv-section-title").all_inner_texts()]
+    assert titles.index("identity") < titles.index("telemetry") < titles.index("action")
+
+
+def test_topbar_status_line_summarizes_sensors_tracks_alerts_and_highest_priority(live_server, page):
+    """#status-line was previously just "updated HH:MM:SS · N tracks · M
+    active alerts" -- passive, not an at-a-glance operational summary. It
+    now also reports real sensor online/total counts and the highest
+    severity among active (non-resolved) alerts, all derived from the
+    same state already backing the rest of the dashboard.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.wait_for_timeout(200)
+
+    status_text = page.locator("#status-line").inner_text()
+    assert "sensors 1/1 online" in status_text
+    assert "1 tracks" in status_text
+    assert "1 active alert" in status_text
+    assert "highest priority" in status_text.lower()
+    assert "HIGH" in status_text
+
+
+def test_track_row_shows_zone_distance_altitude_heading_and_a_risk_badge(live_server, page):
+    """Track rows now surface distance-to-nearest-zone, altitude, and
+    heading (previously just raw lat/lon) -- real fields the details panel
+    already had -- plus a RISK badge once the score is actually high enough
+    to be worth calling out on every row (score < 5 shows no badge at all,
+    to avoid noise; the exact number is always in the Quality tab).
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1,
+        "altitude_m": 120, "confidence": 0.9,
+    }, timeout=5).raise_for_status()  # inside the seeded restricted zone -> high risk
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    meta_text = page.locator(".track-card-meta").first.inner_text()
+    assert "Central London Restricted Zone" in meta_text
+    assert "120 m" in meta_text
+
+    card = page.locator(".track-card[data-id]").first
+    assert card.locator(".risk-badge").count() == 1
+    assert int(card.get_attribute("data-risk")) >= 5
+
+
+def test_track_labels_toggle_cycles_off_compact_full(live_server, page):
+    """#toggle-track-labels cycles an always-visible per-track map label
+    through three real states -- Off (hover-only, the long-standing
+    default), Compact (id + risk tier), Full (adds classification and
+    verification) -- never a fabricated field.
+    """
+    requests.post(live_server + "/api/detections", json=INSIDE_RESTRICTED_ZONE, timeout=5).raise_for_status()
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+
+    assert page.locator(".track-label-permanent").count() == 0
+    btn = page.locator("#toggle-track-labels")
+    assert btn.inner_text() == "Track labels: Off"
+
+    btn.click()
+    page.wait_for_timeout(200)
+    assert btn.inner_text() == "Track labels: Compact"
+    assert page.locator(".track-label-permanent").count() == 1
+    compact_text = page.locator(".track-label-permanent").inner_text()
+    assert "Verified" not in compact_text and "Unverified" not in compact_text
+
+    btn.click()
+    page.wait_for_timeout(200)
+    assert btn.inner_text() == "Track labels: Full"
+    full_text = page.locator(".track-label-permanent").inner_text()
+    assert "Unverified" in full_text or "Verified" in full_text
+
+    btn.click()
+    page.wait_for_timeout(200)
+    assert btn.inner_text() == "Track labels: Off"
+    assert page.locator(".track-label-permanent").count() == 0
+
+
+def test_map_popup_card_shows_confidence_and_zone_status(live_server, page):
+    """The selected-track map card (trackMapPopupHtml(), folded into the
+    marker's permanent tooltip) now also surfaces classification
+    confidence and zone status -- real computed fields already shown
+    elsewhere -- not just altitude/speed/heading.
+    """
+    requests.post(live_server + "/api/detections", json={
+        "sensor_id": "radar-1", "sensor_type": "radar", "latitude": 51.5, "longitude": -0.1, "confidence": 0.9,
+    }, timeout=5).raise_for_status()
+
+    page.goto(live_server, wait_until="networkidle")
+    page.wait_for_selector(".track-card[data-id]")
+    page.click(".track-card[data-id]")
+    page.wait_for_selector(".track-tooltip-selected")
+    # .last, not the bare locator -- Leaflet can briefly leave a
+    # fading-out previous tooltip node in the DOM (a real render-timing
+    # race, not specific to this field) while renderMap() re-runs on the
+    # next poll/WebSocket push; the same pattern the pre-existing
+    # map-marker-tooltip test already uses for exactly this reason.
+    tooltip_text = page.locator(".track-tooltip-selected").last.inner_text()
+    assert "Confidence" in tooltip_text
+    assert "Inside protected zone" in tooltip_text

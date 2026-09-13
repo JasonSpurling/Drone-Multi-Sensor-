@@ -8,7 +8,8 @@ from pathlib import Path
 
 from app.config import ZONES_SEED_PATH
 from app.db import create_zone, get_zone_by_name, list_zones
-from app.models import Zone
+from app.geo import haversine_distance_m
+from app.models import Zone, ZoneType
 
 logger = logging.getLogger(__name__)
 
@@ -66,3 +67,26 @@ def zones_containing_point(
         for zone in list_zones(site_id=site_id, active_only=True)
         if point_in_polygon(lat, lon, zone.polygon) and _within_altitude_band(altitude_m, zone)
     ]
+
+
+def nearest_restricted_zone_distance_m(lat: float, lon: float, site_id: int) -> float | None:
+    """Straight-line distance to the nearest active RESTRICTED zone's
+    centroid -- the same centroid-based approximation the dashboard's own
+    "Nearest zone" info row already uses (dashboard.html's nearestZone()),
+    not exact boundary distance, so the two never disagree about what
+    "distance to zone" means. Used by app.risk for a proximity-based risk
+    bonus -- distinct from zones_containing_point above (which this
+    doesn't call): a track can be closing in on a zone well before it
+    would ever actually enter one. None if there are no active restricted
+    zones for this site.
+    """
+    best: float | None = None
+    for zone in list_zones(site_id=site_id, active_only=True):
+        if zone.zone_type != ZoneType.RESTRICTED or not zone.polygon:
+            continue
+        centroid_lat = sum(p[0] for p in zone.polygon) / len(zone.polygon)
+        centroid_lon = sum(p[1] for p in zone.polygon) / len(zone.polygon)
+        distance = haversine_distance_m(lat, lon, centroid_lat, centroid_lon)
+        if best is None or distance < best:
+            best = distance
+    return best

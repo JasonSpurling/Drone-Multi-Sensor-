@@ -91,6 +91,76 @@ def test_acknowledging_and_resolving_an_incident_are_both_recorded(admin_key):
         assert "incident.resolve" in actions
 
 
+def test_investigating_an_incident_requires_acknowledged_first_and_is_recorded(admin_key):
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        client.post("/api/detections", json=DETECTION_BODY, headers=headers)
+        zone_body = {**DETECTION_BODY, "latitude": 51.5, "longitude": -0.10}
+        client.post("/api/detections", json=zone_body, headers=headers)
+        incident_id = client.get("/api/incidents", headers=headers).json()[0]["id"]
+
+        # Can't jump straight from open to investigating.
+        r = client.post(f"/api/incidents/{incident_id}/investigate", headers=headers)
+        assert r.status_code == 409
+
+        client.post(f"/api/incidents/{incident_id}/acknowledge", headers=headers)
+        r = client.post(f"/api/incidents/{incident_id}/investigate", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["status"] == "investigating"
+
+        entries = client.get("/api/audit-log", headers=headers).json()
+        assert "incident.investigate" in [e["action"] for e in entries]
+
+        # Still resolvable from investigating, same as from acknowledged.
+        r = client.post(f"/api/incidents/{incident_id}/resolve", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["status"] == "resolved"
+
+
+def test_visual_verification_is_recorded_with_result_and_note(admin_key):
+    with TestClient(app) as client:
+        headers = {"X-API-Key": admin_key}
+        track_id = client.post("/api/detections", json=DETECTION_BODY, headers=headers).json()["track_id"]
+
+        r = client.post(
+            f"/api/tracks/{track_id}/verify-visual",
+            json={"result": "confirmed", "note": "Matches the radar track, visible quadcopter"},
+            headers=headers,
+        )
+        assert r.status_code == 204
+
+        entries = client.get("/api/audit-log", headers=headers).json()
+        assert entries[0]["action"] == "track.visual_verify"
+        assert entries[0]["target"] == str(track_id)
+        assert entries[0]["detail"] == "confirmed: Matches the radar track, visible quadcopter"
+        # Never touches the track's own classification/risk fields -- this
+        # is a person's own conclusion, not a new automated signal.
+        track = client.get(f"/api/tracks/{track_id}", headers=headers).json()
+        assert track["classification"] == "drone"
+
+
+def test_visual_verification_requires_operator_or_admin_role(monkeypatch):
+    monkeypatch.setattr("app.config.API_KEY", "")
+    monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({"view-key": "viewer"}))
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/tracks/1/verify-visual",
+            json={"result": "confirmed"},
+            headers={"X-API-Key": "view-key"},
+        )
+        assert r.status_code == 403
+
+
+def test_visual_verification_404s_for_a_nonexistent_track(admin_key):
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/tracks/999999/verify-visual",
+            json={"result": "confirmed"},
+            headers={"X-API-Key": admin_key},
+        )
+        assert r.status_code == 404
+
+
 def test_audit_log_requires_admin_role(monkeypatch):
     monkeypatch.setattr("app.config.API_KEY", "")
     monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({"view-key": "viewer"}))

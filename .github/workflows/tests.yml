@@ -42,7 +42,16 @@ jobs:
       - run: pip install -r requirements-e2e.txt
       - run: playwright install --with-deps chromium
       - run: python -m pytest tests_e2e/ -v
-
+      # Only ever produced on a visual-regression failure (see
+      # tests_e2e/conftest.py's _assert_matches_visual_baseline) -- lets a
+      # failure be diagnosed (real regression vs. CI-Chromium-version
+      # rendering drift, see tests_e2e/visual_baselines/'s git history for
+      # precedent) without needing to reproduce it locally.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-regression-failures
+          path: tests_e2e/.visual_failures/
   load-smoke:
     runs-on: ubuntu-latest
     steps:

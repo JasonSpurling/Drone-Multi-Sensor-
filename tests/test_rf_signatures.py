@@ -23,15 +23,34 @@ def test_analog_fpv_matches_wide_bandwidth_fixed_frequency():
 
 
 def test_no_match_outside_any_known_band():
-    result = match_rf_signature(center_frequency_mhz=900.0, bandwidth_mhz=10.0)
+    # 433 MHz -- a real ISM band, but not one any of this table's signatures
+    # (2.4/5.8 GHz video links, or the 900 MHz ELRS/Crossfire control band)
+    # occupy.
+    result = match_rf_signature(center_frequency_mhz=433.0, bandwidth_mhz=10.0)
     assert result.signature is None
     assert result.confidence == 0.0
 
 
+def test_elrs_crossfire_900mhz_control_link_matches():
+    result = match_rf_signature(center_frequency_mhz=915.0, bandwidth_mhz=0.5, frequency_hopping=True)
+    assert result.signature is not None
+    assert result.signature.name == "elrs_crossfire_900"
+
+
+def test_elrs_2_4ghz_control_link_is_distinguished_from_wider_video_links():
+    # Same band OcuSync/Lightbridge/Wi-Fi FPV occupy, but a channel far too
+    # narrow for any of them -- only the ELRS control-link entry matches.
+    result = match_rf_signature(center_frequency_mhz=2440.0, bandwidth_mhz=0.5, frequency_hopping=True)
+    assert result.signature is not None
+    assert result.signature.name == "elrs_2_4ghz"
+
+
 def test_no_match_for_bandwidth_outside_signature_window():
-    # In-band but far too narrow for any known signature.
-    result = match_rf_signature(center_frequency_mhz=2440.0, bandwidth_mhz=0.5)
-    assert result.signature is None
+    # In-band but far too narrow even for the narrowest known signature
+    # (elrs_2_4ghz's 0.4-1.0 MHz window) and far too wide for the widest
+    # (analog_fpv's 15-30 MHz).
+    assert match_rf_signature(center_frequency_mhz=2440.0, bandwidth_mhz=0.05).signature is None
+    assert match_rf_signature(center_frequency_mhz=2440.0, bandwidth_mhz=100.0).signature is None
 
 
 def test_missing_frequency_or_bandwidth_does_not_match():

@@ -50,16 +50,50 @@ def build_incident_report(incidents: list[Incident], start: datetime, end: datet
     }
 
 
+# raw_data keys that carry a real per-aircraft identity fragment rather
+# than just a bare measurement -- see the adapter modules named for
+# provenance. Not a manufacturer/model name (this app has no database
+# mapping serial/address ranges to manufacturers): just the raw
+# identifying value an operator or investigator would look up themselves.
+_GENERIC_IDENTITY_KEYS = (
+    "serial_number",  # app/adapters/dji_droneid.py -- DJI DroneID
+    "aircraft_address",  # app/adapters/asterix.py -- ICAO 24-bit Mode S address
+    "callsign",  # app/adapters/asterix.py
+    "mode3a",  # app/adapters/asterix.py -- Mode 3/A squawk code
+    "operator_id",  # app/remote_id.py / app/adapters/astm_remote_id.py -- ASTM F3411 Remote ID
+)
+
+
+def _extract_identification(detections: list[Detection]) -> dict[str, str]:
+    """The most recent non-null value of each real identity fragment
+    (_GENERIC_IDENTITY_KEYS) actually reported across this incident's
+    detections -- not a manufacturer/model lookup this app has no data to
+    back, just surfacing identity fields the sensors themselves already
+    decoded but the report previously left buried in raw_data.
+    """
+    found: dict[str, str] = {}
+    for detection in detections:  # chronological, so a later one overwrites an earlier value
+        if not detection.raw_data:
+            continue
+        for key in _GENERIC_IDENTITY_KEYS:
+            value = detection.raw_data.get(key)
+            if value is not None:
+                found[key] = value
+    return found
+
+
 def build_after_action_report(
     incident: Incident, track: Track | None, zone: Zone | None, detections: list[Detection]
 ) -> dict:
     """A single incident's full story for post-incident review: what was
-    seen, when, by which sensors, how it was classified, and how it was
-    responded to -- everything GET /api/incidents' plain record has, plus
-    the track's fused trajectory summary and its raw detection history
-    (chronological, from app.db.list_detections -- unlike
-    list_recent_detections used for classification fusion, this is the
-    *complete* history for the record, not a capped recent window).
+    seen, when, by which sensors, how it was classified, any real identity
+    fragment a sensor actually decoded (`identification`, see
+    _extract_identification), and how it was responded to -- everything
+    GET /api/incidents' plain record has, plus the track's fused
+    trajectory summary and its raw detection history (chronological, from
+    app.db.list_detections -- unlike list_recent_detections used for
+    classification fusion, this is the *complete* history for the record,
+    not a capped recent window).
 
     `track`/`zone` are None when the incident's track_id/zone_id no longer
     resolves (e.g. purged by retention) -- the report still renders with
@@ -96,10 +130,12 @@ def build_after_action_report(
                 ),
                 "final_speed_mps": track.speed_mps,
                 "final_heading_deg": track.heading_deg,
+                "aircraft_category": track.aircraft_category,
             }
             if track
             else None
         ),
+        "identification": _extract_identification(detections),
         "sensors_involved": sensors_involved,
         "detection_count": len(detections),
         "detections": [

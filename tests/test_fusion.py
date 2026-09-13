@@ -4,8 +4,14 @@ import pytest
 
 from app.config import CLASSIFICATION_CONFIDENCE_DECAY_SECONDS, CLASSIFICATION_CONFIDENCE_FLOOR
 from app.db import upsert_authorized_operator
-from app.fusion import classification_confidence, decay_classification_confidence, fuse_classification
-from app.models import Classification, Detection, SensorType
+from app.fusion import (
+    classification_confidence,
+    contributing_sensor_types,
+    decay_classification_confidence,
+    fuse_classification,
+    is_verified,
+)
+from app.models import Classification, Detection, SensorType, Track, TrackStatus
 from app.remote_id import generate_keypair, sign_detection
 
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
@@ -242,3 +248,26 @@ def test_decay_classification_confidence_is_monotonic_with_age():
 
 def test_decay_classification_confidence_passes_through_none():
     assert decay_classification_confidence(None, datetime(2026, 1, 1), datetime(2026, 1, 2)) is None
+
+
+def test_classification_confidence_is_none_for_a_real_label_with_no_evidence_at_all():
+    # Distinct from the UNKNOWN-label short circuit above -- this is a
+    # real label with zero total vote weight behind it (no detections).
+    assert classification_confidence([], Classification.DRONE) is None
+
+
+def _make_track(**overrides) -> Track:
+    defaults = {
+        "track_uid": "trk-1", "first_seen": BASE_TIME, "last_seen": BASE_TIME, "status": TrackStatus.ACTIVE,
+    }
+    defaults.update(overrides)
+    return Track(**defaults)
+
+
+def test_contributing_sensor_types_is_empty_for_an_unpersisted_track():
+    # No id/site_id yet -- nothing in the database to query against.
+    assert contributing_sensor_types(_make_track(id=None, site_id=None)) == set()
+
+
+def test_is_verified_is_false_for_an_unpersisted_track():
+    assert is_verified(_make_track(id=None, site_id=None)) is False

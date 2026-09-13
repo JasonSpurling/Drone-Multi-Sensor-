@@ -91,5 +91,5 @@ skips = ["B310", "B104", "B405", "B406", "B101"]
 # default would be.
 extend-immutable-calls = [
     "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body",
-    "app.auth.require_role",
+    "app.auth.require_role", "app.auth.require_role_allow_query_key",
 ]

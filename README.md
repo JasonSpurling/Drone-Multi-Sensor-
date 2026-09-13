@@ -321,9 +321,10 @@ replica so the product still fits.
 | `POST /api/detections/batch` | Ingest simultaneous detections (e.g. one radar scan's plots), resolved jointly via global nearest neighbor |
 | `GET /api/detections` | Raw ingested detections (`?sensor_id=`, `?track_id=`, `?start=`, `?end=`, `?limit=`, `?offset=`, freely combined) -- for sensor-level QA/debugging without a track id in hand already, or a bounded time slice once you do; see `GET /api/tracks/{id}/history` below for one track's own full path |
 | `GET /api/tracks` / `GET /api/tracks/{id}` | List or fetch tracks (`?status=active\|lost\|closed`, `?limit=`, `?offset=`) |
-| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|resolved`, `?limit=`, `?offset=`) |
+| `GET /api/incidents` | List incidents (`?status=open\|acknowledged\|investigating\|resolved`, `?limit=`, `?offset=`) |
 | `POST /api/incidents/{id}/acknowledge` | Acknowledge an open incident |
-| `POST /api/incidents/{id}/resolve` | Resolve an incident |
+| `POST /api/incidents/{id}/investigate` | Mark an acknowledged incident as actively being investigated (only reachable from `acknowledged`) |
+| `POST /api/incidents/{id}/resolve` | Resolve an incident (from any non-resolved status) |
 | `GET /api/zones` | List active zones (`?include_inactive=true` for the zone-management UI, which also needs to find and reactivate a deactivated one) |
 | `POST /api/zones` | Create a zone (admin) |
 | `PUT /api/zones/{id}` | Update a zone -- polygon, type, altitude band, active state (admin) |
@@ -384,6 +385,252 @@ track never jumps into a different group's position and gets mistaken
 for a different kind of object. The choice is remembered per-browser
 (like the theme toggle) so it persists across reloads.
 
+Each card also shows a **Duration** (`first_seen` -> now, real elapsed
+time, not a countdown) and, when a registered camera is near enough to
+cue on that track (the same `nearestCameraSensor()` lookup the details
+panel's Live view tab uses), a **PTZ** badge -- both purely derived from
+existing data, no new tracking state.
+
+Each card's meta line now also shows distance to the nearest zone,
+altitude, and heading (real fields the details panel already had --
+previously the card only showed raw latitude/longitude, which is rarely
+useful for a quick scan), and a **RISK** badge once `risk_score` is
+actually high enough to be worth calling out (score < 5 shows no badge at
+all, to avoid noise on every row) -- the exact score and its full
+factor-by-factor breakdown are always one click away in the details
+panel's Quality tab, never hidden behind the badge alone. The map's
+per-track popup card (the selected marker's permanent tooltip) similarly
+now also shows classification confidence and zone status alongside the
+altitude/speed/heading it already had.
+
+### Verified/Unverified tracks
+
+The Tracks panel splits into two sub-tabs, **Verified** and **Unverified**
+(with a live count on each), before the usual classification groups. A
+track counts as Verified once 2+ distinct sensor types have independently
+reported on it (`INCIDENT_CORROBORATION_MIN_SENSOR_TYPES`, the same
+threshold `app.incidents` already uses to escalate an incident's
+severity) -- `corroborating_sensor_types`/`verified` on `GET
+/api/tracks(/{id})` and `POST /api/tracks/{id}/classify`, computed fresh
+at read time, never stored. A brand-new, single-sensor track is
+genuinely Unverified until a second sensor type corroborates it, so the
+panel defaults to the Unverified tab -- that's where a fresh detection
+actually shows up first.
+
+This is independent of a separate Verified/Unverified filter at the
+bottom of the map itself, which controls which diamonds plot there
+without touching which half of the *list* is showing -- one diamond chip
+per classification actually present in each bucket (not a flat two-way
+toggle), each independently togglable, plus an ALL reset per row; every
+chip is on by default.
+
+`contributing_sensor_types` -- which sensor types, not just how many --
+is the same corroboration set, surfaced on the map itself in a selected
+track's tooltip (`trackMapPopupHtml()` in `dashboard.html`) alongside its
+Verified/Unverified state, so an operator can see at a glance why a track
+is Verified without opening the full details panel.
+
+### Risk score
+
+`Track.risk_score` (`app/risk.py`, computed fresh on every read, never
+stored) is a plain, fully-documented point score: `+4` for `drone`
+classification (`+2` unknown, `+1` aircraft, `0` bird/friendly), `+2` if
+Verified, the worst currently-open incident's severity (`+1` to `+4`) if
+any, plus `+1`/`+2` for proximity to the nearest active restricted zone
+(`app.zones.nearest_restricted_zone_distance_m`, within 500m/100m of its
+centroid) -- the same centroid-distance concept the "Nearest zone" info
+row already uses, so the two never disagree about what "distance to
+zone" means. This proximity term is what lets a track closing in on a
+protected zone score higher *before* it ever actually enters one and a
+zone-incursion incident opens (`app.incidents` only fires on actual
+entry). The total is capped at 10. An ignored track always scores `0`,
+regardless of the rest -- an operator has already said this one
+shouldn't compete for attention. This is **not** a claim of a trained ML
+risk model (this app ships no such model, same "scaffolding only"
+posture as `app/ml/`) -- every point in the score traces back to a field
+already shown elsewhere in the UI, so "why is this track ranked here" is
+always answerable without a black box. Surfaced on every track card and
+as a "Risk: highest first" option in the Sort control (see "Track list:
+alert indicator and sort" above -- same within-group-only reordering
+rule applies).
+
+### Risk explanation, confidence tier, zone status, and track timeline
+
+The details panel's subtitle row shows three read-time-only badges, all
+plain relabelings of fields the app already computes elsewhere -- none of
+them a new score or a fabricated signal:
+
+- **Confidence tier** ("Low"/"Moderate"/"High") is just
+  `Track.corroborating_sensor_types` relabeled: 1 sensor type = Low, 2 =
+  Moderate, 3+ = High. It is not a new confidence metric.
+- **Zone status** ("Inside protected zone"/"Approaching a protected
+  zone"/nothing) reuses the exact same restricted-zone containment
+  (`app.zones.zones_containing_point`) and proximity threshold
+  (`app.risk.is_approaching_zone`, the same tiers the risk score's
+  proximity term already uses) so the badge and the score can never
+  disagree about what "approaching" means.
+- **Risk N/10** is `Track.risk_score` itself, with a tooltip and a
+  dedicated panel on the Quality tab (`.risk-explain`) listing
+  `Track.risk_factors` -- the plain-English, per-point breakdown
+  `app.risk.assess_risk()` computes alongside the score (e.g. "Classified
+  as drone (+4)", "Verified by 2+ independent sensor types (+2)"). The
+  score and its stated reasons come from one function, so they can't drift
+  apart.
+
+The details panel's new **Timeline** tab (`renderTimelineTabContent`)
+lists this track's own real, chronological events -- when it was first
+detected, and when any of its own zone-incursion incidents opened or
+closed -- built entirely from data every viewer role already has access
+to. For an admin viewer only, it also best-effort-appends classification
+changes (Friend/Foe/Neutral calls) sourced from `GET /api/audit-log`
+(admin-only, deployment-wide, with no per-track filter, so this is fetched
+client-side and filtered to this track); it fails silently for any other
+role rather than weakening that endpoint's existing access control. This
+is deliberately not a fabricated camera-tracking event log ("target
+acquired," "camera assigned") -- every entry traces back to a record this
+app actually keeps.
+
+### Topbar status line and alert banner
+
+`#status-line` is an at-a-glance operational summary, not just a
+timestamp: `updated HH:MM:SS · sensors X/Y online · N tracks · M active
+alerts · highest priority LEVEL` -- sensor online count from `GET
+/api/sensors`, active-alert count and highest severity from
+`state.incidents` (`status !== "resolved"`), all real fields already
+computed for other parts of the dashboard, just not previously
+summarized in one place. The `highest priority` segment only appears
+once there's at least one active alert to report on.
+
+The red topbar alert banner (shown while at least one incident is
+`open`/unacknowledged) is now also a shortcut: clicking it selects the
+worst unacknowledged incident's own track when it has one (centering the
+map and opening that track's details panel, via the same `selectTrack()`
+every other selection path uses) rather than only opening the Alerts
+list -- a faster path to "what is this" than a list the operator would
+still have to click into. An incident with no associated track still
+falls back to opening the Alerts panel.
+
+### Connection status
+
+The topbar's small dot next to the app name (`#conn-status-dot`,
+`updateConnectionChip()`) reflects the dashboard's actual connection
+state -- previously a hardcoded, always-green "live" indicator regardless
+of whether anything was actually connected. Green ("connected") means
+the WebSocket live-push connection (see "Live updates" below) is open;
+amber ("degraded") means that push is down but the ordinary HTTP poll is
+still succeeding, so the view is still correct, just not instant; red
+("unavailable") means the last poll itself failed. Updated after every
+poll and on every WebSocket open/close, so it's never stale by more than
+one poll cycle.
+
+### Notification bell
+
+The bell icon in the topbar (`detectAndRecordNotifications()`) is a real,
+locally-observed event log, not a fabricated feed and not persisted
+server-side: on each poll, the dashboard diffs the incoming tracks/
+incidents/sensors against what it saw last time, and only ever adds a
+notification for a genuine transition it actually witnessed -- a new
+incident opening, a sensor's health getting strictly worse (never a
+recovery), or a track going `active` -> `lost`. The very first poll after
+a page load only establishes that baseline; it never floods the panel
+with everything that already existed before the tab was opened. The
+unread badge count clears the moment the panel is opened (read, in this
+context, means "seen," not "acted on").
+
+Each notification now shows a severity-colored dot and an explicit
+lifecycle state -- Unread, Read, Acknowledged, or Resolved
+(`notifState()`). For a notification tied to a real incident, this state
+is read straight from that `Incident.status` (open/acknowledged/resolved)
+rather than tracked separately, so it can never say "Acknowledged" while
+the incident itself is still open. Its **Acknowledge** button drives the
+same real `POST /api/incidents/{id}/acknowledge` endpoint the Alerts panel
+uses -- not a local-only flag. A notification with no incident behind it
+(a sensor status change, a track going lost) has no further server-side
+state to borrow, so it only ever reaches "Acknowledged" (a this-browser-
+only "I've seen this," never a fabricated "Resolved"). A **View track**
+button appears when the notification's track still exists, and jumps
+straight to it in the details panel.
+
+### Coasting tracks
+
+A track that's gone quiet for a while, but hasn't yet been marked `lost`
+server-side (`TRACK_STALE_SECONDS`, default 30s), is shown as
+**coasting** rather than silently still reading `active` as if its
+plotted position were still fresh. The dashboard's own coasting threshold
+(`COASTING_THRESHOLD_S`, 15s -- half the server default) is a fixed,
+documented client-side approximation, since there's no live-config
+endpoint to read the real value from; it only changes what's *displayed*,
+never what the server itself considers the track's status to be. A
+coasting track's map marker dims, and gets a dashed dead-reckoning line
+plus an "estimated position (coasting)" tooltip -- its last known
+heading/speed carried forward for however long it's actually been quiet,
+distinct from the existing motion vector (which always projects forward
+by a fixed look-ahead window from a fresh position, regardless of
+staleness). Never plotted as if it were a real report: the estimate is
+explicitly labeled, and the live marker at the old position is dimmed to
+make clear which one to trust.
+
+### Details panel structure: Identity, Telemetry, Action
+
+The track details panel reads top-to-bottom in a fixed order -- **Identity**
+(icon, classification, status, confidence/zone badges, UID, category,
+first/last seen), **Telemetry** (position, altitude, heading, speed,
+nearest zone), then **Action** (Friend/Foe/Neutral, Ignore, Focus/Follow,
+Copy/Export) -- matching "identify the object, understand its movement,
+then decide what to do." The evidence tab strip (Live view/Quality/
+Signal/Radar/Image/Timeline) follows after Action.
+
+### Track list group headers
+
+Within each Verified/Unverified tab, tracks are grouped by classification
+under a collapsible header showing the category name and count
+(`state.collapsedGroups`). Collapsing a group (e.g. Friendly or Bird
+traffic, to focus on unknown activity) persists to `localStorage`, so it
+stays collapsed across a full page reload, not just across poll cycles.
+
+### Track details tabs
+
+The details panel's sensor-specific content (previously several
+always-stacked sections) is now a tab strip: **Live view** (the MJPEG
+feed and read-only PTZ cue, see "Live camera view" and "Slew-to-cue"
+below), **Quality** (classification confidence, uncertainty, maneuvering,
+trail sparkline), **Signal** (the most recent detection's raw per-sensor
+fields), **Radar** (bearing/range polar plot from the nearest sensor),
+and **Image** (an on-demand snapshot button). Each tab renders its own
+specific "not available" message when a track has nothing for it (no
+camera nearby, no signal data yet, ...) rather than hiding the tab
+outright or fabricating a placeholder.
+
+### Map layer toggles: Zones and Labels
+
+Alongside the existing Trails/Vectors/Uncertainty/Sensors checkboxes,
+**Zones** and **Labels** independently control the restricted/monitoring
+zone polygons drawn on the map. Turning Zones off removes the polygons
+entirely; turning off only Labels keeps the polygons visible but drops
+each one's always-on name tooltip (distinct from the existing click-to-open
+popup, which still works either way) -- useful for an operator who wants
+the zone boundaries visible without the name text competing for space at
+a busy zoom level.
+
+The **Uncertainty** toggle now applies to every visible track (previously
+only the selected one), still drawn at its real geographic radius
+(`Track.position_uncertainty_m`) rather than a fabricated small/medium/
+large tier -- an unselected track's circle is thinner and fainter so the
+selected track's own circle still reads as the one to look at. A new
+**Track labels** control (off/compact/full, cycled by clicking) shows an
+always-visible per-track map label instead of only on hover: Compact is
+the ID plus a risk-tier note (only once risk is actually high enough to
+be worth calling out), Full adds classification and verification state --
+all real fields already shown elsewhere, never fabricated ones.
+
+Nested-severity zones (an outer awareness boundary, a middle warning
+boundary, an inner restricted core) aren't a separate feature to build --
+they already work today as multiple real zones of different `zone_type`s
+drawn concentrically, each with its own real color and independent
+alert/entry behavior. There's no synthetic "auto-generate three rings
+from one zone" feature, since that would invent boundary geometry an
+operator never actually configured.
+
 ### Map imagery vs. tracking data
 
 The map background (dark/road/satellite tiles) always comes from an
@@ -410,6 +657,19 @@ panel you have to go looking in. A sensor that's never been registered
 simply isn't plotted, rather than guessing a position for it. Toggle
 with the **Sensors** checkbox alongside Trails/Vectors/Uncertainty.
 
+### Sensor Health panel: cards, not a table
+
+The Sensor Health panel now shows one card per sensor (sensor ID, type,
+status, last heartbeat, and its registered position or "not registered")
+instead of a plain table -- clicking a card with a known position flies
+the map to it and opens its real popup, the same "click a card, jump to
+its marker" affordance zones already had. A developer-only **Simulate
+demo tracks** control now lives at the bottom of this panel (moved out of
+the Tracks panel's own empty state, which shouldn't show a demo/test
+button next to live security data in a real deployment) -- the capability
+is unchanged, just relocated to where someone checking sensor
+connectivity would actually reach for it.
+
 **"Missing" status**: a sensor with a registered position but zero
 detections ever shows a distinct `missing` status (violet), not just
 absence from the list -- `app.sensors.get_sensor_health` cross-references
@@ -419,6 +679,11 @@ indistinguishable: both were simply absent from `GET /api/sensors`,
 whether the registration was five minutes or five months old. A
 deactivated registration is never flagged this way -- a deliberately
 decommissioned sensor isn't a gap to surface.
+
+The Sensor Health panel's own table shows the same registered position
+(or "not registered" for a sensor that's only ever reported detections
+and has no fixed mount position on file) alongside its health status --
+the map plots it, the table now also states it in plain lat/lon.
 
 Two smaller additions alongside it: a scale bar (bottom-right, next to
 the zoom controls) for real distance context, and a "fit all" control
@@ -468,17 +733,49 @@ Alt+5) surfaces this: pick a date range, see the breakdown, or click
 "What actually happened on this one incident" is
 `GET /api/incidents/{id}/report` -- a single incident's full story
 (`build_after_action_report`): what was seen, when, by which sensors, the
-track's fused classification and final position/speed, and how it was
-responded to (acknowledged by whom, resolution time). Every incident in
-the dashboard's **Alerts** panel (including resolved ones, not just
-active alerts) has a **Report** button that fetches this and renders it
-as a printable page (`window.print()`) -- useful for after-action review
-or an incident record you want on paper/PDF rather than just on screen.
+track's fused classification and final position/speed, any real identity
+fragment a sensor actually decoded, and how it was responded to
+(acknowledged by whom, resolution time). Every incident in the
+dashboard's **Alerts** panel (including resolved ones, not just active
+alerts) has a **Report** button that fetches this and renders it as a
+printable page (`window.print()`) -- useful for after-action review or an
+incident record you want on paper/PDF rather than just on screen.
+
+**Identification section**: `_extract_identification` pulls the most
+recent non-null value of any real per-aircraft identity field a sensor
+already decoded into a detection's `raw_data` -- DJI DroneID's
+`serial_number`, ASTERIX radar's Mode S `aircraft_address`/`callsign`/
+squawk (`mode3a`), ASTM F3411 Remote ID's `operator_id` -- into the
+report. These were already captured (see the adapter modules named for
+each), just not previously surfaced anywhere in the report. Deliberately
+**not** a manufacturer/model name: this app has no database mapping
+serial/address ranges to manufacturers, so it never fabricates one --
+just the raw identifying value an operator or investigator would look up
+themselves. The track's `aircraft_category` (real ICAO ADS-B emitter
+category, e.g. "Rotorcraft") is included in the Track section when known,
+for the same reason.
 
 An open incident's card also has **Acknowledge** and **Resolve** buttons
 (driving `POST /api/incidents/{id}/acknowledge` and `.../resolve` above);
-an acknowledged one keeps just **Resolve**, for a deliberate operator
-judgment call -- "we reviewed this and it's handled."
+an acknowledged one also gets a **Start investigation** button
+(`IncidentStatus.INVESTIGATING`, only reachable from `acknowledged`,
+server-enforced) -- a real, distinct "someone is actively working this
+one" step between just having seen it and calling it handled, still
+resolvable at any point from either state. `Incident.acknowledged_by`
+(whoever's key acknowledged it) is now shown on the card too, and the
+related track's ID is a real link that selects it and switches to the
+Tracks panel when that track still exists. This is deliberately not a
+full multi-operator assignment system -- `acknowledged_by` already is
+the real "who's handling this" signal this app has, so nothing invents a
+second, fabricated assignment field alongside it.
+
+A red **ALERT** banner appears across the topbar whenever at least one
+incident is still open (unacknowledged), naming the count and the worst
+severity among them -- clicking it opens the Alerts panel directly. It
+disappears again as soon as every open incident has been acknowledged or
+resolved; an acknowledged-but-not-yet-resolved incident no longer needs
+to interrupt the whole screen (it still counts toward the rail icon's own
+badge, a separate, quieter signal).
 
 The system also auto-closes an incident once its own trigger condition
 is confirmed gone, so it never sits open/acknowledged indefinitely after
@@ -926,6 +1223,78 @@ COCO one. Like `dump1090_bridge.py`, this only runs if you `pip install`
 the camera extras -- `ultralytics` (and its `torch` dependency) is not a
 core dependency of the API server.
 
+## Live camera view
+
+Both camera adapters above only ever post a *detection* -- motion, or an
+object class -- never the actual image. `GET /api/sensors/{sensor_id}/live`
+(`app/api/camera_live.py`) is a separate, real live view: it opens a
+registered camera's RTSP/HTTP stream server-side and re-proxies it to the
+browser as an MJPEG feed (a `multipart/x-mixed-replace` response any
+`<img>` tag can render directly, no video player needed), so the
+dashboard's track details panel can show what a nearby camera currently
+sees -- throttled to 8 FPS (`_MAX_FPS` in that module) since this is a
+"confirm what the camera sees right now" live view, not a claim of smooth
+broadcast-quality video.
+
+Register the camera's stream URL alongside its position:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/sensor-registrations/cam-1 \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_type":"camera","latitude":51.50,"longitude":-0.10,
+       "camera_stream_url":"rtsp://192.168.1.50/stream1"}'
+```
+
+`camera_stream_url` is write-only in practice: `GET /api/sensor-registrations`
+always reports it as `null` regardless of what's actually stored, since a
+camera's stream URL commonly embeds its own login credentials, and
+there's no legitimate reason a dashboard viewer needs it back once it's
+set -- only the live-view endpoint itself, server-side, does. The
+dashboard picks whichever registered camera is nearest a selected track
+and streams from it automatically; no separate configuration in the UI
+itself.
+
+Requires the same camera extras as the adapters above
+(`pip install -r requirements-camera.txt`) -- `opencv-python-headless` is
+what actually opens the RTSP stream and encodes each frame as JPEG.
+Without it, the endpoint returns `501` with that exact instruction rather
+than an empty/broken stream.
+
+If a *second*, genuinely distinct camera sensor is also registered near
+the same track, the dashboard shows it as a small inset thumbnail in the
+corner of the main live view -- never a duplicate of the main feed, and
+never shown at all when there's only one camera nearby.
+
+`GET /api/sensors/{sensor_id}/snapshot` is the same idea for a single
+still frame instead of a feed: it opens the stream fresh, grabs the first
+frame that decodes, and returns it as one JPEG (`502` if the camera never
+produces a decodable frame within 10s). Not a stored-image history --
+there's no capture pipeline or table behind it -- just "what does this
+camera see right now," as a still. Surfaced as a "Take snapshot" button
+under the dashboard's Image tab.
+
+The Live tab's `#camera-state-label` reports only what this app can
+actually observe about the feed itself: "Camera available -- connecting..."
+while the MJPEG `<img>` is loading, "Live" once it has actually loaded a
+frame, or "Camera unreachable" if it fails to load. This is deliberately
+**not** a closed-loop auto-tracking state machine (no
+Assigned/Slewing/Searching/Acquired/Following/Locked states) -- this app
+has no visual object tracking behind the camera, so it never claims one.
+
+### Visual verification
+
+`POST /api/tracks/{id}/verify-visual` (`Visual verification` under the
+Live tab) records a human operator's structured judgment after actually
+comparing the camera feed to what the sensors reported: **Confirmed
+object**, **Different object**, **False detection**, or **Unable to
+determine**, plus an optional note. This is deliberately not a single
+button that auto-declares a track "verified," and not the fake PTZ
+auto-tracking confirmation a closed-loop visual-tracking system would
+use -- it's a plain record of one person's conclusion, kept in the audit
+log (surfaced on the Timeline tab for admins) alongside every other
+operator decision. It never touches `Track.classification` or
+`risk_score` itself, so it can't be mistaken for a new automated signal.
+
 ## Downstream C2 integration
 
 **Publishing tracks to Anduril Lattice** (`app/adapters/lattice_bridge.py`):
@@ -1039,8 +1408,13 @@ An RF detection whose `raw_data` carries `center_frequency_mhz`,
 `bandwidth_mhz`, and (optionally) `frequency_hopping` is matched against a
 small library of publicly documented drone control/video link signatures
 (`app/rf_signatures.py`) -- DJI OcuSync, DJI Lightbridge, analog FPV video,
-and Wi-Fi-based FPV/control links -- instead of trusting a single flat RF
-confidence number. This mirrors how real counter-drone RF sensors actually
+Wi-Fi-based FPV/control links, and long-range RC control links
+(ExpressLRS/TBS Crossfire-style, at both 900 MHz and 2.4 GHz) -- instead
+of trusting a single flat RF confidence number. The 900 MHz entry in
+particular closes a real coverage gap: every other signature sits in the
+2.4/5.8 GHz bands, so a sub-1 GHz control link (a real, common band for
+long-range FPV) previously matched nothing at all. This mirrors how real
+counter-drone RF sensors actually
 work: classifying frequency band, channel bandwidth, and hopping behavior
 against known signature libraries for common link types, not decoding
 encrypted proprietary protocol content. A signature match's confidence is
@@ -1279,6 +1653,12 @@ correctly handled here, per the ONVIF spec, rather than assumed) hasn't
 been confirmed against a real camera's actual reported ranges. Verify
 against your own hardware before relying on it.
 
+The dashboard's Live view tab shows this same cue (pan/tilt/distance) as a
+**read-only** display next to the nearest registered camera -- it calls
+the cue endpoint above and renders the numbers it gets back, but never
+sends a command to any camera itself; driving real hardware is still only
+`onvif_ptz_bridge.py`'s job, run separately.
+
 ## Airspace data
 
 By default, zones come from the single hand-seeded polygon in
@@ -1471,6 +1851,46 @@ outweigh the accumulated evidence. A track can always be *upgraded* to
 `drone` from a lower-confidence label (never silently downgraded away from
 one), since misclassifying a real drone as a bird and never re-flagging it
 is the unsafe failure mode.
+
+**An operator's deliberate override, distinct from the automated vote
+above**: `POST /api/tracks/{id}/classify` (body `{"classification": "friendly"}`,
+`{"classification": "drone"}`, or `{"classification": "unknown"}`) sets
+`Track.classification` directly -- "that's our own authorized drone," "I've
+personally confirmed this is hostile," or "never mind, clear my own
+earlier call and let the automated vote decide again" -- not another vote
+for `app.fusion` to weigh. `classification_confidence` goes to `1.0` for
+friendly/drone (nothing left to be uncertain about) and back to `None` for
+unknown (reverting an override isn't a confident claim of its own).
+Restricted to just those three values (not the full `Classification`
+enum): an operator watching the dashboard is making one of three calls,
+not reclassifying something as a bird or an aircraft, which is what
+sensor evidence itself is for. Surfaced as **Friend**/**Foe**/**Neutral**
+buttons in the dashboard's track details panel; audited (`track.classify`)
+like every other operator action (`app/db.py`'s `record_audit`). **Foe**
+specifically asks for confirmation first (`window.confirm`) before the
+call goes through -- it's the one override that can escalate an
+incident's severity, worth one deliberate extra step where Friend/Neutral
+(which only ever calm things down) don't need it.
+
+**Suppressing alerts without touching classification**: `POST
+/api/tracks/{id}/ignore` (body `{"ignored": true}`, optionally
+`"duration_minutes": N`) sets `Track.ignored` -- an **Ignore** button in
+the dashboard (with a small menu: 5 min / 30 min / Indefinitely),
+alongside Friend/Foe/Neutral. An ignored track is never hidden or altered
+(it keeps updating, tracking, and showing up in the list -- just dimmed,
+with an "Ignored" badge); the only thing that actually changes is that
+`app.incidents` never opens a new zone-incursion or behavioral incident
+for it (`_open_incident` and `_open_behavioral_incident` both check the
+flag first). Toggle back off with `{"ignored": false}` (**Unignore**),
+which also clears any expiry.
+
+A timed ignore (`duration_minutes` set) stores a real `Track.ignored_until`
+and expires on its own -- no separate sweep job needed: `app.db
+._row_to_track`, the one shared hydration point every track read goes
+through (the API layer, the tracking pipeline's own incident checks,
+everywhere), resolves an expired `ignored_until` back to `ignored=false`
+on the spot. "Indefinitely" (the default, `duration_minutes` omitted)
+behaves exactly like the original always-permanent Ignore.
 
 **Classification confidence, distinct from the label**: `Track.classification_confidence`
 (0-1) is how strongly *current* evidence backs whatever label is actually

@@ -1,7 +1,10 @@
 import json
+import logging
 import socket
 import threading
 import time
+
+import pytest
 
 from app import queue_publisher
 
@@ -220,6 +223,180 @@ def test_consume_stops_promptly_when_stop_event_is_set(monkeypatch):
         server.close()
 
     assert not t.is_alive()
+
+
+def test_read_line_stops_on_a_socket_closed_before_the_terminator():
+    server_sock, client_sock = socket.socketpair()
+    server_sock.close()  # closed before ever sending a full CRLF-terminated line
+    try:
+        assert queue_publisher._read_line(client_sock) == b""
+    finally:
+        client_sock.close()
+
+
+def test_subscribe_once_raises_when_the_server_closes_before_any_message(monkeypatch):
+    server = _FakeNatsServer()
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", f"nats://127.0.0.1:{server.port}")
+    stop_event = threading.Event()
+
+    def close_after_sub():
+        _wait_for_sub(server)
+        server._conn.close()
+
+    threading.Thread(target=close_after_sub, daemon=True).start()
+    try:
+        with pytest.raises(ConnectionError, match="closed by server"):
+            queue_publisher._subscribe_once("test.subject", "", lambda payload: None, stop_event)
+    finally:
+        stop_event.set()
+        server.close()
+
+
+def test_subscribe_once_reassembles_a_message_payload_sent_across_multiple_packets(monkeypatch):
+    # Real TCP delivery doesn't guarantee one MSG frame arrives in a single
+    # recv() call -- this proves the buffering loop (which itself must
+    # survive a recv() timeout while waiting for the rest) stitches it
+    # back together correctly rather than only working when everything
+    # happens to land in one chunk.
+    server = _FakeNatsServer()
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", f"nats://127.0.0.1:{server.port}")
+    stop_event = threading.Event()
+    received = []
+
+    def handler(payload: bytes) -> None:
+        received.append(payload)
+        stop_event.set()
+
+    t = threading.Thread(
+        target=queue_publisher._subscribe_once, args=("test.subject", "", handler, stop_event)
+    )
+    t.start()
+    try:
+        _wait_for_sub(server)
+        payload = b'{"hello": "world"}'
+        header = f"MSG test.subject 1 {len(payload)}\r\n".encode()
+        server._conn.sendall(header + payload[:5])
+        time.sleep(1.2)  # exceed _RECV_POLL_TIMEOUT_SECONDS so a recv() timeout is hit while waiting
+        server._conn.sendall(payload[5:] + b"\r\n")
+        stop_event.wait(timeout=5)
+    finally:
+        stop_event.set()
+        t.join(timeout=5)
+        server.close()
+
+    assert received == [payload]
+
+
+def test_subscribe_once_returns_promptly_if_stop_event_is_set_while_awaiting_message_bytes(monkeypatch):
+    server = _FakeNatsServer()
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", f"nats://127.0.0.1:{server.port}")
+    stop_event = threading.Event()
+
+    t = threading.Thread(
+        target=queue_publisher._subscribe_once, args=("test.subject", "", lambda payload: None, stop_event)
+    )
+    t.start()
+    try:
+        _wait_for_sub(server)
+        # Claims a 20-byte payload but only ever sends 5 -- the rest never
+        # arrives, so the only way out is noticing stop_event mid-wait.
+        server._conn.sendall(b"MSG test.subject 1 20\r\n" + b"only5")
+        time.sleep(0.3)
+        stop_event.set()
+        t.join(timeout=5)
+    finally:
+        stop_event.set()
+        server.close()
+
+    assert not t.is_alive()
+
+
+def test_subscribe_once_raises_when_the_connection_drops_mid_message(monkeypatch):
+    server = _FakeNatsServer()
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", f"nats://127.0.0.1:{server.port}")
+    stop_event = threading.Event()
+
+    def close_mid_message():
+        _wait_for_sub(server)
+        server._conn.sendall(b"MSG test.subject 1 50\r\n" + b"partial")
+        server._conn.close()
+
+    threading.Thread(target=close_mid_message, daemon=True).start()
+    try:
+        with pytest.raises(ConnectionError, match="mid-message"):
+            queue_publisher._subscribe_once("test.subject", "", lambda payload: None, stop_event)
+    finally:
+        stop_event.set()
+        server.close()
+
+
+def test_subscribe_once_skips_unrecognized_protocol_lines(monkeypatch):
+    # A real NATS server can send +OK/-ERR (or other frames this minimal
+    # client doesn't act on) interleaved with MSG frames -- these must be
+    # skipped, not mistaken for a MSG or crash the parser.
+    server = _FakeNatsServer()
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", f"nats://127.0.0.1:{server.port}")
+    stop_event = threading.Event()
+    received = []
+
+    def handler(payload: bytes) -> None:
+        received.append(payload)
+        stop_event.set()
+
+    t = threading.Thread(
+        target=queue_publisher._subscribe_once, args=("test.subject", "", handler, stop_event)
+    )
+    t.start()
+    try:
+        _wait_for_sub(server)
+        payload = b'{"x": 1}'
+        server._conn.sendall(b"+OK\r\n" + f"MSG test.subject 1 {len(payload)}\r\n".encode() + payload + b"\r\n")
+        stop_event.wait(timeout=5)
+    finally:
+        stop_event.set()
+        t.join(timeout=5)
+        server.close()
+
+    assert received == [payload]
+
+
+def test_consume_creates_its_own_stop_event_when_none_is_given(monkeypatch):
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", "nats://127.0.0.1:4222")
+    call_count = 0
+
+    def fake_subscribe_once(subject, queue_group, handler, stop_event):
+        nonlocal call_count
+        call_count += 1
+        stop_event.set()  # only reachable if consume() built a real, usable Event on our behalf
+        raise OSError("simulated failure")
+
+    monkeypatch.setattr("app.queue_publisher._subscribe_once", fake_subscribe_once)
+
+    queue_publisher.consume("test.subject", lambda payload: None, reconnect_delay_seconds=0.01)
+
+    assert call_count == 1
+
+
+def test_consume_logs_and_waits_before_reconnecting_after_a_connection_error(monkeypatch, caplog):
+    monkeypatch.setattr("app.queue_publisher.NATS_URL", "nats://127.0.0.1:4222")
+    calls = []
+
+    def fake_subscribe_once(subject, queue_group, handler, stop_event):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionError("dropped")
+        stop_event.set()
+
+    monkeypatch.setattr("app.queue_publisher._subscribe_once", fake_subscribe_once)
+    stop_event = threading.Event()
+
+    with caplog.at_level(logging.WARNING):
+        queue_publisher.consume(
+            "test.subject", lambda payload: None, stop_event=stop_event, reconnect_delay_seconds=0.01
+        )
+
+    assert len(calls) == 2
+    assert "reconnecting" in caplog.text
 
 
 def test_consume_survives_a_dropped_connection_and_keeps_retrying(monkeypatch):

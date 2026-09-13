@@ -10,12 +10,13 @@ to prove the whole thing wires together, not just each piece in isolation.
 from __future__ import annotations
 
 import json
+import signal
 import threading
 import time
 
 import pytest
 
-from app.consumer import _resolve_consumer_site_id, make_handler, run
+from app.consumer import _resolve_consumer_site_id, main, make_handler, run
 from app.db import create_site, list_tracks
 from app.models import Classification, SensorType
 from tests.test_queue_publisher import _FakeNatsServer, _wait_for_sub
@@ -146,3 +147,58 @@ def test_run_processes_a_real_queued_detection_end_to_end(monkeypatch, isolated_
     tracks = list_tracks(site_id=site_id)
     assert len(tracks) == 1
     assert tracks[0].latitude == pytest.approx(DETECTION["latitude"])
+
+
+def test_handler_respects_the_site_wide_rate_limit(site_id, monkeypatch):
+    from app.ratelimit import RateLimiter
+
+    # A generous per-sensor limit so only the site-wide limiter is what
+    # trips -- proves the two limits are checked independently.
+    monkeypatch.setattr("app.consumer.site_detection_rate_limiter", RateLimiter(rate_per_second=1.0, burst=1.0))
+    handler = make_handler(site_id)
+    handler(json.dumps(DETECTION).encode())
+    handler(json.dumps(dict(DETECTION, sensor_id="radar-2", confidence=0.5)).encode())
+
+    tracks = list_tracks(site_id=site_id)
+    assert len(tracks) == 1
+
+
+def test_handler_logs_and_survives_an_association_failure(site_id, monkeypatch, caplog):
+    def failing_associate(detection):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("app.consumer.associate_detection", failing_associate)
+    handler = make_handler(site_id)
+
+    with caplog.at_level("ERROR"):
+        handler(json.dumps(DETECTION).encode())  # must not raise
+
+    assert "Failed to process queued detection" in caplog.text
+    assert list_tracks(site_id=site_id) == []
+
+
+def test_main_configures_logging_registers_signal_handlers_and_runs(monkeypatch):
+    configured = []
+    monkeypatch.setattr("app.logging_config.configure_logging", lambda: configured.append(True))
+    monkeypatch.setattr("sys.argv", ["consumer"])
+
+    captured = {}
+
+    def fake_run(stop_event):
+        captured["stop_event"] = stop_event
+
+    monkeypatch.setattr("app.consumer.run", fake_run)
+
+    registered = {}
+    monkeypatch.setattr("app.consumer.signal.signal", lambda signum, handler: registered.__setitem__(signum, handler))
+
+    main()
+
+    assert configured == [True]
+    assert signal.SIGTERM in registered
+    assert signal.SIGINT in registered
+
+    stop_event = captured["stop_event"]
+    assert not stop_event.is_set()
+    registered[signal.SIGTERM](signal.SIGTERM, None)  # exercise the handler body itself
+    assert stop_event.is_set()

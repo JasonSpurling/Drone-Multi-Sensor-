@@ -13,7 +13,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.db import create_site
+from app.db import create_site, get_site
 from app.main import app
 
 SITE_A_KEY = "key-for-site-a-0123456789abcdef"
@@ -178,3 +178,15 @@ def test_legacy_bare_role_string_key_still_resolves_to_the_default_site(monkeypa
         assert r.status_code == 201
         assert r.json()["site_id"] == ensure_default_site()
         assert DEFAULT_SITE_NAME == "default"
+
+
+def test_get_site_returns_a_real_row_by_id_or_none_when_missing(isolated_db):
+    site = create_site("site-lookup-test")
+    assert site.id is not None
+
+    fetched = get_site(site.id)
+    assert fetched is not None
+    assert fetched.id == site.id
+    assert fetched.name == "site-lookup-test"
+
+    assert get_site(999999) is None

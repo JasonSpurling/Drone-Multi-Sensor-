@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.db import KalmanStateRecord, create_track, list_tracks, upsert_kalman_state
 from app.models import Classification, Detection, SensorType, Track, TrackStatus
 from app.tracking import associate_detection, associate_detections_batch
@@ -144,3 +146,50 @@ def test_batch_detection_with_no_position_always_spawns_new_track(site_id):
     results = associate_detections_batch([no_position])
     assert results[0].track_id is not None
     assert len(list_tracks(site_id=site_id)) == 3  # the 2 seeded tracks + this new one
+
+
+def test_batch_rejects_a_mix_of_site_ids():
+    detections = [
+        make_detection(1, sensor_id="s1"),
+        make_detection(2, sensor_id="s2"),
+    ]
+    with pytest.raises(ValueError, match="share one site_id"):
+        associate_detections_batch(detections)
+
+
+def test_batch_rejects_detections_with_no_site_id_at_all():
+    detection = make_detection(0)
+    detection.site_id = None
+    with pytest.raises(ValueError, match=r"every detection\.site_id to be set"):
+        associate_detections_batch([detection])
+
+
+def test_batch_gates_against_the_own_track_time_gate_not_just_staleness(monkeypatch, site_id):
+    # Same reasoning as tracking's single-detection path: default config
+    # has TRACK_STALE_SECONDS == TRACK_TIME_GATE_SECONDS, so a gap wide
+    # enough to fail the inner time-gate check has already had its track
+    # expired out of the active-track query first. Widening staleness
+    # isolates the inner check itself.
+    monkeypatch.setattr("app.tracking.TRACK_TIME_GATE_SECONDS", 10.0)
+    monkeypatch.setattr("app.tracking.TRACK_STALE_SECONDS", 120.0)
+    track_id, _ = _seed_two_close_tracks(site_id)
+    late = make_detection(
+        site_id, timestamp=BASE_TIME + timedelta(seconds=50), latitude=51.50000, longitude=0.00000
+    )
+
+    results = associate_detections_batch([late])
+
+    assert results[0].track_id != track_id  # outside the 10s time gate -> new track
+
+
+def test_batch_respects_the_coarse_distance_gate(site_id):
+    track_id, _ = _seed_two_close_tracks(site_id)
+    # ~600m away, well outside the default 500m coarse gate, but still
+    # within the default 30s time gate -- isolates the distance check.
+    far = make_detection(
+        site_id, timestamp=BASE_TIME + timedelta(seconds=5), latitude=51.50540, longitude=0.00000
+    )
+
+    results = associate_detections_batch([far])
+
+    assert results[0].track_id != track_id

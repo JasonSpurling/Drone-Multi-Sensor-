@@ -88,6 +88,22 @@
     justify-content: space-between;
     gap: 16px;
   }
+
+  /* Real open-incident summary, not decoration -- shown only while at
+     least one incident has status "open" (app/incidents.py; acknowledged
+     incidents no longer count, matching the Alerts panel's own badge
+     logic in renderAlerts()). Fixed height so #app-shell's own height
+     calc (below) only has to add/subtract one constant. */
+  #alert-banner {
+    display: none;
+    height: 26px; flex-shrink: 0;
+    align-items: center; justify-content: center; gap: 8px;
+    background: var(--critical); color: #fff;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+    cursor: pointer; border: none; width: 100%;
+  }
+  #alert-banner.show { display: flex; }
+  #alert-banner:hover { filter: brightness(1.1); }
   .topbar-left { display: flex; align-items: center; gap: 10px; }
   .topbar-right { display: flex; align-items: center; }
   #theme-toggle {
@@ -99,11 +115,19 @@
     color: var(--accent); font-size: 15px;
   }
   .topbar-left h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: 0.02em; color: var(--text); }
+  /* Real connection state (updateConnectionChip()), not decoration -- was
+     previously a hardcoded always-green "live" dot regardless of whether
+     the WebSocket push or even the polling fallback was actually working.
+     connected = push is live; degraded = push is down but the ordinary
+     HTTP poll is still succeeding (the view is still correct, just not
+     instant); unavailable = the last poll itself failed. */
   .live-dot {
     display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--active); box-shadow: 0 0 0 rgba(34,197,94,0.6);
     animation: pulse 2s infinite;
   }
+  .live-dot.degraded { background: var(--stale); animation: none; }
+  .live-dot.unavailable { background: var(--high); animation: pulse-alert 2s infinite; }
   @keyframes pulse {
     0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
     70% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
@@ -130,41 +154,63 @@
     .skeleton-row { animation: none; background: var(--panel-2); }
   }
 
-  /* --- App shell: icon rail + floating panels over a full-bleed map. --- */
+  /* --- App shell: floating panels over a full-bleed map. Panel switching
+     itself lives in the top bar's nav (#icon-rail, below) now, not a
+     rail floating over the map -- a persistent horizontal nav is the
+     more standard console chrome, and it frees the map's entire left
+     edge for panels/legend instead of sharing it with a 42px rail. ---- */
   #app-shell { position: relative; height: calc(100vh - 40px); overflow: hidden; }
+  body.has-alert-banner #app-shell { height: calc(100vh - 40px - 26px); }
   #map { position: absolute; inset: 0; background: var(--map-bg); z-index: 0; }
 
+  /* Same #icon-rail id and .rail-btn/data-panel/#alerts-badge structure
+     as before the move to the top bar -- only where it lives and how it's
+     laid out changed, not what it's called or how JS finds it, so every
+     panel-switching handler below still just works. */
   #icon-rail {
-    position: absolute; z-index: 20; top: 12px; left: 12px; bottom: 12px;
-    width: 42px;
-    background: var(--panel-glass);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 8px 0;
-    gap: 4px;
-    backdrop-filter: blur(6px);
+    display: flex; align-items: center; gap: 2px;
   }
   .rail-btn {
     position: relative;
-    width: 30px; height: 30px;
+    display: flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 12px;
     background: transparent; border: 1px solid transparent; border-radius: 7px;
-    color: var(--muted); font-size: 15px;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
+    color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
+    cursor: pointer; white-space: nowrap;
   }
+  .rail-btn .rail-icon { font-size: 13px; line-height: 1; }
   .rail-btn:hover { color: var(--text); background: var(--panel-2); }
   .rail-btn.active { color: var(--on-accent); background: var(--accent); }
   .rail-btn .rail-badge {
-    position: absolute; top: -4px; right: -4px;
+    position: static; margin-left: 1px;
     background: var(--high); color: var(--on-accent); font-size: 9px; font-weight: 700;
-    border-radius: 999px; padding: 1px 4px; min-width: 13px; line-height: 1.4; text-align: center;
-    box-shadow: 0 0 0 2px var(--panel-glass);
+    border-radius: 999px; padding: 1px 5px; min-width: 13px; line-height: 1.4; text-align: center;
     display: none;
   }
-  .rail-btn .rail-badge.show { display: block; animation: pulse-alert 2s infinite; }
+  .rail-btn .rail-badge.show { display: inline-block; animation: pulse-alert 2s infinite; }
+  #notif-bell-btn { position: relative; }
+  #notif-badge {
+    position: absolute; top: 2px; right: 2px;
+    background: var(--high); color: var(--on-accent); font-size: 9px; font-weight: 700;
+    border-radius: 999px; padding: 1px 5px; min-width: 13px; line-height: 1.4; text-align: center;
+    display: none;
+  }
+  #notif-badge.show { display: inline-block; animation: pulse-alert 2s infinite; }
+  #notif-panel {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 50;
+    width: 300px; max-height: 360px; overflow-y: auto;
+    background: var(--panel-glass-strong); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); backdrop-filter: blur(6px);
+  }
+  .notif-item { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .notif-item:last-child { border-bottom: none; }
+  .notif-item.unread { background: var(--panel-2); }
+  .notif-time { color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .notif-top-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .notif-sev-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .notif-state-chip { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+  .notif-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .notif-actions button { font-size: 11px; padding: 3px 8px; }
 
   .floating-panel {
     position: absolute; z-index: 15; top: 12px; bottom: 12px;
@@ -178,7 +224,7 @@
     flex-direction: column;
     overflow: hidden;
   }
-  #left-panel { left: 64px; transition: transform 0.15s ease; }
+  #left-panel { left: 12px; transition: transform 0.15s ease; }
   #left-panel.collapsed { transform: translateX(-120%); }
   /* Unlike #left-panel (which always has a long, scrollable list and
      benefits from claiming the full viewport height), a single track's
@@ -255,6 +301,15 @@
   }
   .track-card:hover { background: var(--panel-2); }
   .track-card.selected { background: var(--hover-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .track-card.ignored { opacity: 0.55; }
+  .ptz-badge, .ignored-badge, .verified-badge, .risk-badge {
+    display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.03em;
+    border-radius: 3px; padding: 1px 4px; vertical-align: middle; margin-left: 4px;
+  }
+  .ptz-badge { background: var(--panel-2); border: 1px solid var(--accent); color: var(--accent); }
+  .ignored-badge { background: var(--panel-2); border: 1px solid var(--muted); color: var(--muted); }
+  .verified-badge { background: var(--panel-2); border: 1px solid var(--active); color: var(--active); }
+  .risk-badge { background: var(--panel-2); border: 1px solid; }
   .track-thumb {
     position: relative;
     width: 44px; height: 44px; border-radius: 6px; flex-shrink: 0;
@@ -321,11 +376,66 @@
   #map-legend .item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
   #map-layer-toggles {
     position: absolute; z-index: 10; top: 12px; left: 50%; transform: translateX(-50%);
-    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 8px;
-    padding: 6px 12px; font-size: 11px; color: var(--muted); backdrop-filter: blur(4px);
-    display: flex; gap: 14px;
+    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px; backdrop-filter: blur(4px);
+    display: flex; gap: 4px;
   }
-  #map-layer-toggles label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  /* Same active/inactive chip language as .filter-chip (track-class
+     filters) rather than a second, unstyled control convention -- a bare
+     OS checkbox + text label is what read as "not professional" here,
+     next to every other control on this map already using pill chips. */
+  #map-layer-toggles label {
+    position: relative; display: flex; align-items: center; gap: 0;
+    padding: 5px 11px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  #map-layer-toggles label:hover { color: var(--text); }
+  #map-layer-toggles label:has(input:checked) {
+    background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  }
+  #map-layer-toggles label:has(input:focus-visible) {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  #map-layer-toggles input[type="checkbox"] {
+    position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0;
+  }
+  .layer-toggle-chip {
+    padding: 5px 11px; border-radius: 999px;
+    background: transparent; border: 1px solid transparent; color: var(--muted);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .layer-toggle-chip:hover { color: var(--text); }
+  .layer-toggle-chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  /* Bottom map-level Verified/Unverified filter -- independent of the
+     Tracks panel's own Verified/Unverified sub-tabs (state.trackVerifiedTab):
+     that one decides which half of the *list* shows; this one decides
+     which diamonds render on the *map*, per classification color, and
+     defaults to showing everything. Two rows (Verified targets/Unverified
+     targets), each with one diamond chip per classification actually
+     present in that bucket right now, plus an ALL reset. */
+  #map-verify-filter {
+    position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-glass); border: 1px solid var(--border); border-radius: 10px;
+    padding: 6px 8px; backdrop-filter: blur(4px);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .map-verify-row { display: flex; align-items: center; gap: 6px; }
+  .map-verify-row .row-label { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.02em; min-width: 78px; }
+  button.map-verify-chip {
+    display: flex; align-items: center; gap: 5px;
+    background: transparent; border: 1px solid transparent; border-radius: 999px;
+    padding: 4px 9px; color: var(--muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.02em; cursor: pointer;
+  }
+  button.map-verify-chip:hover { color: var(--text); }
+  button.map-verify-chip.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+  button.map-verify-chip.excluded { opacity: 0.4; }
+  button.map-verify-chip .diamond { font-size: 10px; line-height: 1; }
   #map-empty-state {
     position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%);
     text-align: center; pointer-events: none; /* never intercepts a map click/drag */
@@ -335,7 +445,7 @@
   #map-empty-state .map-empty-body { font-size: 12px; margin-top: 4px; opacity: 0.4; }
   #map-offline-banner {
     display: none;
-    position: absolute; z-index: 10; bottom: 12px; left: 50%; transform: translateX(-50%);
+    position: absolute; z-index: 10; bottom: 54px; left: 50%; transform: translateX(-50%);
     background: var(--panel-glass); border: 1px solid var(--medium); border-radius: 8px;
     padding: 6px 12px; font-size: 11px; color: var(--text); backdrop-filter: blur(4px);
   }
@@ -361,6 +471,13 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
   }
   .track-tooltip::before { display: none !important; }
+  .zone-label {
+    background: transparent !important; border: none !important; box-shadow: none !important;
+    color: var(--zone) !important; font-size: 10px !important; font-weight: 600 !important;
+    text-transform: uppercase; letter-spacing: 0.03em; text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  }
+  .zone-label::before { display: none !important; }
+  .track-label-permanent { font-size: 10px !important; padding: 2px 6px !important; line-height: 1.4 !important; }
   .empty { color: var(--muted); font-style: italic; padding: 10px 6px; }
   .empty-ok { color: var(--muted); padding: 14px 6px; display: flex; align-items: center; gap: 8px; }
   .empty-ok .check { color: var(--active); font-size: 16px; }
@@ -386,6 +503,28 @@
   .alert-item.sev-low { border-left-color: var(--low); }
   .alert-item .top-row { display: flex; justify-content: space-between; align-items: center; }
   .alert-item .desc { color: var(--muted); margin: 6px 0; }
+  .sensor-cards { display: flex; flex-direction: column; gap: 8px; }
+  .sensor-card {
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    cursor: pointer;
+  }
+  .sensor-card[aria-disabled="true"] { cursor: default; opacity: 0.85; }
+  .sensor-card:hover:not([aria-disabled="true"]) { border-color: var(--hover-border); background: var(--hover-bg); }
+  .sensor-card-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .sensor-card-name { font-weight: 600; font-size: 13px; }
+  .sensor-card-type { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .sensor-card-status { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-top: 4px; }
+  .sensor-card-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .dev-tools-footer {
+    margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dev-tools-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+  }
+  .empty-compact { padding: 16px 14px; color: var(--muted); }
+  .empty-compact-title { color: var(--text); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .empty-compact-body { font-size: 12px; line-height: 1.5; margin-bottom: 10px; }
   button {
     background: var(--accent);
     color: white;
@@ -400,6 +539,12 @@
   button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
   button.secondary:hover { background: var(--secondary-hover); }
   button.secondary.active { background: var(--accent); border-color: var(--accent); }
+  /* Friend/Foe: an operator's deliberate classification override (POST
+     /api/tracks/{id}/classify), colored by outcome rather than left as
+     plain secondary buttons -- the same friendly/drone hues the rest of
+     the dashboard already uses for those classifications. */
+  button.classify-btn:hover { color: var(--friendly); border-color: var(--friendly); }
+  button.classify-btn.danger:hover { color: var(--drone); border-color: var(--drone); }
 
   #view-zones .panel-toolbar { padding: 10px 14px; border-bottom: 1px solid var(--border); }
   #report-range-form {
@@ -454,6 +599,14 @@
     color: var(--active); margin-bottom: 2px; display: block;
   }
   .detail-title-row { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; margin-bottom: 10px; }
+  .detail-subtitle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -4px 0 10px 0; }
+  .risk-inline { font-size: 11px; font-weight: 600; color: var(--muted); cursor: help; }
+  .risk-explain { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .risk-factor-list { margin: 0; padding-left: 16px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .timeline-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+  .timeline-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .timeline-list li:last-child { border-bottom: none; }
+  .timeline-time { color: var(--muted); font-size: 10px; margin-right: 6px; }
   .detail-actions { display: flex; gap: 6px; padding: 0 14px 8px 14px; }
   .detail-actions button { flex: 1; }
   .detail-actions.secondary { padding-top: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
@@ -477,7 +630,44 @@
   .meter { background: var(--panel-2); border-radius: 999px; height: 6px; overflow: hidden; margin-top: 4px; }
   .meter-fill { height: 100%; border-radius: 999px; transition: width 0.3s ease; }
   .sparkline-wrap { margin-top: 4px; }
+  #live-view-slot { position: relative; }
+  .live-view-img {
+    display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+    border-radius: 6px; background: #000; border: 1px solid var(--border);
+  }
+  /* Only ever rendered when a second, genuinely distinct camera sensor is
+     registered near the same track (see secondNearestCameraSensor()) --
+     never a fake/duplicate feed of the same camera the main view already
+     shows. */
+  .inset-view-img {
+    position: absolute; z-index: 2; right: 6px; bottom: 6px;
+    width: 84px; aspect-ratio: 16 / 9; object-fit: cover;
+    border-radius: 4px; background: #000; border: 1px solid rgba(255,255,255,0.6);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  }
   .heading-arrow { display: inline-block; font-size: 14px; }
+  /* --- Sensor-view tab strip (Live view/Quality/Signal/Radar/Image) --- */
+  .tab-strip { display: flex; gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+  button.tab-btn {
+    background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 0 0 7px 0; cursor: pointer;
+  }
+  button.tab-btn:hover { color: var(--text); }
+  button.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-empty { color: var(--muted); font-size: 12px; padding: 8px 0; font-style: italic; }
+  .snapshot-img { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--border); margin-top: 8px; }
+  /* --- Track list Verified/Unverified sub-tabs + collapsible group headers --- */
+  .verify-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  button.verify-tab-btn {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--muted); font-size: 11px; font-weight: 600; padding: 6px 0; cursor: pointer;
+  }
+  button.verify-tab-btn:hover { color: var(--text); }
+  button.verify-tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .group-header { cursor: pointer; user-select: none; }
+  .group-header .chevron { display: inline-block; transition: transform 0.15s ease; margin-right: 3px; font-size: 9px; }
+  .group-header.collapsed .chevron { transform: rotate(-90deg); }
   .playback-row { display: flex; align-items: center; gap: 8px; }
   .playback-row input[type="range"] { flex: 1; accent-color: var(--accent); }
   .playback-time { font-size: 11px; color: var(--muted); min-width: 74px; text-align: right; white-space: nowrap; }
@@ -497,25 +687,25 @@
   .label-more { font-size: 11px; color: var(--muted); padding: 6px 0 0; text-align: center; }
 
   /* --- Narrow viewport: the desktop layout's two side-by-side floating
-     panels (each 340-360px) plus the icon rail don't fit next to each
-     other below ~900px -- #details-panel's fixed right-anchored width
-     left its left edge overlapping the rail (which sits on top, z-index-
-     wise, silently clipping the panel's own back button under it) well
-     before that, too. Below 760px both panels go full-width (anchored
-     past the rail, which stays reachable) and stack instead of
-     overlapping: only one is ever visible at a time, and the rail's
-     already-active-icon-click (below) collapses the tracks/alerts/
+     panels (each 340-360px) don't fit next to each other below ~900px.
+     Below 760px both panels go full-width and stack instead of
+     overlapping: only one is ever visible at a time, and the nav's
+     already-active-button-click (below) collapses the tracks/alerts/
      sensors panel entirely so the map itself is reachable, not just
-     visible in the gaps around a panel that otherwise never closes. --- */
+     visible in the gaps around a panel that otherwise never closes. The
+     nav itself drops each button's text label and keeps just its icon +
+     alert badge, the same "compact but still reachable" shape the old
+     icon-only rail had, so five text-labeled nav buttons don't overflow
+     the 40px top bar next to the title and theme toggle. --- */
   @media (max-width: 760px) {
-    #left-panel, #details-panel { left: 60px; right: 12px; width: auto; }
+    #left-panel, #details-panel { left: 12px; right: 12px; width: auto; }
     body.details-open #left-panel { display: none; }
     #map-legend { display: none; }
-    #map-layer-toggles {
-      left: 60px; right: 12px; transform: none;
-      justify-content: space-around; font-size: 10px;
-    }
+    #map-layer-toggles { justify-content: space-around; }
+    #map-layer-toggles label { padding: 4px 8px; font-size: 10px; }
     header.topbar .topbar-left h1 { display: none; }
+    .rail-btn { padding: 0 8px; }
+    .rail-btn .rail-label { display: none; }
   }
 
   /* --- After-action incident report: printed via window.print(), never
@@ -561,15 +751,40 @@
   <div class="topbar-left">
     <span class="brand-mark" aria-hidden="true">&#9670;</span>
     <h1>Drone Multi-Sensor</h1>
-    <span class="live-dot" aria-hidden="true"></span>
+    <span class="live-dot" id="conn-status-dot" title="Connection status"></span>
     <div id="status-line">loading…</div>
   </div>
+  <nav id="icon-rail" aria-label="Panel selector">
+    <button class="rail-btn active" data-panel="tracks" title="Tracks (Alt+1)" aria-label="Tracks" aria-pressed="true">
+      <span class="rail-icon" aria-hidden="true">&#9635;</span><span class="rail-label">Tracks</span>
+    </button>
+    <button class="rail-btn" data-panel="alerts" title="Alerts (Alt+2)" aria-label="Alerts" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9650;</span><span class="rail-label">Alerts</span><span class="rail-badge" id="alerts-badge" aria-hidden="true"></span>
+    </button>
+    <button class="rail-btn" data-panel="sensors" title="Sensor Health (Alt+3)" aria-label="Sensor health" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9738;</span><span class="rail-label">Sensors</span>
+    </button>
+    <button class="rail-btn" data-panel="zones" title="Zones (Alt+4)" aria-label="Zones" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#11040;</span><span class="rail-label">Zones</span>
+    </button>
+    <button class="rail-btn" data-panel="reports" title="Incident Reports (Alt+5)" aria-label="Incident reports" aria-pressed="false">
+      <span class="rail-icon" aria-hidden="true">&#9776;</span><span class="rail-label">Reports</span>
+    </button>
+  </nav>
   <div class="topbar-right">
     <span id="whoami" style="display:none; margin-right:8px; color:var(--muted);"></span>
     <a id="sso-logout-link" href="/auth/logout" class="secondary" style="display:none; margin-right:8px;">Log out</a>
+    <div style="position:relative;">
+      <button id="notif-bell-btn" class="icon-btn" title="Notifications" aria-label="Notifications">
+        <span aria-hidden="true">&#128276;</span><span id="notif-badge" aria-hidden="true"></span>
+      </button>
+      <div id="notif-panel" class="notif-panel" hidden></div>
+    </div>
     <button id="theme-toggle" class="secondary" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">&#9788;</button>
   </div>
 </header>
+
+<button id="alert-banner" type="button"></button>
 
 <div id="auth-bar" style="display:none; padding:10px 20px; background:#2a1620; border-bottom:1px solid var(--border); gap:8px; align-items:center;">
   <span style="color:var(--drone);">API key required or rejected.</span>
@@ -595,25 +810,15 @@
     <label><input type="checkbox" id="toggle-vectors" checked> Vectors</label>
     <label><input type="checkbox" id="toggle-uncertainty" checked> Uncertainty</label>
     <label><input type="checkbox" id="toggle-sensors" checked> Sensors</label>
+    <label><input type="checkbox" id="toggle-zones" checked> Zones</label>
+    <label><input type="checkbox" id="toggle-labels" checked> Labels</label>
+    <button type="button" id="toggle-track-labels" class="layer-toggle-chip" title="Cycles an always-visible per-track map label: Off, Compact (ID + risk), Full (adds classification/verification)">Track labels: Off</button>
   </div>
 
-  <nav id="icon-rail" aria-label="Panel selector">
-    <button class="rail-btn active" data-panel="tracks" title="Tracks (Alt+1)" aria-label="Tracks" aria-pressed="true">
-      &#9635;
-    </button>
-    <button class="rail-btn" data-panel="alerts" title="Alerts (Alt+2)" aria-label="Alerts" aria-pressed="false">
-      &#9650;<span class="rail-badge" id="alerts-badge" aria-hidden="true"></span>
-    </button>
-    <button class="rail-btn" data-panel="sensors" title="Sensor Health (Alt+3)" aria-label="Sensor health" aria-pressed="false">
-      &#9738;
-    </button>
-    <button class="rail-btn" data-panel="zones" title="Zones (Alt+4)" aria-label="Zones" aria-pressed="false">
-      &#11040;
-    </button>
-    <button class="rail-btn" data-panel="reports" title="Incident Reports (Alt+5)" aria-label="Incident reports" aria-pressed="false">
-      &#9776;
-    </button>
-  </nav>
+  <div id="map-verify-filter" style="display:none;">
+    <div class="map-verify-row" id="map-verify-row-verified"><span class="row-label">Verified</span></div>
+    <div class="map-verify-row" id="map-verify-row-unverified"><span class="row-label">Unverified</span></div>
+  </div>
 
   <aside class="floating-panel" id="left-panel">
     <div class="panel-header">
@@ -621,6 +826,10 @@
     </div>
 
     <div id="left-panel-search">
+      <div id="verify-tabs" class="verify-tabs">
+        <button class="verify-tab-btn" data-verify="verified" id="verify-tab-verified" title="Corroborated by 2+ independent sensor types">Verified</button>
+        <button class="verify-tab-btn active" data-verify="unverified" id="verify-tab-unverified" title="Reported by only one sensor type so far">Unverified</button>
+      </div>
       <div class="search-box">
         <input id="search-input" type="text" placeholder="Search ID, UID, class, status…" title="Also matches classification, status, and aircraft category (e.g. &quot;rotor&quot;) — press / to focus, Esc to clear">
         <button id="search-clear" type="button" aria-label="Clear search">&times;</button>
@@ -631,6 +840,7 @@
         <select id="track-sort" aria-label="Sort tracks by">
           <option value="recent">Most recent</option>
           <option value="alerts">Alerts first</option>
+          <option value="risk">Risk: highest first</option>
           <option value="altitude">Altitude: high to low</option>
           <option value="speed">Speed: fastest first</option>
         </select>
@@ -728,11 +938,60 @@
 // different replica processed.
 const POLL_MS = 15000;
 
+function loadCollapsedGroups() {
+  try {
+    const raw = localStorage.getItem("droneCollapsedGroups");
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (e) {
+    return new Set(); // private mode, corrupt value, etc.
+  }
+}
+
+function saveCollapsedGroups(groups) {
+  try { localStorage.setItem("droneCollapsedGroups", JSON.stringify([...groups])); } catch (e) { /* private mode etc. */ }
+}
+
 const state = {
   tracks: [], incidents: [], zones: [], sensors: [], allZones: [], sensorRegistrations: [],
   selectedTrackId: null, trail: [], trailDetections: [], classFilter: "all", search: "",
   follow: false, showTrail: true, showUncertainty: true, showVectors: true, showSensors: true,
+  showZones: true, showLabels: true,
+  // "off" | "compact" | "full" -- an always-visible label per unselected
+  // track marker (see renderMap()), cycled via #toggle-track-labels.
+  // Distinct from showLabels above, which only ever controls the zone
+  // name label -- kept separate rather than overloading one flag for two
+  // different things with two different default expectations.
+  trackLabelMode: "off",
   activePanel: "tracks",
+  // Which sub-tab of the sensor-view tab strip (Live view/Quality/Signal/
+  // Radar/Image) is showing in the details panel -- see renderDetails().
+  detailsTab: "live",
+  // "verified" | "unverified" -- which half of the Tracks panel's list is
+  // showing (see the Verified/Unverified sub-tabs above the class filters).
+  trackVerifiedTab: "unverified",
+  // Group headers (Friendly/Drone/Aircraft/...) collapsed by a click on
+  // their own chevron -- a Set of classification strings, not a single
+  // bool, since each group collapses independently. Persisted to
+  // localStorage (see the click handler in renderTracks()) so a group an
+  // operator collapsed to focus on unknown activity stays collapsed
+  // across a full page reload, not just across poll cycles.
+  collapsedGroups: loadCollapsedGroups(),
+  // sensor_id -> the last computed slew-to-cue result (GET /api/tracks/
+  // {id}/cue/{sensor_id}) shown under the Live view tab -- cached so
+  // switching tabs and back doesn't refetch, cleared on track reselection.
+  cameraCue: null,
+  // Which diamonds render on the *map* (independent of trackVerifiedTab
+  // above, which only affects the Tracks list) -- a classification
+  // excluded from a given verified/unverified bucket, nothing excluded by
+  // default, see #map-verify-filter's doc comment near its CSS.
+  mapClassExcluded: { verified: new Set(), unverified: new Set() },
+  // Set by loadWhoami() once GET /api/me resolves -- null until then (or
+  // forever, best-effort, if that call fails). Only ever gates whether
+  // the Timeline tab *attempts* the admin-only GET /api/audit-log for
+  // classification-change entries; every other role still sees the rest
+  // of the timeline (detection/zone/incident events), which needs no
+  // special access.
+  myRole: null,
   // null == showing each track's live position; otherwise an index into
   // `trail` (the selected track's full history, oldest first) being
   // scrubbed to via the Playback slider in the details panel.
@@ -800,8 +1059,39 @@ const CLASS_COLOR_HEX = {
   drone: "#ef4444", aircraft: "#3b82f6", bird: "#22c55e",
   friendly: "#14b8b0", unknown: "#8b93a7",
 };
-const STATUS_COLOR = { active: "var(--active)", lost: "var(--lost)", closed: "var(--closed)" };
-const SEVERITY_COLOR = { critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)" };
+const STATUS_COLOR = {
+  active: "var(--active)", coasting: "var(--stale)", lost: "var(--lost)", closed: "var(--closed)",
+};
+// Half of app.config's default TRACK_STALE_SECONDS (30s, the point at
+// which the server itself moves a track active -> lost) -- this dashboard
+// has no live-config endpoint to read the real value from, so this is a
+// fixed, documented approximation, purely a display refinement of what
+// "gone quiet but not lost yet" means; it never changes what the server
+// actually considers the track's status to be.
+const COASTING_THRESHOLD_S = 15;
+
+function trackAgeS(t) {
+  const then = new Date(t.last_seen + (t.last_seen.endsWith("Z") ? "" : "Z")).getTime();
+  return (Date.now() - then) / 1000;
+}
+
+// "Coasting": still active server-side, but quiet long enough that its
+// shown position is an extrapolation rather than a fresh report -- see
+// renderMap()'s dead-reckoning line for the same idea drawn on the map.
+function isCoasting(t) {
+  return t.status === "active" && trackAgeS(t) > COASTING_THRESHOLD_S;
+}
+
+function displayStatus(t) {
+  return isCoasting(t) ? "coasting" : t.status;
+}
+const SEVERITY_COLOR = {
+  critical: "var(--critical)", high: "var(--high)", medium: "var(--medium)", low: "var(--low)",
+  info: "var(--muted)",
+};
+const INCIDENT_STATUS_COLOR = {
+  open: "var(--drone)", acknowledged: "var(--medium)", investigating: "var(--accent)", resolved: "var(--lost)",
+};
 const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
 
 // The active (non-resolved) incidents for one track, worst severity first
@@ -831,6 +1121,7 @@ async function fetchJSON(url, opts) {
   const res = await fetch(url, { ...opts, headers });
   if (res.status === 401) throw new AuthError(`${url} -> 401`);
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  if (res.status === 204) return null; // no body to parse (e.g. POST .../verify-visual)
   return res.json();
 }
 
@@ -868,6 +1159,7 @@ async function loadWhoami() {
   const logoutEl = document.getElementById("sso-logout-link");
   try {
     const me = await fetchJSON("/api/me");
+    state.myRole = me.role;
     whoamiEl.textContent = `${me.name} (${me.role})`;
     whoamiEl.style.display = "inline";
     // A "Log out" link only makes sense for an SSO session -- a static
@@ -918,6 +1210,37 @@ function fmtRelative(iso) {
   return `${Math.round(diffH / 24)}d ago`;
 }
 
+// The mirror of fmtRelative for a *future* timestamp -- Track.ignored_until,
+// specifically. "expired" rather than a negative duration if it's somehow
+// already passed by the time this renders (a real, if narrow, race between
+// a poll landing and the expiry ticking over).
+function fmtUntil(iso) {
+  if (!iso) return "—";
+  const then = new Date(iso + (iso.endsWith("Z") ? "" : "Z")).getTime();
+  const diffS = Math.round((then - Date.now()) / 1000);
+  if (diffS <= 0) return "expired";
+  if (diffS < 60) return `${diffS}s`;
+  const diffM = Math.round(diffS / 60);
+  if (diffM < 60) return `${diffM}m`;
+  const diffH = Math.round(diffM / 60);
+  return `${diffH}h`;
+}
+
+// How long a track has existed (first_seen -> now), MM:SS below an hour
+// and H:MM:SS above it -- the "Duration" column a track list like this
+// conventionally shows, real elapsed wall-clock time from Track.first_seen,
+// not a guess or a countdown.
+function fmtDuration(firstSeenIso) {
+  if (!firstSeenIso) return "—";
+  const then = new Date(firstSeenIso + (firstSeenIso.endsWith("Z") ? "" : "Z")).getTime();
+  const totalS = Math.max(0, Math.round((Date.now() - then) / 1000));
+  const h = Math.floor(totalS / 3600);
+  const m = Math.floor((totalS % 3600) / 60);
+  const s = totalS % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -935,9 +1258,315 @@ function badgeOutline(text, color) {
   return `<span class="badge-outline" style="color:${color}">${escapeHtml(text)}</span>`;
 }
 
+// A plain corroboration-count tier, not a confidence score of its own --
+// track.corroborating_sensor_types is the real number this reads off of
+// (the same one Verified/Unverified already uses); this only relabels it
+// the way an operator thinks about it ("how many independent sources
+// agree") rather than asking them to interpret a raw integer.
+function confidenceTier(sourceCount) {
+  if (sourceCount == null) return null;
+  if (sourceCount >= 3) return { label: "High confidence", color: "var(--active)" };
+  if (sourceCount === 2) return { label: "Moderate confidence", color: "var(--stale)" };
+  if (sourceCount === 1) return { label: "Low confidence", color: "var(--muted)" };
+  return null;
+}
+
+const ZONE_STATUS_LABEL = { inside: "Inside protected zone", approaching: "Approaching protected zone" };
+const ZONE_STATUS_COLOR = { inside: "var(--high)", approaching: "var(--stale)" };
+
 function headingArrow(headingDeg) {
   if (headingDeg == null) return "";
   return `<span class="heading-arrow" style="display:inline-block;transform:rotate(${headingDeg}deg)">&#8593;</span>`;
+}
+
+// Initial great-circle bearing from (lat1,lon1) to (lat2,lon2), 0-360
+// clockwise from true north -- the inverse of destinationPoint() above
+// (which goes bearing+distance -> a point; this goes two points ->
+// bearing), needed for the radar polar view below since a track's own
+// record only ever carries its *own* heading (direction of travel), not
+// its bearing *from* a given sensor.
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2))
+    - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+// The nearest *registered, active* sensor to a track, plus this track's
+// real bearing and range from it -- what the radar polar view plots.
+// "Nearest" rather than "whichever sensor actually detected this track"
+// because Track carries no such link (many sensors can contribute
+// detections to the same fused track); nearest is the honest, always-
+// available stand-in, not a claim about which sensor is watching it.
+function nearestSensorBearingRange(track) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const candidates = state.sensorRegistrations.filter(
+    (s) => s.active && s.latitude != null && s.longitude != null
+  );
+  if (candidates.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of candidates) {
+    const rangeM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || rangeM < best.rangeM) {
+      best = { sensorId: s.sensor_id, rangeM, bearingDeg: bearingDeg(s.latitude, s.longitude, track.latitude, track.longitude) };
+    }
+  }
+  return best;
+}
+
+// The nearest active *camera* sensor to a track (distinct from
+// nearestSensorBearingRange above, which considers every sensor type --
+// a live view is only ever meaningful for a camera) -- used to decide
+// whether the details panel's Live view section has anything to show.
+function nearestCameraSensor(track) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const cameras = state.sensorRegistrations.filter(
+    (s) => s.active && s.sensor_type === "camera" && s.latitude != null && s.longitude != null
+  );
+  if (cameras.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of cameras) {
+    const distanceM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || distanceM < best.distanceM) best = { sensorId: s.sensor_id, distanceM };
+  }
+  return best;
+}
+
+// A second, distinct camera near the same track -- used for the details
+// panel's inset thumbnail. Deliberately returns null unless a genuinely
+// different camera sensor (not the one nearestCameraSensor already
+// picked) is registered and in range: an inset thumbnail duplicating the
+// same feed the main view already shows would be fake UI, not a real
+// second angle.
+function secondNearestCameraSensor(track, excludeSensorId) {
+  if (track.latitude == null || track.longitude == null) return null;
+  const cameras = state.sensorRegistrations.filter(
+    (s) => s.active && s.sensor_type === "camera" && s.sensor_id !== excludeSensorId
+      && s.latitude != null && s.longitude != null
+  );
+  if (cameras.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const s of cameras) {
+    const distanceM = here.distanceTo(L.latLng(s.latitude, s.longitude));
+    if (best === null || distanceM < best.distanceM) best = { sensorId: s.sensor_id, distanceM };
+  }
+  return best;
+}
+
+// This track's most recent detection that actually carries raw_data --
+// real per-sensor signal fields an adapter reported (RF center
+// frequency/bandwidth, acoustic bearing_confidence, camera motion area,
+// ...), which vary by sensor_type and aren't otherwise surfaced anywhere
+// in this panel. Not every detection carries one (a plain lat/lon report
+// often doesn't), so this is the most recent one that does, not just the
+// most recent detection outright.
+function latestSignalDetection(track) {
+  const withSignal = state.trailDetections.filter((d) => d.raw_data && Object.keys(d.raw_data).length > 0);
+  if (withSignal.length === 0) return null;
+  return withSignal.slice().sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))[0];
+}
+
+// One persistent <img> (and its open MJPEG connection), reused across
+// renderDetails() calls instead of recreated by them -- that function
+// replaces #track-details' entire innerHTML on every refresh (every
+// poll cycle and every WebSocket push), which would otherwise tear down
+// and reopen the live-view stream every few seconds instead of showing
+// one continuous feed. Moving the *same* element into the freshly-built
+// DOM (appendChild on an element that already has a parent detaches it
+// from the old one first) is what actually preserves the connection --
+// creating a new <img> with the same src would not.
+let liveViewImg = null;
+let liveViewFallback = null;
+let liveViewSensorId = null;
+
+function ensureLiveViewElements() {
+  if (liveViewImg) return;
+  liveViewImg = document.createElement("img");
+  liveViewImg.className = "live-view-img";
+  liveViewFallback = document.createElement("div");
+  liveViewFallback.className = "empty";
+  liveViewFallback.style.cssText = "padding:4px 0; display:none;";
+  liveViewFallback.textContent = "Camera unreachable, not registered with a live stream URL, or the "
+    + "server's camera extras (opencv) aren't installed -- see the README's \"Live view\" section.";
+  liveViewImg.addEventListener("error", () => {
+    liveViewFallback.style.display = "block";
+    liveViewImg.style.display = "none";
+    setCameraStateLabel("Camera unreachable", "var(--high)");
+  });
+  liveViewImg.addEventListener("load", () => setCameraStateLabel("Live", "var(--active)"));
+}
+
+// Only three honest states -- never "searching"/"acquired"/"following"/
+// "locked", which would imply closed-loop visual tracking this app
+// doesn't do. A no-op if the Live view tab isn't the one currently
+// showing (the element only exists in that tab's rendered content).
+function setCameraStateLabel(text, color) {
+  const el = document.getElementById("camera-state-label");
+  if (el) { el.textContent = text; el.style.color = color; }
+}
+
+// Same persistent-element/appendChild pattern as liveViewImg above, and
+// for the same reason: renderDetails() rebuilds the whole panel's HTML on
+// every refresh, and a plain <img src> would otherwise reopen its MJPEG
+// connection every poll cycle instead of showing one continuous feed.
+let insetViewImg = null;
+let insetViewSensorId = null;
+
+function ensureInsetViewElements() {
+  if (insetViewImg) return;
+  insetViewImg = document.createElement("img");
+  insetViewImg.className = "inset-view-img";
+  // A second camera can go unreachable independently of the main one --
+  // hide the inset rather than show a broken-image icon over the main feed.
+  insetViewImg.addEventListener("error", () => { insetViewImg.style.display = "none"; });
+  insetViewImg.addEventListener("load", () => { insetViewImg.style.display = "block"; });
+}
+
+function attachInsetView(secondCamera) {
+  if (!secondCamera) {
+    insetViewSensorId = null;
+    if (insetViewImg) insetViewImg.remove();
+    return;
+  }
+  const slot = document.getElementById("live-view-slot");
+  if (!slot) return;
+  ensureInsetViewElements();
+  if (secondCamera.sensorId !== insetViewSensorId) {
+    insetViewSensorId = secondCamera.sensorId;
+    insetViewImg.alt = `Live view from ${secondCamera.sensorId}`;
+    insetViewImg.title = `${secondCamera.sensorId} · ${Math.round(secondCamera.distanceM)} m away`;
+    insetViewImg.src = `/api/sensors/${encodeURIComponent(secondCamera.sensorId)}/live`
+      + (apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "");
+  }
+  slot.appendChild(insetViewImg);
+}
+
+function stopInsetView() {
+  if (insetViewImg) { insetViewImg.src = ""; insetViewImg.remove(); }
+  insetViewSensorId = null;
+}
+
+function attachLiveView(nearestCamera) {
+  const slot = document.getElementById("live-view-slot");
+  if (!slot || !nearestCamera) {
+    liveViewSensorId = null;
+    return;
+  }
+  ensureLiveViewElements();
+  if (nearestCamera.sensorId !== liveViewSensorId) {
+    liveViewSensorId = nearestCamera.sensorId;
+    liveViewImg.style.display = "block";
+    liveViewFallback.style.display = "none";
+    liveViewImg.alt = `Live view from ${nearestCamera.sensorId}`;
+    liveViewImg.src = `/api/sensors/${encodeURIComponent(nearestCamera.sensorId)}/live`
+      + (apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "");
+  }
+  slot.appendChild(liveViewImg);
+  slot.appendChild(liveViewFallback);
+  // renderDetails() rebuilds the whole tab's HTML (including the state
+  // label's default "connecting…" text) on every refresh, even when the
+  // persistent <img> itself is already showing a live, unchanged stream
+  // -- restore the label to what's actually true right now rather than
+  // implying every poll re-connects from scratch.
+  if (liveViewFallback.style.display === "block") setCameraStateLabel("Camera unreachable", "var(--high)");
+  else if (liveViewImg.complete) setCameraStateLabel("Live", "var(--active)");
+  const distanceEl = document.getElementById("live-view-distance");
+  if (distanceEl) distanceEl.textContent = `${nearestCamera.sensorId} · ${Math.round(nearestCamera.distanceM)} m away`;
+  attachInsetView(secondNearestCameraSensor(state.tracks.find((t) => t.id === state.selectedTrackId), nearestCamera.sensorId));
+}
+
+function formatSignalKey(key) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatSignalValue(value) {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  if (typeof value === "object") return escapeHtml(JSON.stringify(value));
+  return escapeHtml(String(value));
+}
+
+// A radar-style polar plot -- concentric range rings, compass ticks,
+// true-north-up -- centered on the nearest registered sensor rather than
+// the track itself, the same reference frame a real radar/RF direction-
+// finder display uses. Distinct from the Leaflet map (geo-accurate,
+// north-up, shows everything at once): this is one track's bearing and
+// range from one sensor, at a glance, the way an operator reads a
+// dedicated radar scope rather than a general map. Ring spacing rounds
+// the track's range up to a "nice" scale (never a fixed one, so a track
+// at 80m and one at 8000m both plot legibly instead of one vanishing
+// into the plot's center or off its edge).
+function radarPolarSVG(nearest) {
+  // plotR + tick-label offset (18) must stay inside the viewBox's half-
+  // width, or N/E/S/W clip at the edges instead of rendering -- sized so
+  // 70 + 18 = 88 fits comfortably inside a 110-unit half-canvas.
+  const w = 220, h = 220, cx = 110, cy = 110, plotR = 70;
+  const scaleM = niceRadarScale(nearest.rangeM);
+  const r = Math.min((nearest.rangeM / scaleM) * plotR, plotR);
+  const angleRad = (nearest.bearingDeg * Math.PI) / 180;
+  const dotX = cx + r * Math.sin(angleRad);
+  const dotY = cy - r * Math.cos(angleRad);
+  const rings = [1 / 3, 2 / 3, 1].map((f) => `<circle cx="${cx}" cy="${cy}" r="${(plotR * f).toFixed(1)}" fill="none" stroke="currentColor" stroke-opacity="0.25"/>`).join("");
+  const ticks = [0, 90, 180, 270].map((deg) => {
+    const rad = (deg * Math.PI) / 180;
+    const x1 = cx + (plotR + 2) * Math.sin(rad), y1 = cy - (plotR + 2) * Math.cos(rad);
+    const x2 = cx + (plotR + 10) * Math.sin(rad), y2 = cy - (plotR + 10) * Math.cos(rad);
+    const label = { 0: "N", 90: "E", 180: "S", 270: "W" }[deg];
+    const lx = cx + (plotR + 18) * Math.sin(rad), ly = cy - (plotR + 18) * Math.cos(rad);
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="currentColor" stroke-opacity="0.5"/>
+      <text x="${lx.toFixed(1)}" y="${(ly + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">${label}</text>`;
+  }).join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Radar plot: bearing ${Math.round(nearest.bearingDeg)} degrees, range ${Math.round(nearest.rangeM)} meters from sensor ${escapeHtml(nearest.sensorId)}" style="display:block; margin:0 auto;">
+    ${rings}
+    ${ticks}
+    <line x1="${cx}" y1="${cy}" x2="${dotX.toFixed(1)}" y2="${dotY.toFixed(1)}" stroke="var(--drone)" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <circle cx="${cx}" cy="${cy}" r="3" fill="currentColor"/>
+    <circle cx="${dotX.toFixed(1)}" cy="${dotY.toFixed(1)}" r="5" fill="var(--drone)" stroke="var(--panel-glass-strong)" stroke-width="1.5"/>
+    <text x="${cx}" y="${h - 4}" text-anchor="middle" font-size="9" fill="currentColor" opacity="0.5">rings at ${fmtRadarScale(scaleM / 3)} / ${fmtRadarScale((scaleM * 2) / 3)} / ${fmtRadarScale(scaleM)}</text>
+  </svg>`;
+}
+
+// Rounds up to a scale a human reads at a glance (100m steps under 1km,
+// then 500m, then 1km/5km/10km tiers) -- never the raw range itself,
+// which would make the outer ring an oddly specific number like "furthest
+// ring: 1847m."
+function niceRadarScale(rangeM) {
+  const steps = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+  return steps.find((s) => rangeM <= s) || Math.ceil(rangeM / 100000) * 100000;
+}
+
+function fmtRadarScale(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(m % 1000 === 0 ? 0 : 1)}km` : `${Math.round(m)}m`;
+}
+
+// The nearest active zone's name and straight-line distance from a
+// track's current position, by centroid -- not "is this track inside a
+// zone" (app.incidents already answers that, with a real polygon-
+// containment check), but "how far is it from the nearest protected
+// area," a genuinely different, complementary question an operator
+// watching a track approach asks before it ever crosses a boundary.
+// Leaflet's own L.latLng().distanceTo() (geodesic, not flat-earth) does
+// the math -- the same one this file already trusts for the scale bar
+// and recenter/fit-bounds logic, not a second haversine implementation.
+function nearestZone(track) {
+  if (track.latitude == null || track.longitude == null || state.zones.length === 0) return null;
+  const here = L.latLng(track.latitude, track.longitude);
+  let best = null;
+  for (const zone of state.zones) {
+    if (!zone.polygon || zone.polygon.length === 0) continue;
+    const centroid = zone.polygon.reduce(
+      (acc, [lat, lon]) => [acc[0] + lat / zone.polygon.length, acc[1] + lon / zone.polygon.length],
+      [0, 0]
+    );
+    const distanceM = here.distanceTo(L.latLng(centroid[0], centroid[1]));
+    if (best === null || distanceM < best.distanceM) best = { name: zone.name, distanceM };
+  }
+  return best;
 }
 
 // Space-separated terms are ANDed, each matched against every searchable
@@ -971,6 +1600,17 @@ function visibleTracks() {
     if (state.classFilter !== "all" && t.classification !== state.classFilter) return false;
     return trackMatchesSearch(t, terms);
   });
+}
+
+// Verified/Unverified is a Tracks-*list* distinction only (see the
+// verify-tabs above the class filters) -- the map keeps showing every
+// track regardless of which sub-tab is active, the same way the
+// reference layout this was modeled on keeps a single combined map with
+// its own separate Verified/Unverified checkbox row, distinct from the
+// list's tabs. visibleTracks() itself (used by the map, search-highlight,
+// etc.) is deliberately untouched by trackVerifiedTab.
+function visibleTracksForList() {
+  return visibleTracks().filter((t) => (state.trackVerifiedTab === "verified" ? t.verified : !t.verified));
 }
 
 // --- Left-rail panel switching: Tracks / Alerts / Sensors share one
@@ -1039,6 +1679,18 @@ function toggleOrShowPanel(name) {
 function showDetailsPanel(show) {
   document.getElementById("details-panel").style.display = show ? "flex" : "none";
   document.body.classList.toggle("details-open", show);
+  if (!show) stopLiveView();
+}
+
+// Actually ends the open MJPEG connection (clearing .src, not just
+// hiding the element) -- closing the details panel without this would
+// leave a live camera stream running in the background indefinitely,
+// since attachLiveView()'s whole point is to *not* tear the connection
+// down on every re-render.
+function stopLiveView() {
+  if (liveViewImg) liveViewImg.src = "";
+  liveViewSensorId = null;
+  stopInsetView();
 }
 
 async function selectTrack(id) {
@@ -1046,6 +1698,7 @@ async function selectTrack(id) {
   state.trail = [];
   state.trailDetections = [];
   state.scrubIndex = null;
+  state.detailsTab = "live";
   stopPlayback();
   showDetailsPanel(true);
   renderTracks();
@@ -1168,6 +1821,22 @@ async function acknowledge(id) {
   }
 }
 
+// An operator's deliberate "I'm actively working this one" step, between
+// acknowledged and resolved -- see IncidentStatus.INVESTIGATING's
+// docstring in app/models.py. Only reachable from 'acknowledged'
+// (app.api.incidents enforces this server-side too), matching the same
+// review order acknowledge -> resolve already has.
+async function investigateIncident(id) {
+  try {
+    await fetchJSON(`/api/incidents/${id}/investigate`, { method: "POST" });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't start investigating this incident — try again.");
+    console.error(e);
+  }
+}
+
 // Nothing auto-resolves an incident (not even the offending track leaving
 // the zone/going stale) -- see app/incidents.py: this app treats
 // resolution as a deliberate operator judgment call ("we reviewed this
@@ -1183,6 +1852,76 @@ async function resolveIncident(id) {
   } catch (e) {
     if (e instanceof AuthError) showAuthBar(true);
     else showErrorToast("Couldn't resolve this incident — try again.");
+    console.error(e);
+  }
+}
+
+// An operator's deliberate override (POST /api/tracks/{id}/classify) --
+// distinct from the automated fusion ratchet that normally sets
+// Track.classification (see that field's own docstring, and
+// TrackClassificationInput's in app/models.py). "friendly"/"drone" are
+// the Friend/Foe calls; "unknown" is Neutral -- clearing a previous
+// override and letting automatic classification start fresh. Never a
+// bird/aircraft reclassification, which is what the sensor evidence
+// itself is for, not an operator's manual say-so.
+async function classifyTrack(id, classification) {
+  try {
+    await fetchJSON(`/api/tracks/${id}/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ classification }),
+    });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't update this track's classification — try again.");
+    console.error(e);
+  }
+}
+
+// An operator's "stop alerting on this" suppression (POST /api/tracks/
+// {id}/ignore) -- see Track.ignored/TrackIgnoreInput's docstrings in
+// app/models.py. durationMinutes omitted/null means "Indefinitely" (until
+// manually unignored); a number means it expires and reverts to normal
+// alerting on its own after that long, with no separate sweep job needed
+// (see app.db._row_to_track). Toggles both ways from the same call.
+async function setTrackIgnored(id, ignored, durationMinutes) {
+  try {
+    await fetchJSON(`/api/tracks/${id}/ignore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ignored, duration_minutes: durationMinutes ?? null }),
+    });
+    await refresh();
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast(`Couldn't ${ignored ? "ignore" : "unignore"} this track — try again.`);
+    console.error(e);
+  }
+}
+
+// A human operator's structured visual-verification judgment (POST
+// /api/tracks/{id}/verify-visual) -- confirmed / a different object / a
+// false detection / unable to determine, after actually comparing the
+// camera feed to what the sensors reported. Recorded to the audit log
+// only (surfaced on the Timeline tab for admins); never touches
+// Track.classification or risk_score, since this is a person's own
+// conclusion, not a new automated signal.
+async function submitVisualVerification(trackId, result, note) {
+  const statusEl = document.getElementById("visual-verify-status");
+  try {
+    await fetchJSON(`/api/tracks/${trackId}/verify-visual`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result, note }),
+    });
+    if (statusEl) {
+      statusEl.style.display = "block";
+      statusEl.textContent = "Recorded.";
+    }
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else showErrorToast("Couldn't record this visual verification — try again.");
     console.error(e);
   }
 }
@@ -1335,28 +2074,51 @@ const TRACK_SORT_COMPARATORS = {
     if (b.speed_mps == null) return -1;
     return b.speed_mps - a.speed_mps;
   },
+  // track.risk_score (app.risk.compute_risk_score) -- a plain point score
+  // from classification + verified + open-incident severity, not a
+  // proprietary ML ranking. Nulls (shouldn't happen once a track has been
+  // through GET /api/tracks, but defensive all the same) sort last.
+  risk: (a, b) => {
+    if (a.risk_score == null && b.risk_score == null) return a.last_seen < b.last_seen ? 1 : -1;
+    if (a.risk_score == null) return 1;
+    if (b.risk_score == null) return -1;
+    return b.risk_score - a.risk_score;
+  },
 };
 
 function renderTracks() {
   const el = document.getElementById("tracks-list");
-  const tracks = visibleTracks();
+  const matchingTracks = visibleTracks();
+  const tracks = visibleTracksForList();
   updatePanelHeaderCount();
+  updateVerifyTabCounts(matchingTracks);
+
   if (tracks.length === 0) {
-    // Two different empty states: nothing has ever come in yet (a fresh
-    // deployment or a demo with no sensor/simulator running), vs. real
-    // tracks exist but the current search/filter excludes all of them --
-    // "no tracks match your filter" would be actively misleading for the
-    // first case, and "waiting for sensor data" would be misleading for
-    // the second.
+    // Three different empty states: nothing has ever come in yet (a fresh
+    // deployment or a demo with no sensor/simulator running), tracks exist
+    // but the search/class filter excludes all of them, or tracks exist
+    // and pass those filters but none are in the active Verified/
+    // Unverified tab specifically -- each would be misleading in place of
+    // one of the others (e.g. "no tracks detected" when a single-sensor
+    // track is sitting right there under the other tab).
     if (state.tracks.length === 0) {
-      el.innerHTML = `<div class="empty-guidance">
-        <div class="empty-title">No tracks detected</div>
-        <div class="empty-body">Waiting for sensor data — a track appears here automatically once a detection is posted to <code>/api/detections</code>.</div>
-        <button id="simulate-tracks-btn">Simulate tracks</button>
+      // Compact, not the dominant thing on screen -- a live console's
+      // default state is "quietly waiting," not a large call-to-action
+      // competing with real security data once any does arrive. The
+      // actual "Simulate tracks" trigger now lives in the Sensors panel
+      // (a developer/test control, not a production affordance) --
+      // see renderSensors()'s dev-tools footer.
+      const lastPollText = state.sensors.length > 0 ? "sensors reporting normally" : "no sensors connected yet";
+      el.innerHTML = `<div class="empty-compact">
+        <div class="empty-compact-title">No active tracks</div>
+        <div class="empty-compact-body">All connected sensors are ${escapeHtml(lastPollText)}. A track appears here automatically once a detection comes in.</div>
+        <button class="secondary" id="view-sensor-health-btn">View sensor health</button>
       </div>`;
-      document.getElementById("simulate-tracks-btn").addEventListener("click", simulateDemoTracks);
-    } else {
+      document.getElementById("view-sensor-health-btn").addEventListener("click", () => showPanel("sensors"));
+    } else if (matchingTracks.length === 0) {
       el.innerHTML = '<div class="empty">No tracks match your search/filter.</div>';
+    } else {
+      el.innerHTML = `<div class="empty">No ${state.trackVerifiedTab} tracks right now.</div>`;
     }
     return;
   }
@@ -1370,42 +2132,103 @@ function renderTracks() {
   el.innerHTML = GROUP_ORDER.filter((g) => byGroup.get(g) && byGroup.get(g).length > 0)
     .map((g) => {
       const groupTracks = byGroup.get(g).slice().sort(TRACK_SORT_COMPARATORS[trackSort] || TRACK_SORT_COMPARATORS.recent);
+      const collapsed = state.collapsedGroups.has(g);
       const cards = groupTracks
         .map((t) => {
           const sel = t.id === state.selectedTrackId ? "selected" : "";
-          const pos = t.latitude != null ? `${t.latitude.toFixed(4)}, ${t.longitude.toFixed(4)}` : "no position";
           const speed = t.speed_mps != null ? `${t.speed_mps.toFixed(1)} m/s` : null;
+          const altitude = t.altitude_m != null ? `${Math.round(t.altitude_m)} m` : null;
+          const heading = t.heading_deg != null ? `${Math.round(t.heading_deg)}°` : null;
+          const nz = nearestZone(t);
+          const zoneText = nz ? `${Math.round(nz.distanceM)} m from ${nz.name}` : null;
+          const metaParts = [
+            zoneText, altitude, heading, speed, `updated ${fmtRelative(t.last_seen)}`, `dur ${fmtDuration(t.first_seen)}`,
+          ].filter(Boolean);
           const incidents = activeIncidentsForTrack(t.id);
           const alertDot = incidents.length
             ? `<span class="track-alert-dot" style="background:${SEVERITY_COLOR[incidents[0].severity] || SEVERITY_COLOR.low}" title="${incidents.length} active alert${incidents.length > 1 ? "s" : ""} (${escapeHtml(incidents[0].severity)})"></span>`
             : "";
-          return `<div class="track-card ${sel}" data-id="${t.id}" aria-pressed="${t.id === state.selectedTrackId}">
+          // Real, not decorative: only shown when a registered camera is
+          // actually near enough to cue on this track (nearestCameraSensor,
+          // the same lookup the details panel's Live view tab uses).
+          const ptzBadge = nearestCameraSensor(t) ? `<span class="ptz-badge" title="A registered camera can cue on this track">PTZ</span>` : "";
+          const ignoredBadge = t.ignored ? `<span class="ignored-badge" title="New alerts suppressed for this track">Ignored</span>` : "";
+          const verifiedBadge = t.verified
+            ? `<span class="verified-badge" title="Corroborated by ${t.corroborating_sensor_types} independent sensor types">&#10003;${t.corroborating_sensor_types}</span>`
+            : "";
+          // Only surfaced once it's actually worth calling out at a glance
+          // (a low/zero score would just be noise on every single row) --
+          // the exact score and its full factor breakdown are always one
+          // click away in the details panel's Quality tab.
+          const riskBadge = t.risk_score != null && t.risk_score >= 5
+            ? `<span class="risk-badge" style="border-color:${t.risk_score >= 8 ? "var(--critical)" : t.risk_score >= 6 ? "var(--high)" : "var(--medium)"}; color:${t.risk_score >= 8 ? "var(--critical)" : t.risk_score >= 6 ? "var(--high)" : "var(--medium)"};" title="Risk ${t.risk_score}/10 -- see the Quality tab for why">RISK ${t.risk_score}</span>`
+            : "";
+          return `<div class="track-card ${sel} ${t.ignored ? "ignored" : ""}" data-id="${t.id}" data-risk="${t.risk_score ?? ""}" aria-pressed="${t.id === state.selectedTrackId}">
             <div class="track-thumb" aria-hidden="true">${classIcon(t.classification)}${alertDot}</div>
             <div class="track-card-body">
-              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))}</div>
+              <div class="track-card-title">Track ${t.id} &middot; ${escapeHtml(t.track_uid.slice(0, 8))} ${ptzBadge}${ignoredBadge}${verifiedBadge}${riskBadge}</div>
               <div class="track-card-sub">
-                <span class="status-dot" style="background:${STATUS_COLOR[t.status] || STATUS_COLOR.closed}"></span>
-                ${escapeHtml(t.status)} ${speed ? "&middot; " + speed : ""}
+                <span class="status-dot" style="background:${STATUS_COLOR[displayStatus(t)] || STATUS_COLOR.closed}"></span>
+                ${escapeHtml(displayStatus(t))}
               </div>
-              <div class="track-card-meta">${pos} &middot; ${fmtRelative(t.last_seen)}</div>
+              <div class="track-card-meta">${metaParts.join(" &middot; ") || "no position yet"}</div>
             </div>
           </div>`;
         })
         .join("");
-      return `<div class="group-header" style="color:${CLASS_COLOR[g] || CLASS_COLOR.unknown}">
-          ${GROUP_LABEL[g] || g} <span class="n">${groupTracks.length}</span>
-        </div>${cards}`;
+      return `<div class="group-header ${collapsed ? "collapsed" : ""}" data-group="${g}" style="color:${CLASS_COLOR[g] || CLASS_COLOR.unknown}">
+          <span><span class="chevron">&#9660;</span>${GROUP_LABEL[g] || g}</span> <span class="n">${groupTracks.length}</span>
+        </div>${collapsed ? "" : cards}`;
     })
     .join("");
 
+  el.querySelectorAll(".group-header").forEach((header) => {
+    header.addEventListener("click", () => {
+      const g = header.dataset.group;
+      if (state.collapsedGroups.has(g)) state.collapsedGroups.delete(g);
+      else state.collapsedGroups.add(g);
+      saveCollapsedGroups(state.collapsedGroups);
+      renderTracks();
+    });
+  });
   el.querySelectorAll(".track-card").forEach((card) => {
     makeKeyboardActivatable(card, () => selectTrack(Number(card.dataset.id)));
   });
 }
 
+// The topbar's red ALERT strip -- real open-incident state, not
+// decoration: shown only while at least one incident has status "open"
+// (app/incidents.py; an *acknowledged* incident has already been seen by
+// an operator, so it no longer needs to interrupt the whole screen the
+// way the rail's badge count -- open+acknowledged, non-resolved -- still
+// does for the Alerts panel itself). Clicking it jumps straight to the
+// Alerts panel rather than requiring a second click to find out what it's
+// about.
+function renderAlertBanner() {
+  const banner = document.getElementById("alert-banner");
+  const unacknowledged = state.incidents.filter((i) => i.status === "open");
+  if (unacknowledged.length === 0) {
+    banner.classList.remove("show");
+    document.body.classList.remove("has-alert-banner");
+    return;
+  }
+  const worst = unacknowledged.slice().sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
+  const plural = unacknowledged.length === 1 ? "" : "s";
+  banner.textContent = `⚠ ${unacknowledged.length} UNACKNOWLEDGED ALERT${plural} — `
+    + `${worst.severity.toUpperCase()}: ${worst.description || worst.incident_type}`;
+  // The click handler below reads this to jump straight to the actual
+  // track behind the worst unacknowledged alert, not just the Alerts
+  // list -- "—" (never a real id) when this incident has no associated
+  // track to select.
+  banner.dataset.worstTrackId = worst.track_id != null ? String(worst.track_id) : "";
+  banner.classList.add("show");
+  document.body.classList.add("has-alert-banner");
+}
+
 function renderAlerts() {
   const el = document.getElementById("alerts-list");
   const active = state.incidents.filter((i) => i.status !== "resolved");
+  renderAlertBanner();
   updatePanelHeaderCount();
   const badgeEl = document.getElementById("alerts-badge");
   const alertsRailBtn = document.querySelector('.rail-btn[data-panel="alerts"]');
@@ -1429,6 +2252,7 @@ function renderAlerts() {
   // post-incident review -- is still reachable once it's no longer active,
   // which is exactly when that review tends to happen.
   const zoneName = (id) => state.zones.find((z) => z.id === id)?.name ?? `zone ${id}`;
+  const trackExists = (id) => id != null && state.tracks.some((t) => t.id === id);
   el.innerHTML = state.incidents
     .slice()
     .sort((a, b) => (a.opened_at < b.opened_at ? 1 : -1))
@@ -1436,12 +2260,16 @@ function renderAlerts() {
       <div class="alert-item sev-${i.severity}">
         <div class="top-row">
           ${badge(i.severity, SEVERITY_COLOR[i.severity] || SEVERITY_COLOR.low)}
-          ${badgeOutline(i.status, i.status === "open" ? "var(--drone)" : "var(--lost)")}
+          ${badgeOutline(i.status, INCIDENT_STATUS_COLOR[i.status] || "var(--lost)")}
         </div>
         <div class="desc">${escapeHtml(i.description || i.incident_type)}${i.zone_id ? " · " + escapeHtml(zoneName(i.zone_id)) : ""}</div>
-        <div style="color:var(--muted); font-size:12px;">track ${i.track_id ?? "—"} · opened ${fmtRelative(i.opened_at)}</div>
-        <div style="margin-top:6px; display:flex; gap:6px;">
+        <div style="color:var(--muted); font-size:12px;">
+          track ${trackExists(i.track_id) ? `<a href="#" data-view-track-id="${i.track_id}">${i.track_id}</a>` : (i.track_id ?? "—")}
+          &middot; opened ${fmtRelative(i.opened_at)}${i.acknowledged_by ? ` &middot; acknowledged by ${escapeHtml(i.acknowledged_by)}` : ""}
+        </div>
+        <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;">
           ${i.status === "open" ? `<button data-ack-id="${i.id}">Acknowledge</button>` : ""}
+          ${i.status === "acknowledged" ? `<button class="secondary" data-investigate-id="${i.id}">Start investigation</button>` : ""}
           ${i.status !== "resolved" ? `<button class="secondary" data-resolve-id="${i.id}">Resolve</button>` : ""}
           <button class="secondary" data-report-id="${i.id}">Report</button>
         </div>
@@ -1451,11 +2279,21 @@ function renderAlerts() {
   el.querySelectorAll("button[data-ack-id]").forEach((btn) => {
     btn.addEventListener("click", () => acknowledge(Number(btn.dataset.ackId)));
   });
+  el.querySelectorAll("button[data-investigate-id]").forEach((btn) => {
+    btn.addEventListener("click", () => investigateIncident(Number(btn.dataset.investigateId)));
+  });
   el.querySelectorAll("button[data-resolve-id]").forEach((btn) => {
     btn.addEventListener("click", () => resolveIncident(Number(btn.dataset.resolveId)));
   });
   el.querySelectorAll("button[data-report-id]").forEach((btn) => {
     btn.addEventListener("click", () => openIncidentReport(Number(btn.dataset.reportId)));
+  });
+  el.querySelectorAll("a[data-view-track-id]").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectTrack(Number(link.dataset.viewTrackId));
+      showPanel("tracks");
+    });
   });
 }
 
@@ -1484,6 +2322,235 @@ function trailSparkline(trail) {
   </svg>`;
 }
 
+// --- Details panel sensor-view tabs (Live view/Quality/Signal/Radar/
+// Image) -- one tab strip switching a single content area, instead of
+// four permanently-stacked sections competing for scroll space. Each
+// tab's content function returns its own honest empty state when this
+// specific track/selection doesn't have that kind of data, rather than
+// hiding the tab itself (consistent chrome beats a tab strip that
+// reflows every time a camera happens to be nearby or not). -----------
+const DETAILS_TABS = [
+  { key: "live", label: "Live view" },
+  { key: "quality", label: "Quality" },
+  { key: "signal", label: "Signal" },
+  { key: "radar", label: "Radar" },
+  { key: "image", label: "Image" },
+  { key: "timeline", label: "Timeline" },
+];
+
+function renderLiveTabContent({ nearestCamera }) {
+  if (!nearestCamera) {
+    return `<div class="tab-empty">No camera sensor registered near this track.</div>`;
+  }
+  return `
+    <div id="live-view-slot"></div>
+    <div class="k" id="camera-state-label" style="margin-top:4px; font-size:11px; font-weight:600;">Camera available — connecting…</div>
+    <div class="k" id="live-view-distance" style="margin-top:6px;"></div>
+    <div class="kv" id="ptz-cue-row" style="margin-top:6px; display:none;">
+      <div class="k" title="The pan/tilt this camera would need to point at the track right now (GET /api/tracks/{id}/cue/{sensor_id}) -- read-only: nothing here sends a command to the camera.">PTZ cue</div>
+      <div class="v" id="ptz-cue-value">Computing…</div>
+    </div>
+    <div class="detail-actions" style="margin-top:10px;">
+      <button class="secondary" id="visual-verify-btn" aria-haspopup="true" aria-expanded="false"
+        title="Record what you actually see in this feed compared to what the sensors reported -- not an automated confirmation">Visual verification &#9662;</button>
+    </div>
+    <div class="detail-actions secondary" id="visual-verify-form" hidden>
+      <div style="display:flex; flex-direction:column; gap:6px; width:100%;">
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="confirmed" checked> Confirmed object</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="different_object"> Different object</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="false_detection"> False detection</label>
+        <label style="font-size:11px;"><input type="radio" name="visual-verify-result" value="unable_to_determine"> Unable to determine</label>
+        <textarea id="visual-verify-note" placeholder="Optional note…" rows="2"
+          style="background:var(--input-bg); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 6px; font-size:11px; resize:vertical;"></textarea>
+        <button id="visual-verify-submit">Record result</button>
+        <div id="visual-verify-status" class="k" style="display:none;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderQualityTabContent({ track, confidencePct, confidenceColor, maneuverPct, meterColor }) {
+  return `
+    <div class="kv">
+      <div class="k" title="How strongly current evidence backs the classification above -- can fall as the track goes stale, even though the label itself never downgrades">Confidence</div>
+      <div class="v">
+        ${confidencePct != null ? confidencePct + "%" : "—"}
+        <div class="meter"><div class="meter-fill" style="width:${confidencePct ?? 0}%; background:${confidenceColor}"></div></div>
+      </div>
+      <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
+      <div class="k">Maneuvering</div>
+      <div class="v">
+        ${maneuverPct != null ? maneuverPct + "%" : "—"}
+        <div class="meter"><div class="meter-fill" style="width:${maneuverPct ?? 0}%; background:${meterColor}"></div></div>
+      </div>
+    </div>
+    <div class="sparkline-wrap">
+      ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
+    </div>
+    ${track.risk_score != null ? `
+    <div class="risk-explain">
+      <div class="k" style="margin-bottom:4px;">Risk: ${track.risk_score}/10</div>
+      <ul class="risk-factor-list">
+        ${(track.risk_factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}
+      </ul>
+    </div>` : ""}
+  `;
+}
+
+function renderSignalTabContent({ signalDetection }) {
+  if (!signalDetection) {
+    return `<div class="tab-empty">No per-sensor signal data on this track yet.</div>`;
+  }
+  return `
+    <div class="kv">
+      <div class="k">Sensor</div><div class="v">${escapeHtml(signalDetection.sensor_id)} (${escapeHtml(signalDetection.sensor_type)})</div>
+      <div class="k">Confidence</div><div class="v">${Math.round(signalDetection.confidence * 100)}%</div>
+      ${Object.entries(signalDetection.raw_data)
+        .map(([k, v]) => `<div class="k">${escapeHtml(formatSignalKey(k))}</div><div class="v">${formatSignalValue(v)}</div>`)
+        .join("")}
+    </div>
+    <div class="k" style="margin-top:6px; font-size:10px;">${fmtRelative(signalDetection.timestamp)}</div>
+  `;
+}
+
+function renderRadarTabContent({ nearestSensor }) {
+  if (!nearestSensor) {
+    return `<div class="tab-empty">No registered sensors to plot a bearing from.</div>`;
+  }
+  return `
+    ${radarPolarSVG(nearestSensor)}
+    <div class="kv" style="margin-top:6px;">
+      <div class="k">Bearing</div><div class="v">${Math.round(nearestSensor.bearingDeg)}&deg; from ${escapeHtml(nearestSensor.sensorId)}</div>
+      <div class="k">Range</div><div class="v">${Math.round(nearestSensor.rangeM)} m</div>
+    </div>
+  `;
+}
+
+function renderImageTabContent({ nearestCamera }) {
+  if (!nearestCamera) {
+    return `<div class="tab-empty">No camera sensor registered near this track.</div>`;
+  }
+  return `
+    <div class="k">${escapeHtml(nearestCamera.sensorId)} &middot; ${Math.round(nearestCamera.distanceM)} m away</div>
+    <button class="secondary" id="snapshot-btn" style="margin-top:8px;">Take snapshot</button>
+    <div id="snapshot-result"></div>
+  `;
+}
+
+// A real chronological event list from data every viewer role already has
+// access to -- track creation plus this track's own incidents (opened and,
+// if applicable, closed/resolved) -- never a fabricated "camera assigned"/
+// "target acquired" style entry this app has no closed-loop capability to
+// back. Classification-change entries (from the admin-only audit log) are
+// appended afterward, asynchronously, only for an admin viewer -- see
+// fetchAndAppendTimelineAuditEntries below.
+function timelineEvents(track, related) {
+  const events = [{ at: track.first_seen, text: "Track first detected" }];
+  related.forEach((i) => {
+    const zoneLabel = i.incident_type.replace(/_/g, " ");
+    events.push({ at: i.opened_at, text: `${zoneLabel} incident opened (${i.severity})` });
+    if (i.closed_at) {
+      const closedLabel = i.description && i.description.includes("auto-closed") ? "auto-closed" : "closed";
+      events.push({ at: i.closed_at, text: `Incident ${closedLabel}` });
+    }
+  });
+  return events.sort((a, b) => (a.at < b.at ? -1 : 1));
+}
+
+function renderTimelineTabContent({ track, related }) {
+  const events = timelineEvents(track, related);
+  const rows = events
+    .map((e) => `<li data-at="${escapeHtml(e.at)}"><span class="timeline-time">${fmtTime(e.at)}</span> ${escapeHtml(e.text)}</li>`)
+    .join("");
+  const adminNote = state.myRole === "admin"
+    ? `<li id="timeline-audit-loading" class="tab-empty" style="padding:4px 0;">Loading operator actions…</li>`
+    : "";
+  return `<ul class="timeline-list" id="timeline-list">${rows}${adminNote}</ul>`;
+}
+
+// Classification/ignore changes come from the admin-only audit log (GET
+// /api/audit-log has no per-track filter, so this fetches a recent window
+// and filters client-side) -- appended once loaded rather than blocking
+// the synchronous tab render above, and never attempted at all for a
+// non-admin viewer (who'd just get a 403). A best-effort addition: the
+// rest of the timeline (detection/incident events) is already complete
+// and correct without it.
+async function fetchAndAppendTimelineAuditEntries(trackId) {
+  if (state.myRole !== "admin") return;
+  try {
+    const entries = await fetchJSON("/api/audit-log?limit=200");
+    const mine = entries.filter((e) => e.target === String(trackId) && e.action.startsWith("track."));
+    const list = document.getElementById("timeline-list");
+    const loading = document.getElementById("timeline-audit-loading");
+    if (!list) return; // the operator switched tabs/tracks before this resolved
+    if (loading) loading.remove();
+    const existing = Array.from(list.querySelectorAll("li[data-at]")).map((li) => ({
+      at: li.dataset.at, html: li.outerHTML,
+    }));
+    const auditRows = mine.map((e) => ({
+      at: e.occurred_at,
+      html: `<li data-at="${escapeHtml(e.occurred_at)}"><span class="timeline-time">${fmtTime(e.occurred_at)}</span> `
+        + `${escapeHtml(e.action.replace("track.", ""))}${e.detail ? " (" + escapeHtml(e.detail) + ")" : ""} `
+        + `by ${escapeHtml(e.actor)}</li>`,
+    }));
+    const merged = [...existing, ...auditRows].sort((a, b) => (a.at < b.at ? -1 : 1));
+    list.innerHTML = merged.map((r) => r.html).join("");
+  } catch (e) {
+    const loading = document.getElementById("timeline-audit-loading");
+    if (loading) loading.remove(); // fine as-is without this -- not worth an error toast
+    console.error(e);
+  }
+}
+
+const DETAILS_TAB_RENDERERS = {
+  live: renderLiveTabContent, quality: renderQualityTabContent, signal: renderSignalTabContent,
+  radar: renderRadarTabContent, image: renderImageTabContent, timeline: renderTimelineTabContent,
+};
+
+function renderDetailsTabContent(tabKey, ctx) {
+  return (DETAILS_TAB_RENDERERS[tabKey] || renderLiveTabContent)(ctx);
+}
+
+async function fetchAndShowPtzCue(trackId, cameraSensorId) {
+  const valueEl = document.getElementById("ptz-cue-value");
+  const rowEl = document.getElementById("ptz-cue-row");
+  if (!valueEl || !rowEl) return;
+  try {
+    const cue = await fetchJSON(`/api/tracks/${trackId}/cue/${encodeURIComponent(cameraSensorId)}`);
+    rowEl.style.display = "";
+    valueEl.textContent = `Pan ${cue.pan_deg.toFixed(0)}° · Tilt ${cue.tilt_deg.toFixed(0)}° · ${Math.round(cue.distance_m)} m`;
+  } catch (e) {
+    // A track with no resolved position yet (409) or similar -- the cue
+    // row just stays hidden rather than showing a scary error for
+    // something that resolves itself once the track has a position.
+    if (e instanceof AuthError) showAuthBar(true);
+  }
+}
+
+async function takeSnapshot(sensorId) {
+  const btn = document.getElementById("snapshot-btn");
+  const resultEl = document.getElementById("snapshot-result");
+  if (btn) { btn.disabled = true; btn.textContent = "Capturing…"; }
+  try {
+    const headers = apiKey ? { "X-API-Key": apiKey } : {};
+    const res = await fetch(`/api/sensors/${encodeURIComponent(sensorId)}/snapshot`, { headers });
+    if (res.status === 401) throw new AuthError("snapshot -> 401");
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `snapshot -> ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (resultEl) resultEl.innerHTML = `<img class="snapshot-img" src="${url}" alt="Snapshot from ${escapeHtml(sensorId)}">`;
+  } catch (e) {
+    if (e instanceof AuthError) showAuthBar(true);
+    else if (resultEl) resultEl.innerHTML = `<div class="tab-empty">${escapeHtml(e.message || "Couldn't capture a snapshot.")}</div>`;
+    console.error(e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Take snapshot"; }
+  }
+}
+
 function renderDetails() {
   const el = document.getElementById("track-details");
   const track = state.tracks.find((t) => t.id === state.selectedTrackId);
@@ -1502,6 +2569,10 @@ function renderDetails() {
   // color scale runs the opposite direction.
   const confidencePct = track.classification_confidence != null ? Math.round(track.classification_confidence * 100) : null;
   const confidenceColor = confidencePct == null ? "var(--border)" : confidencePct < 40 ? "var(--high)" : confidencePct < 70 ? "var(--medium)" : "var(--active)";
+  const nz = nearestZone(track);
+  const nearestSensor = nearestSensorBearingRange(track);
+  const nearestCamera = nearestCameraSensor(track);
+  const signalDetection = latestSignalDetection(track);
 
   el.innerHTML = `
     <div class="kv-section" style="padding-top:14px;">
@@ -1511,20 +2582,18 @@ function renderDetails() {
         ${badge(track.classification, CLASS_COLOR[track.classification])}
         <span>Track ${track.id}</span>
       </div>
-    </div>
-
-    <div class="detail-actions">
-      <button class="secondary" id="focus-btn">Focus</button>
-      <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
-    </div>
-    <div class="detail-actions secondary">
-      <button class="secondary" id="copy-btn" title="Copy this track's data as text">Copy</button>
-      <select id="export-format" aria-label="Export format">
-        <option value="csv">CSV</option>
-        <option value="gpx">GPX</option>
-        <option value="kml">KML</option>
-      </select>
-      <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
+      <div class="detail-subtitle-row">
+        ${(() => {
+          const tier = confidenceTier(track.corroborating_sensor_types);
+          return tier ? badgeOutline(tier.label, tier.color) : "";
+        })()}
+        ${track.zone_status && ZONE_STATUS_LABEL[track.zone_status]
+          ? badgeOutline(ZONE_STATUS_LABEL[track.zone_status], ZONE_STATUS_COLOR[track.zone_status])
+          : ""}
+        ${track.risk_score != null
+          ? `<span class="risk-inline" title="${escapeHtml((track.risk_factors || []).join("\n"))}">Risk ${track.risk_score}/10</span>`
+          : ""}
+      </div>
     </div>
 
     <div class="kv-section">
@@ -1543,7 +2612,7 @@ function renderDetails() {
     </div>
 
     <div class="kv-section">
-      <div class="kv-section-title">Position &amp; motion</div>
+      <div class="kv-section-title">Telemetry</div>
       <div class="kv-cols">
         <div class="kv">
           <div class="k">Position</div><div class="v">${track.latitude != null ? `${track.latitude.toFixed(5)}, ${track.longitude.toFixed(5)}` : "—"}</div>
@@ -1554,25 +2623,50 @@ function renderDetails() {
           <div class="k">Speed</div><div class="v">${track.speed_mps != null ? track.speed_mps.toFixed(1) + " m/s" : "—"}</div>
         </div>
       </div>
+      ${nz ? `<div class="kv" style="margin-top:6px;">
+        <div class="k" title="Straight-line distance to this zone's centroid, not whether the track is currently inside it -- see the Alerts panel for that.">Nearest zone</div>
+        <div class="v">${escapeHtml(nz.name)}: ${Math.round(nz.distanceM)} m</div>
+      </div>` : ""}
     </div>
 
     <div class="kv-section">
-      <div class="kv-section-title">Track quality</div>
-      <div class="kv">
-        <div class="k" title="How strongly current evidence backs the classification above -- can fall as the track goes stale, even though the label itself never downgrades">Confidence</div>
-        <div class="v">
-          ${confidencePct != null ? confidencePct + "%" : "—"}
-          <div class="meter"><div class="meter-fill" style="width:${confidencePct ?? 0}%; background:${confidenceColor}"></div></div>
-        </div>
-        <div class="k">Uncertainty</div><div class="v">${track.position_uncertainty_m != null ? "±" + Math.round(track.position_uncertainty_m) + " m" : "—"}</div>
-        <div class="k">Maneuvering</div>
-        <div class="v">
-          ${maneuverPct != null ? maneuverPct + "%" : "—"}
-          <div class="meter"><div class="meter-fill" style="width:${maneuverPct ?? 0}%; background:${meterColor}"></div></div>
-        </div>
+      <div class="kv-section-title">Action</div>
+      <div class="detail-actions">
+        <button class="secondary classify-btn" id="classify-friendly-btn" title="Mark as friendly -- an operator override, e.g. our own authorized drone">Friend</button>
+        <button class="secondary classify-btn danger" id="classify-foe-btn" title="Confirm as hostile -- an operator override">Foe</button>
+        <button class="secondary classify-btn" id="classify-neutral-btn" title="Clear a previous Friend/Foe override and let automatic classification start fresh">Neutral</button>
+        ${track.ignored
+          ? `<button class="secondary classify-btn active" id="ignore-toggle-btn" title="Stop suppressing alerts for this track">Unignore${track.ignored_until ? ` (${fmtUntil(track.ignored_until)})` : ""}</button>`
+          : `<button class="secondary classify-btn" id="ignore-toggle-btn" title="Suppress new alerts for this track (it keeps updating and tracking normally)" aria-haspopup="true" aria-expanded="false">Ignore &#9662;</button>`
+        }
       </div>
-      <div class="sparkline-wrap">
-        ${state.trail.length > 1 ? trailSparkline(state.trail) : `<div class="empty" style="padding:4px 0;">${state.trail.length ? "" : "loading trail…"}</div>`}
+      ${!track.ignored ? `
+      <div class="detail-actions secondary" id="ignore-duration-menu" hidden>
+        <button class="secondary" data-ignore-minutes="5">5 min</button>
+        <button class="secondary" data-ignore-minutes="30">30 min</button>
+        <button class="secondary" data-ignore-minutes="">Indefinitely</button>
+      </div>` : ""}
+      <div class="detail-actions">
+        <button class="secondary" id="focus-btn">Focus</button>
+        <button class="secondary ${state.follow ? "active" : ""}" id="follow-btn" aria-pressed="${state.follow}">${state.follow ? "Following" : "Follow"}</button>
+      </div>
+      <div class="detail-actions secondary">
+        <button class="secondary" id="copy-btn" title="Copy this track's data as text">Copy</button>
+        <select id="export-format" aria-label="Export format">
+          <option value="csv">CSV</option>
+          <option value="gpx">GPX</option>
+          <option value="kml">KML</option>
+        </select>
+        <button class="secondary" id="export-btn" title="Download this track's full detection history">Export</button>
+      </div>
+    </div>
+
+    <div class="kv-section">
+      <div class="tab-strip" role="tablist" aria-label="Sensor view">
+        ${DETAILS_TABS.map((t) => `<button class="tab-btn ${state.detailsTab === t.key ? "active" : ""}" data-tab="${t.key}" role="tab" aria-selected="${state.detailsTab === t.key}">${t.label}</button>`).join("")}
+      </div>
+      <div id="details-tab-content">
+        ${renderDetailsTabContent(state.detailsTab, { track, nearestCamera, nearestSensor, signalDetection, confidencePct, confidenceColor, maneuverPct, meterColor, related })}
       </div>
     </div>
 
@@ -1595,6 +2689,65 @@ function renderDetails() {
     </div>` : ""}
   `;
 
+  if (state.detailsTab === "live") {
+    attachLiveView(nearestCamera);
+    if (nearestCamera) fetchAndShowPtzCue(track.id, nearestCamera.sensorId);
+  } else {
+    stopLiveView();
+  }
+  if (state.detailsTab === "timeline") fetchAndAppendTimelineAuditEntries(track.id);
+  el.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.detailsTab = btn.dataset.tab;
+      renderDetails();
+    });
+  });
+  const snapshotBtn = document.getElementById("snapshot-btn");
+  if (snapshotBtn && nearestCamera) {
+    snapshotBtn.addEventListener("click", () => takeSnapshot(nearestCamera.sensorId));
+  }
+  const visualVerifyBtn = document.getElementById("visual-verify-btn");
+  if (visualVerifyBtn) {
+    const form = document.getElementById("visual-verify-form");
+    visualVerifyBtn.addEventListener("click", () => {
+      const opening = form.hidden;
+      form.hidden = !opening;
+      visualVerifyBtn.setAttribute("aria-expanded", String(opening));
+    });
+    document.getElementById("visual-verify-submit").addEventListener("click", () => {
+      const result = form.querySelector("input[name='visual-verify-result']:checked").value;
+      const note = document.getElementById("visual-verify-note").value.trim();
+      submitVisualVerification(track.id, result, note || null);
+    });
+  }
+  document.getElementById("classify-friendly-btn").addEventListener("click", () => classifyTrack(track.id, "friendly"));
+  document.getElementById("classify-foe-btn").addEventListener("click", () => {
+    // A Foe call is the highest-consequence override an operator can make
+    // here (it's what actually escalates an incident's severity via
+    // app.incidents' corroboration logic) -- worth one extra deliberate
+    // step, unlike Friend/Neutral which only ever calm things down.
+    if (window.confirm(`Confirm classification of Track ${track.id} as a threat (Foe)?`)) {
+      classifyTrack(track.id, "drone");
+    }
+  });
+  document.getElementById("classify-neutral-btn").addEventListener("click", () => classifyTrack(track.id, "unknown"));
+  if (track.ignored) {
+    document.getElementById("ignore-toggle-btn").addEventListener("click", () => setTrackIgnored(track.id, false));
+  } else {
+    const ignoreBtn = document.getElementById("ignore-toggle-btn");
+    const menu = document.getElementById("ignore-duration-menu");
+    ignoreBtn.addEventListener("click", () => {
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      ignoreBtn.setAttribute("aria-expanded", String(opening));
+    });
+    menu.querySelectorAll("button[data-ignore-minutes]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const raw = btn.dataset.ignoreMinutes;
+        setTrackIgnored(track.id, true, raw ? Number(raw) : null);
+      });
+    });
+  }
   document.getElementById("focus-btn").addEventListener("click", () => flyToTrack(track.id, { animate: true }));
   document.getElementById("follow-btn").addEventListener("click", () => {
     state.follow = !state.follow;
@@ -1746,6 +2899,10 @@ let zoneDrawLayer = null;
 // list (see renderZones()) can highlight the matching shape on the map
 // with a single setStyle() call instead of a full re-render.
 const zonePolygonLayers = new Map();
+// sensor_id -> its Leaflet marker, the same pattern as zonePolygonLayers
+// above -- lets the Sensors panel (renderSensors()) fly to/open a real
+// registered sensor's map marker instead of just listing it in a table.
+const sensorMarkerLayers = new Map();
 let mapFitted = false;
 
 function initMap() {
@@ -1789,7 +2946,6 @@ function initMap() {
   leafletMap.addControl(new RecenterControl());
 
   const osmAttr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
-  const cartoAttr = osmAttr + ' &copy; <a href="https://carto.com/attributions">CARTO</a>';
   const esriAttr = "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS community";
   // World_Topo_Map's real attribution differs from World_Imagery's above
   // (a different blend of source providers) -- verified against Esri's
@@ -1798,13 +2954,23 @@ function initMap() {
   const esriTopoAttr = "Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, "
     + "GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), "
     + '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community';
+  // Canvas/World_Dark_Gray_Base's own documented attribution -- replaces
+  // the former CARTO dark tile source so every base layer on this map
+  // comes from the same Esri ArcGIS Online org, not a mix of providers.
+  const esriDarkAttr = "Esri, HERE, Garmin, " + osmAttr + ", and the GIS User Community";
+  // World_Street_Map's own documented attribution -- replaces the former
+  // plain OpenStreetMap tile source for the same reason.
+  const esriStreetAttr = "Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, "
+    + "Esri China (Hong Kong), Esri Korea, Esri (Thailand), NGCC, " + osmAttr + ", and the GIS User Community";
 
-  const darkLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: cartoAttr, subdomains: "abcd", maxZoom: 19,
-  });
-  const roadLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: osmAttr, maxZoom: 19,
-  });
+  const darkLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { attribution: esriDarkAttr, maxZoom: 16 }
+  );
+  const roadLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    { attribution: esriStreetAttr, maxZoom: 19 }
+  );
   const satelliteLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     { attribution: esriAttr, maxZoom: 19 }
@@ -1893,6 +3059,22 @@ function initMap() {
   });
   document.getElementById("toggle-sensors").addEventListener("change", (e) => {
     state.showSensors = e.target.checked;
+    renderMap();
+  });
+  document.getElementById("toggle-zones").addEventListener("change", (e) => {
+    state.showZones = e.target.checked;
+    renderMap();
+  });
+  document.getElementById("toggle-labels").addEventListener("change", (e) => {
+    state.showLabels = e.target.checked;
+    renderMap();
+  });
+  const TRACK_LABEL_MODES = ["off", "compact", "full"];
+  document.getElementById("toggle-track-labels").addEventListener("click", (e) => {
+    const next = TRACK_LABEL_MODES[(TRACK_LABEL_MODES.indexOf(state.trackLabelMode) + 1) % TRACK_LABEL_MODES.length];
+    state.trackLabelMode = next;
+    e.target.textContent = `Track labels: ${next[0].toUpperCase()}${next.slice(1)}`;
+    e.target.classList.toggle("active", next !== "off");
     renderMap();
   });
 }
@@ -2024,6 +3206,36 @@ function altitudeColor(altitude_m) {
   return `hsl(${hue}, 80%, 55%)`;
 }
 
+// The selected map marker's tooltip content -- a quick summary plus which
+// sensor *types* actually corroborate this track
+// (track.contributing_sensor_types, the same set
+// app.fusion.contributing_sensor_types computes for the Verified/
+// Unverified grouping), so an operator can see at a glance why a track is
+// Verified without opening the full details panel. Real sensor types
+// that actually reported, never a fixed icon set implying coverage this
+// app doesn't have.
+function trackMapPopupHtml(track) {
+  const sensorBadges = (track.contributing_sensor_types || [])
+    .map((s) => badgeOutline(s, "var(--muted)"))
+    .join(" ");
+  const altitude = track.altitude_m != null ? `${Math.round(track.altitude_m)} m` : "—";
+  const speed = track.speed_mps != null ? `${track.speed_mps.toFixed(1)} m/s` : "—";
+  const heading = track.heading_deg != null ? `${Math.round(track.heading_deg)}°` : "—";
+  const confidencePct = track.classification_confidence != null ? Math.round(track.classification_confidence * 100) : null;
+  const zoneBadge = track.zone_status && ZONE_STATUS_LABEL[track.zone_status]
+    ? badgeOutline(ZONE_STATUS_LABEL[track.zone_status], ZONE_STATUS_COLOR[track.zone_status])
+    : "";
+  return `
+    <div style="min-width:170px;">
+      <div style="font-weight:600; margin-bottom:2px;">Track ${track.id} &middot; ${escapeHtml(GROUP_LABEL[track.classification] || track.classification)}</div>
+      <div style="font-size:11px; color:var(--muted);">${track.verified ? "Verified" : "Unverified"}${sensorBadges ? " &middot; " + sensorBadges : ""}</div>
+      <div style="font-size:11px; margin-top:4px;">Alt ${altitude} &middot; ${speed} &middot; ${heading}</div>
+      ${confidencePct != null ? `<div style="font-size:11px; margin-top:2px;">Confidence ${confidencePct}%</div>` : ""}
+      ${track.risk_score != null || zoneBadge ? `<div style="margin-top:4px;">${track.risk_score != null ? `<span class="risk-inline" style="margin-right:4px;">Risk ${track.risk_score}/10</span>` : ""}${zoneBadge}</div>` : ""}
+    </div>
+  `;
+}
+
 function markerIcon(track, selected) {
   let color = CLASS_COLOR_HEX[track.classification] || CLASS_COLOR_HEX.unknown;
   if (track.classification === "aircraft") {
@@ -2062,18 +3274,27 @@ function renderMap() {
   trackLayer.clearLayers();
 
   zonePolygonLayers.clear();
-  state.zones.forEach((z) => {
-    const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
-    const layer = L.polygon(z.polygon, {
-      color,
-      weight: 1.5,
-      fillColor: color,
-      fillOpacity: 0.08,
-    })
-      .bindPopup(`${escapeHtml(z.name)} <span style="color:var(--muted);">(${escapeHtml(z.zone_type)})</span>`)
-      .addTo(zoneLayer);
-    zonePolygonLayers.set(z.id, layer);
-  });
+  if (state.showZones) {
+    state.zones.forEach((z) => {
+      const color = ZONE_TYPE_COLOR[z.zone_type] || ZONE_TYPE_COLOR.monitoring;
+      const layer = L.polygon(z.polygon, {
+        color,
+        weight: 1.5,
+        fillColor: color,
+        fillOpacity: 0.08,
+      })
+        .bindPopup(`${escapeHtml(z.name)} <span style="color:var(--muted);">(${escapeHtml(z.zone_type)})</span>`)
+        .addTo(zoneLayer);
+      zonePolygonLayers.set(z.id, layer);
+      // Always-visible zone name, distinct from the click-to-open popup
+      // above -- the "Label layer" toggle controls exactly this, since a
+      // zone's own name is the one map identifier this app can show
+      // permanently without needing a click or hover first.
+      if (state.showLabels) {
+        layer.bindTooltip(z.name, { permanent: true, direction: "center", className: "zone-label" });
+      }
+    });
+  }
 
   // Where your sensors actually are, not just what they're seeing --
   // only ever a real registered position (app/api/sensor_registry.py),
@@ -2085,6 +3306,7 @@ function renderMap() {
   // since gone quiet), so a sensor that's gone quiet -- or was never
   // hooked up in the first place -- is visible on the map itself, not
   // just buried in a side panel.
+  sensorMarkerLayers.clear();
   if (state.showSensors) {
     const healthBySensorId = new Map(state.sensors.map((s) => [s.sensor_id, s]));
     state.sensorRegistrations.filter((s) => s.active).forEach((s) => {
@@ -2098,12 +3320,13 @@ function renderMap() {
         className: "", iconSize: [14, 14], iconAnchor: [7, 7],
       });
       const seenText = health && health.last_seen ? fmtRelative(health.last_seen) : "never reported a detection";
-      L.marker([s.latitude, s.longitude], { icon, zIndexOffset: -100 })
+      const marker = L.marker([s.latitude, s.longitude], { icon, zIndexOffset: -100 })
         .bindPopup(
           `${escapeHtml(s.sensor_id)} <span style="color:var(--muted);">(${escapeHtml(s.sensor_type)})</span>` +
           `<br><span style="color:${color};">${escapeHtml(status)}</span> · seen ${escapeHtml(seenText)}`
         )
         .addTo(sensorLayer);
+      sensorMarkerLayers.set(s.sensor_id, marker);
     });
   }
 
@@ -2112,7 +3335,9 @@ function renderMap() {
       .addTo(trackLayer);
   }
 
-  const pts = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
+  const plottable = visibleTracks().filter((t) => t.latitude != null && t.longitude != null);
+  const pts = plottable.filter((t) => !state.mapClassExcluded[t.verified ? "verified" : "unverified"].has(t.classification));
+  updateMapVerifyFilter(plottable);
 
   // An empty map reads as "is this even working?" without some signal
   // that the blankness is expected -- distinguishes "nothing's arrived
@@ -2152,15 +3377,22 @@ function renderMap() {
     const selected = t.id === state.selectedTrackId;
     const scrubbing = selected && state.scrubIndex != null;
 
-    if (selected && state.showUncertainty && t.position_uncertainty_m) {
+    // The Uncertainty toggle now applies to every visible track, not just
+    // the selected one -- a real geographic radius (t.position_uncertainty_m,
+    // however large or small it actually is) rather than a fabricated
+    // small/medium/large tier, since the data already supports genuine
+    // precision here. An unselected track's circle is drawn thinner/fainter
+    // so a busy map still reads the selected track's own circle as the
+    // one to look at.
+    if (state.showUncertainty && t.position_uncertainty_m) {
       const uColor = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
       L.circle([t.latitude, t.longitude], {
         radius: t.position_uncertainty_m,
         color: uColor,
-        weight: 2,
-        opacity: 0.9,
+        weight: selected ? 2 : 1,
+        opacity: selected ? 0.9 : 0.4,
         fillColor: uColor,
-        fillOpacity: 0.18,
+        fillOpacity: selected ? 0.18 : 0.08,
         dashArray: "4 4",
       }).addTo(trackLayer);
     }
@@ -2180,13 +3412,41 @@ function renderMap() {
       }).addTo(trackLayer);
     }
 
+    // A coasting track (see isCoasting()) hasn't reported in a while, so
+    // its plotted marker is sitting at a stale position -- this dead-
+    // reckons where it should be *right now* by carrying its last known
+    // heading/speed forward for however long it's actually been quiet
+    // (unlike the vector above, which projects forward from a fresh
+    // position by a fixed look-ahead window). Explicitly labeled
+    // "estimated" rather than plotted as if it were a real report --
+    // this app never implies more position certainty than it has.
+    if (isCoasting(t) && t.heading_deg != null && t.speed_mps != null) {
+      const estimated = destinationPoint(t.latitude, t.longitude, t.heading_deg, t.speed_mps * trackAgeS(t));
+      const color = CLASS_COLOR_HEX[t.classification] || CLASS_COLOR_HEX.unknown;
+      L.polyline([[t.latitude, t.longitude], estimated], {
+        color, weight: 2, opacity: 0.6, dashArray: "2 6", lineCap: "round",
+      }).addTo(trackLayer);
+      L.marker(estimated, {
+        icon: L.divIcon({
+          html: `<div style="width:10px;height:10px;border-radius:50%;border:2px dashed ${color};opacity:0.8;"></div>`,
+          className: "", iconSize: [10, 10], iconAnchor: [5, 5],
+        }),
+        interactive: false,
+      })
+        .bindTooltip("estimated position (coasting)", {
+          permanent: true, direction: "top", offset: [0, -8], className: "track-tooltip",
+        })
+        .addTo(trackLayer);
+    }
+
     const marker = L.marker([t.latitude, t.longitude], { icon: markerIcon(t, selected) })
       .on("click", () => selectTrack(t.id))
       .addTo(trackLayer);
-    // Dim the live marker while scrubbing history for this track -- the
-    // ghost marker below (at the scrubbed position) is the one that
-    // should draw the eye.
-    if (scrubbing) marker.setOpacity(0.35);
+    // Dim the live marker while scrubbing history for this track (the
+    // ghost marker below, at the scrubbed position, should draw the eye
+    // instead), or while coasting (its dead-reckoned estimate above is
+    // the more current position).
+    if (scrubbing || isCoasting(t)) marker.setOpacity(0.35);
 
     const labelParts = [`#${t.id}`, t.classification];
     if (t.aircraft_category) {
@@ -2196,12 +3456,36 @@ function renderMap() {
     if (t.speed_mps != null) labelParts.push(`${t.speed_mps.toFixed(1)} m/s`);
     const label = labelParts.join(" · ");
     if (selected && !scrubbing) {
-      marker.bindTooltip(label, { permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip" });
+      // The click-to-select "card" this doubles as: unlike a Leaflet
+      // popup (which a click-triggered full renderMap() re-render, right
+      // below, would tear down before it ever painted), a tooltip is
+      // rebuilt fresh on every renderMap() call for whichever marker is
+      // currently selected -- so it survives the very re-render selecting
+      // it causes. Real per-track sensor coverage (trackMapPopupHtml),
+      // not just the brief label an unselected/hovered marker shows.
+      marker.bindTooltip(trackMapPopupHtml(t), {
+        permanent: true, direction: "top", offset: [0, -14], className: "track-tooltip track-tooltip-selected",
+      });
+    } else if (!scrubbing && state.trackLabelMode !== "off") {
+      // Track labels (Off/Compact/Full, cycled via #toggle-track-labels)
+      // -- an always-visible label for every unselected track, not just on
+      // hover, for an operator who wants IDs/status readable across the
+      // whole map at a glance. Real fields only: Compact is id + risk
+      // tier, Full adds classification/verification and altitude/heading/
+      // speed, all already shown elsewhere for this same track.
+      const compactRisk = t.risk_score != null && t.risk_score >= 5 ? ` · RISK ${t.risk_score}` : "";
+      const permanentLabel = state.trackLabelMode === "full"
+        ? `#${t.id} — ${GROUP_LABEL[t.classification] || t.classification}<br>${t.verified ? "Verified" : "Unverified"}${compactRisk}`
+        : `#${t.id}${compactRisk}`;
+      marker.bindTooltip(permanentLabel, {
+        permanent: true, direction: "top", offset: [0, -10], className: "track-tooltip track-label-permanent",
+      });
     } else {
-      // Non-permanent (hover-only) for an unselected track, and also for
-      // the selected track's live marker while scrubbing its history --
-      // dimmed context at that point, not the focal point, so a permanent
-      // label would just compete with the ghost marker's below.
+      // Non-permanent (hover-only) for an unselected track when Track
+      // labels is Off, and also for the selected track's live marker while
+      // scrubbing its history -- dimmed context at that point, not the
+      // focal point, so a permanent label would just compete with the
+      // ghost marker's below.
       marker.bindTooltip(label, { direction: "top", offset: [0, -10], className: "track-tooltip" });
     }
   });
@@ -2266,6 +3550,204 @@ function recordBreadcrumbs(tracks) {
   }
 }
 
+// A real, locally-observed event log -- not persisted server-side, and
+// not fabricated: each entry is generated only when this dashboard itself
+// sees a genuine state transition between one poll and the next (a new
+// incident opening, a sensor's health getting worse, a track going from
+// active to lost). The very first refresh() call only establishes the
+// baseline to diff against -- it would otherwise manufacture a flood of
+// "new" notifications for everything that already existed before this
+// tab was even opened.
+const notifications = []; // newest first, capped at NOTIF_MAX
+const NOTIF_MAX = 50;
+let notifBaselineEstablished = false;
+let prevIncidentIds = new Set();
+let prevSensorStatus = new Map();
+let prevTrackStatus = new Map();
+let notifIdCounter = 0;
+
+// A notification's lifecycle state, computed fresh every render rather
+// than stored -- for an incident-linked notification this is the real
+// Incident.status (open/acknowledged/resolved) looked up in state.
+// incidents, so it can never say "acknowledged" while the actual incident
+// is still open, or vice versa. A non-incident notification (sensor
+// status change, track lost) has no server-side resolution concept to
+// borrow, so it only ever reaches "acknowledged" -- a local, this-browser-
+// only "I've seen this" flag -- never a fabricated "resolved".
+function notifState(n) {
+  if (n.incidentId != null) {
+    const incident = state.incidents.find((i) => i.id === n.incidentId);
+    if (incident) {
+      if (incident.status === "resolved") return "resolved";
+      // "investigating" is a finer-grained step than this drawer's own
+      // 4-state model distinguishes -- both it and "acknowledged" mean
+      // "someone's on this," so both map to the same badge here; the
+      // Alerts panel is where the actual distinction matters.
+      if (incident.status === "acknowledged" || incident.status === "investigating") return "acknowledged";
+    }
+  }
+  if (n.acknowledged) return "acknowledged";
+  return n.read ? "read" : "unread";
+}
+
+const NOTIF_STATE_COLOR = {
+  unread: "var(--accent)", read: "var(--muted)",
+  acknowledged: "var(--lost)", resolved: "var(--active)",
+};
+
+function pushNotification(text, { severity = "info", trackId = null, incidentId = null } = {}) {
+  notifIdCounter += 1;
+  notifications.unshift({
+    id: notifIdCounter, text, timestamp: new Date().toISOString(),
+    read: false, acknowledged: false, severity, trackId, incidentId,
+  });
+  while (notifications.length > NOTIF_MAX) notifications.pop();
+}
+
+function detectAndRecordNotifications(tracks, incidents, sensors) {
+  if (!notifBaselineEstablished) {
+    notifBaselineEstablished = true;
+    prevIncidentIds = new Set(incidents.map((i) => i.id));
+    prevSensorStatus = new Map(sensors.map((s) => [s.sensor_id, s.status]));
+    prevTrackStatus = new Map(tracks.map((t) => [t.id, t.status]));
+    return;
+  }
+
+  incidents.forEach((i) => {
+    if (!prevIncidentIds.has(i.id)) {
+      pushNotification(`New alert: ${i.description || i.incident_type} (${i.severity}, track ${i.track_id ?? "—"})`, {
+        severity: i.severity, trackId: i.track_id, incidentId: i.id,
+      });
+    }
+  });
+
+  // Worse, not just different -- a sensor recovering (offline -> online)
+  // is good news, not something that needs a notification.
+  const severityRank = { online: 0, stale: 1, missing: 2, offline: 2 };
+  sensors.forEach((s) => {
+    const prev = prevSensorStatus.get(s.sensor_id);
+    if (prev !== undefined && prev !== s.status && (severityRank[s.status] ?? 0) > (severityRank[prev] ?? 0)) {
+      pushNotification(`Sensor ${s.sensor_id} is now ${s.status}`, { severity: "medium" });
+    }
+  });
+
+  tracks.forEach((t) => {
+    const prev = prevTrackStatus.get(t.id);
+    if (prev === "active" && t.status === "lost") {
+      pushNotification(`Track ${t.id} lost contact`, { severity: "medium", trackId: t.id });
+    }
+  });
+
+  prevIncidentIds = new Set(incidents.map((i) => i.id));
+  prevSensorStatus = new Map(sensors.map((s) => [s.sensor_id, s.status]));
+  prevTrackStatus = new Map(tracks.map((t) => [t.id, t.status]));
+}
+
+function renderNotifications() {
+  const unreadCount = notifications.filter((n) => notifState(n) === "unread").length;
+  const badge = document.getElementById("notif-badge");
+  const bellBtn = document.getElementById("notif-bell-btn");
+  if (unreadCount > 0) {
+    badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+    badge.classList.add("show");
+    bellBtn.setAttribute("aria-label", `Notifications, ${unreadCount} unread`);
+  } else {
+    badge.classList.remove("show");
+    bellBtn.setAttribute("aria-label", "Notifications");
+  }
+  const panel = document.getElementById("notif-panel");
+  if (panel.hidden) return; // rebuilt fresh on open instead, see the click handler below
+  panel.innerHTML = notifPanelHtml();
+  wireNotifPanelButtons();
+}
+
+const NOTIF_STATE_LABEL = { unread: "Unread", read: "Read", acknowledged: "Acknowledged", resolved: "Resolved" };
+
+function notifPanelHtml() {
+  if (notifications.length === 0) {
+    return '<div class="empty" style="padding:10px;">No notifications yet.</div>';
+  }
+  return notifications
+    .map((n) => {
+      const s = notifState(n);
+      const trackExists = n.trackId != null && state.tracks.some((t) => t.id === n.trackId);
+      return `<div class="notif-item ${s === "unread" ? "unread" : ""}" data-notif-id="${n.id}">
+        <div class="notif-top-row">
+          <span class="notif-sev-dot" style="background:${SEVERITY_COLOR[n.severity] || "var(--muted)"}"></span>
+          <span class="notif-state-chip" style="color:${NOTIF_STATE_COLOR[s]}">${NOTIF_STATE_LABEL[s]}</span>
+        </div>
+        <div>${escapeHtml(n.text)}</div>
+        <div class="notif-time">${fmtRelative(n.timestamp)}</div>
+        <div class="notif-actions">
+          ${trackExists ? `<button class="secondary" data-notif-view="${n.trackId}">View track</button>` : ""}
+          ${s === "unread" || s === "read" ? `<button class="secondary" data-notif-ack="${n.id}">Acknowledge</button>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function wireNotifPanelButtons() {
+  const panel = document.getElementById("notif-panel");
+  panel.querySelectorAll("button[data-notif-view]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      panel.hidden = true;
+      selectTrack(Number(btn.dataset.notifView));
+    });
+  });
+  panel.querySelectorAll("button[data-notif-ack]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const n = notifications.find((x) => x.id === Number(btn.dataset.notifAck));
+      if (!n) return;
+      n.acknowledged = true;
+      // An incident-linked notification's real acknowledgment lives on the
+      // incident itself (the same endpoint the Alerts panel's Acknowledge
+      // button uses) -- so this button drives that, not just a local flag,
+      // and the notification's state above reads it back from
+      // state.incidents rather than trusting the flag once that succeeds.
+      if (n.incidentId != null) {
+        await acknowledge(n.incidentId);
+      } else {
+        renderNotifications();
+      }
+    });
+  });
+}
+
+document.getElementById("notif-bell-btn").addEventListener("click", () => {
+  const panel = document.getElementById("notif-panel");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    panel.innerHTML = notifPanelHtml();
+    wireNotifPanelButtons();
+    notifications.forEach((n) => { n.read = true; });
+    renderNotifications();
+  }
+});
+document.addEventListener("click", (e) => {
+  const panel = document.getElementById("notif-panel");
+  if (!panel.hidden && !panel.contains(e.target) && !e.target.closest("#notif-bell-btn")) {
+    panel.hidden = true;
+  }
+});
+
+// A developer/test control, not a production affordance -- kept out of
+// the Tracks panel's own empty state (see renderTracks()) so a live
+// deployment never shows a "simulate data" button next to real security
+// data. Lives here instead since seeding demo tracks is exactly the kind
+// of thing someone checking sensor connectivity would reach for.
+function devToolsFooterHtml() {
+  return `<div class="dev-tools-footer">
+    <span class="dev-tools-label">Developer</span>
+    <button class="secondary" id="simulate-tracks-btn">Simulate demo tracks</button>
+  </div>`;
+}
+
+function wireDevToolsFooter() {
+  const btn = document.getElementById("simulate-tracks-btn");
+  if (btn) btn.addEventListener("click", simulateDemoTracks);
+}
+
 function renderSensors() {
   const el = document.getElementById("sensors-table");
   updatePanelHeaderCount();
@@ -2278,21 +3760,43 @@ function renderSensors() {
         <li>Include a <code>sensor_id</code>, <code>sensor_type</code>, and a position (or azimuth/range from a registered mount)</li>
         <li>If an API key is configured, send it as the <code>X-API-Key</code> header</li>
       </ol>
-    </div>`;
+    </div>${devToolsFooterHtml()}`;
+    wireDevToolsFooter();
     return;
   }
-  const rows = state.sensors
-    .map((s) => `<tr>
-        <td>${escapeHtml(s.sensor_id)}</td>
-        <td>${escapeHtml(s.sensor_type)}</td>
-        <td><span class="status-dot" style="background:${SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline}"></span> ${escapeHtml(s.status)}</td>
-        <td>${fmtRelative(s.last_seen)}</td>
-      </tr>`)
+  // Real registered position, when one exists (PUT /api/sensor-
+  // registrations/{id}) -- distinct from a sensor that's only ever been
+  // seen via its own reported detections and has no fixed mount position
+  // on file at all, which this never guesses at.
+  const registrationBySensorId = new Map(state.sensorRegistrations.map((r) => [r.sensor_id, r]));
+  const cards = state.sensors
+    .slice()
+    .sort((a, b) => a.sensor_id.localeCompare(b.sensor_id))
+    .map((s) => {
+      const reg = registrationBySensorId.get(s.sensor_id);
+      const position = reg ? `${reg.latitude.toFixed(4)}, ${reg.longitude.toFixed(4)}` : null;
+      const color = SENSOR_STATUS_COLOR[s.status] || SENSOR_STATUS_COLOR.offline;
+      const heartbeat = s.last_seen ? `Last heartbeat ${fmtRelative(s.last_seen)}` : "Never reported a detection";
+      return `<div class="sensor-card" data-sensor-id="${escapeHtml(s.sensor_id)}" ${position ? "" : "aria-disabled=\"true\""}>
+        <div class="sensor-card-top">
+          <span class="sensor-card-name">${escapeHtml(s.sensor_id)}</span>
+          <span class="sensor-card-type">${escapeHtml(s.sensor_type)}</span>
+        </div>
+        <div class="sensor-card-status">
+          <span class="status-dot" style="background:${color};"></span>
+          <span style="color:${color};">${escapeHtml(s.status)}</span>
+        </div>
+        <div class="sensor-card-meta">${escapeHtml(heartbeat)}</div>
+        <div class="sensor-card-meta">${position ? `Coverage position: ${escapeHtml(position)}` : "Not registered -- no known position on file"}</div>
+      </div>`;
+    })
     .join("");
-  el.innerHTML = `<table>
-    <thead><tr><th>Sensor ID</th><th>Type</th><th>Status</th><th>Seen</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  el.innerHTML = `<div class="sensor-cards">${cards}</div>${devToolsFooterHtml()}`;
+  el.querySelectorAll(".sensor-card[data-sensor-id]").forEach((card) => {
+    if (card.getAttribute("aria-disabled") === "true") return; // nothing to fly to without a registered position
+    makeKeyboardActivatable(card, () => flyToSensor(card.dataset.sensorId));
+  });
+  wireDevToolsFooter();
 }
 
 // --- Zone management: draw a polygon on the map, then POST/PUT it via
@@ -2455,6 +3959,12 @@ function renderPrintableReport(r) {
       <dt>Last seen</dt><dd>${fmtTime(r.track.last_seen)}</dd>
       <dt>Final position</dt><dd>${r.track.final_position.latitude != null ? r.track.final_position.latitude.toFixed(5) + ", " + r.track.final_position.longitude.toFixed(5) : "—"}</dd>
       <dt>Final speed</dt><dd>${r.track.final_speed_mps != null ? r.track.final_speed_mps.toFixed(1) + " m/s" : "—"}</dd>
+      ${r.track.aircraft_category ? `<dt>Aircraft category</dt><dd>${escapeHtml(AIRCRAFT_CATEGORY_LABEL[r.track.aircraft_category] || r.track.aircraft_category)}</dd>` : ""}
+    </dl>` : ""}
+    ${Object.keys(r.identification).length ? `
+    <h2>Identification</h2>
+    <dl>
+      ${Object.entries(r.identification).map(([k, v]) => `<dt>${escapeHtml(formatSignalKey(k))}</dt><dd>${escapeHtml(String(v))}</dd>`).join("")}
     </dl>` : ""}
     <h2>Sensors involved (${r.sensors_involved.length})</h2>
     <div>${r.sensors_involved.map(escapeHtml).join(", ") || "—"}</div>
@@ -2529,6 +4039,18 @@ function flyToZone(zoneId) {
   const layer = zonePolygonLayers.get(zoneId);
   if (!layer || !leafletMap) return;
   leafletMap.flyToBounds(layer.getBounds(), { padding: [40, 40], duration: 0.6 });
+}
+
+// Same "click a card, jump to its real map marker" affordance as
+// flyToZone above -- only ever works for a sensor with an actual
+// registered position (sensorMarkerLayers is only ever populated from
+// state.sensorRegistrations' real lat/lon in renderMap()), so a sensor
+// with no registered position simply has nothing to fly to.
+function flyToSensor(sensorId) {
+  const marker = sensorMarkerLayers.get(sensorId);
+  if (!marker || !leafletMap) return;
+  leafletMap.flyTo(marker.getLatLng(), Math.max(leafletMap.getZoom(), 16), { duration: 0.6 });
+  marker.openPopup();
 }
 
 async function toggleZoneActive(zoneId) {
@@ -2717,6 +4239,8 @@ async function refresh() {
     state.allZones = allZones;
     state.sensorRegistrations = sensorRegistrations;
     recordBreadcrumbs(tracks);
+    detectAndRecordNotifications(tracks, incidents, sensors);
+    renderNotifications();
     showAuthBar(false);
     loadWhoami(); // fire-and-forget -- who's authenticated doesn't gate rendering the rest
     renderClassFilters();
@@ -2726,18 +4250,28 @@ async function refresh() {
     renderDetails();
     renderSensors();
     renderZones();
-    const activeCount = incidents.filter((i) => i.status !== "resolved").length;
-    const alertPart = activeCount > 0
-      ? `<span style="color:var(--high); font-weight:700;">${activeCount} active alert${activeCount === 1 ? "" : "s"}</span>`
+    const active = incidents.filter((i) => i.status !== "resolved");
+    const alertPart = active.length > 0
+      ? `<span style="color:var(--high); font-weight:700;">${active.length} active alert${active.length === 1 ? "" : "s"}</span>`
       : "0 active alerts";
+    const sensorsOnline = sensors.filter((s) => s.status === "online").length;
+    const sensorsPart = sensors.length > 0 ? ` · sensors ${sensorsOnline}/${sensors.length} online` : "";
+    const highestSeverity = active.length > 0
+      ? active.slice().sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0].severity
+      : null;
+    const highestPart = highestSeverity
+      ? ` · highest priority <span style="color:${SEVERITY_COLOR[highestSeverity]}; font-weight:700;">${highestSeverity.toUpperCase()}</span>`
+      : "";
     document.getElementById("status-line").innerHTML =
-      `updated ${new Date().toLocaleTimeString()} · ${tracks.length} tracks · ${alertPart}`;
+      `updated ${new Date().toLocaleTimeString()}${sensorsPart} · ${tracks.length} tracks · ${alertPart}${highestPart}`;
+    updateConnectionChip(false);
   } catch (e) {
     if (e instanceof AuthError) {
       showAuthBar(true);
       document.getElementById("status-line").textContent = "waiting for API key…";
     } else {
       document.getElementById("status-line").textContent = "connection error — retrying…";
+      updateConnectionChip(true);
     }
     console.error(e);
   }
@@ -2796,6 +4330,88 @@ trackSortSelect.addEventListener("change", (e) => {
   trackSort = e.target.value;
   localStorage.setItem("droneTrackSort", trackSort);
   renderTracks();
+});
+document.querySelectorAll(".verify-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.trackVerifiedTab = btn.dataset.verify;
+    document.querySelectorAll(".verify-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    renderTracks();
+  });
+});
+// Counts on the Verified/Unverified tab buttons themselves -- computed
+// from tracks that already pass the search/class filter above them, so
+// the two numbers always add up to the count shown in the panel header.
+function updateVerifyTabCounts(matchingTracks) {
+  const verifiedCount = matchingTracks.filter((t) => t.verified).length;
+  const unverifiedCount = matchingTracks.length - verifiedCount;
+  document.getElementById("verify-tab-verified").textContent = `Verified (${verifiedCount})`;
+  document.getElementById("verify-tab-unverified").textContent = `Unverified (${unverifiedCount})`;
+}
+
+// Rebuilds both rows of the map's own Verified/Unverified filter bar --
+// hidden entirely when there's nothing plottable at all (an empty bar
+// floating over an empty map is just noise). `plottable` is every
+// currently-visible (search/class-filter-passing) track with a known
+// position, before this filter itself is applied -- so toggling a chip
+// off doesn't make its own row's other chips or counts vanish. Only one
+// diamond chip per classification actually present in that bucket right
+// now (not a fixed set of 5), plus an ALL reset -- rebuilt fresh on every
+// call rather than diffed, same as every other list in this dashboard.
+function renderMapVerifyRow(bucket, tracksInBucket) {
+  const row = document.getElementById(`map-verify-row-${bucket}`);
+  const excluded = state.mapClassExcluded[bucket];
+  const counts = new Map();
+  tracksInBucket.forEach((t) => counts.set(t.classification, (counts.get(t.classification) || 0) + 1));
+  const present = GROUP_ORDER.filter((g) => counts.has(g));
+  const chips = present
+    .map((g) => {
+      const isExcluded = excluded.has(g);
+      return `<button class="map-verify-chip ${isExcluded ? "excluded" : "active"}" type="button"
+        data-bucket="${bucket}" data-class="${g}" title="${GROUP_LABEL[g]}">
+        <span class="diamond" style="color:${CLASS_COLOR_HEX[g]}" aria-hidden="true">&#9670;</span>${counts.get(g)}
+      </button>`;
+    })
+    .join("");
+  const allActive = excluded.size === 0;
+  const allChip = present.length > 1
+    ? `<button class="map-verify-chip ${allActive ? "active" : ""}" type="button" data-bucket="${bucket}" data-class="__all__">ALL</button>`
+    : "";
+  row.innerHTML = `<span class="row-label">${bucket === "verified" ? "Verified" : "Unverified"}</span>${chips}${allChip}`;
+  row.querySelectorAll(".map-verify-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cls = btn.dataset.class;
+      if (cls === "__all__") {
+        excluded.clear();
+      } else if (excluded.has(cls)) {
+        excluded.delete(cls);
+      } else {
+        excluded.add(cls);
+      }
+      renderMap();
+    });
+  });
+}
+
+function updateMapVerifyFilter(plottable) {
+  const bar = document.getElementById("map-verify-filter");
+  bar.style.display = plottable.length > 0 ? "flex" : "none";
+  if (plottable.length === 0) return;
+  renderMapVerifyRow("verified", plottable.filter((t) => t.verified));
+  renderMapVerifyRow("unverified", plottable.filter((t) => !t.verified));
+}
+document.getElementById("alert-banner").addEventListener("click", (e) => {
+  // The worst unacknowledged alert's own track, when it has one, is a
+  // more useful landing spot than just the Alerts list -- selecting it
+  // already centers the map and opens its details panel (selectTrack's
+  // existing behavior), which answers "what is this" faster than a list
+  // the operator would still have to click into.
+  const trackId = e.currentTarget.dataset.worstTrackId;
+  if (trackId) {
+    showPanel("tracks");
+    selectTrack(Number(trackId));
+  } else {
+    showPanel("alerts");
+  }
 });
 // "/" focuses search from anywhere -- a standard convention (GitHub, Gmail,
 // Slack) -- as long as the user isn't already typing into some other field.
@@ -2859,15 +4475,43 @@ function stopPolling() {
 let liveSocket = null;
 let liveReconnectTimer = null;
 
+// Real connection state for #conn-status-dot -- "connected" (WebSocket
+// push live), "degraded" (push down, but the ordinary HTTP poll is still
+// succeeding -- the view is still correct, just not instant), or
+// "unavailable" (the last poll itself failed). Called after every
+// refresh() and on every WebSocket open/close, so it's never stale by
+// more than one poll cycle.
+function updateConnectionChip(pollFailed) {
+  const dot = document.getElementById("conn-status-dot");
+  if (!dot) return;
+  let level, label;
+  if (pollFailed) {
+    level = "unavailable";
+    label = "Connection status: unavailable — the last poll failed";
+  } else if (liveSocket !== null && liveSocket.readyState === WebSocket.OPEN) {
+    level = "connected";
+    label = "Connection status: connected — live updates active";
+  } else {
+    level = "degraded";
+    label = "Connection status: degraded — polling only, live push unavailable";
+  }
+  dot.classList.toggle("degraded", level === "degraded");
+  dot.classList.toggle("unavailable", level === "unavailable");
+  dot.title = label;
+  dot.setAttribute("aria-label", label);
+}
+
 function connectLiveSocket() {
   if (liveSocket !== null) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws/live${apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : ""}`;
   const ws = new WebSocket(url);
   liveSocket = ws;
+  ws.addEventListener("open", () => updateConnectionChip(false));
   ws.addEventListener("message", refresh);
   ws.addEventListener("close", (event) => {
     liveSocket = null;
+    updateConnectionChip(false);
     // 4401/4403 (see app/api/live.py) mean the key is missing/wrong/
     // lacks access -- reconnecting every few seconds against the same
     // rejected key would just spam the server for no benefit; the

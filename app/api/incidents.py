@@ -62,6 +62,31 @@ def acknowledge_incident(
     return updated
 
 
+@router.post("/incidents/{incident_id}/investigate", response_model=Incident)
+def investigate_incident(
+    incident_id: int, principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN))
+) -> Incident:
+    """An operator's deliberate "I'm actively working this one" step,
+    distinct from just having acknowledged it -- see IncidentStatus.
+    INVESTIGATING's docstring. Only reachable from 'acknowledged', the
+    same "you looked at it first" ordering acknowledge -> resolve already
+    enforces.
+    """
+    incident = get_incident(incident_id, principal.site_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if incident.status != IncidentStatus.ACKNOWLEDGED:
+        raise HTTPException(
+            status_code=409, detail=f"Incident is '{incident.status.value}', not 'acknowledged'"
+        )
+    incident.status = IncidentStatus.INVESTIGATING
+    updated = update_incident(incident)
+    record_audit(
+        site_id=principal.site_id, actor=principal.name, action="incident.investigate", target=str(incident_id)
+    )
+    return updated
+
+
 @router.post("/incidents/{incident_id}/resolve", response_model=Incident)
 def resolve_incident(
     incident_id: int, principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN))

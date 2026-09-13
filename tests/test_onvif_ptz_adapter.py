@@ -1,7 +1,14 @@
+import argparse
+import asyncio
+import contextlib
 import json
+import sys
+import types
 import urllib.error
 
-from app.adapters.onvif_ptz_bridge import fetch_cue, normalize_to_range
+import pytest
+
+from app.adapters.onvif_ptz_bridge import fetch_cue, main, normalize_to_range, watch
 
 
 def test_normalize_maps_midpoint_correctly():
@@ -77,6 +84,117 @@ def test_fetch_cue_returns_none_on_409_track_has_no_position():
         urllib_request_module.urlopen = orig
 
 
+class _StopLoop(Exception):
+    """Raised from a mocked asyncio.sleep to escape watch()'s `while True`
+    after exactly one iteration, once that iteration's effects have
+    already been asserted -- real onvif hardware/library isn't available
+    in this environment (requirements-ptz.txt is an optional extra).
+    """
+
+
+def _fake_onvif_module(*, absolute_move_calls: list, pan_range=(-1.0, 1.0), tilt_range=(-1.0, 1.0)):
+    profile = types.SimpleNamespace(
+        token="profile-1", PTZConfiguration=types.SimpleNamespace(token="ptzconfig-1")
+    )
+    configuration_options = types.SimpleNamespace(
+        SpacesTypes=types.SimpleNamespace(
+            AbsolutePanTiltPositionSpace=[
+                types.SimpleNamespace(
+                    XRange=types.SimpleNamespace(Min=pan_range[0], Max=pan_range[1]),
+                    YRange=types.SimpleNamespace(Min=tilt_range[0], Max=tilt_range[1]),
+                )
+            ]
+        )
+    )
+
+    class _FakeMediaService:
+        async def GetProfiles(self):
+            return [profile]
+
+    class _FakePtzService:
+        async def GetConfigurationOptions(self, params):
+            return configuration_options
+
+        def create_type(self, name):
+            return types.SimpleNamespace(ProfileToken=None, Position=None)
+
+        async def AbsoluteMove(self, move_request):
+            absolute_move_calls.append(move_request)
+
+    class _FakeONVIFCamera:
+        def __init__(self, host, port, user, password):
+            pass
+
+        async def update_xaddrs(self):
+            return None
+
+        def create_media_service(self):
+            return _FakeMediaService()
+
+        def create_ptz_service(self):
+            return _FakePtzService()
+
+    fake_module = types.ModuleType("onvif")
+    fake_module.ONVIFCamera = _FakeONVIFCamera
+    return fake_module
+
+
+def _ptz_args(**overrides):
+    defaults = {
+        "track_id": 1, "cueing_camera_sensor_id": "ptz-cam-1", "camera_host": "192.168.1.50", "camera_port": 80,
+        "camera_user": "admin", "camera_password": "secret", "poll_interval": 1.0,
+        "api_url": "http://127.0.0.1:8000", "api_key": "",
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_watch_slews_to_the_normalized_cue_when_one_is_available(monkeypatch):
+    calls = []
+    monkeypatch.setitem(sys.modules, "onvif", _fake_onvif_module(absolute_move_calls=calls))
+    monkeypatch.setattr(
+        "app.adapters.onvif_ptz_bridge.fetch_cue",
+        lambda api_url, track_id, camera_sensor_id, api_key="": {
+            "pan_relative_deg": 90.0, "tilt_deg": 45.0, "distance_m": 120.0,
+        },
+    )
+
+    async def stop_after_one(_seconds):
+        raise _StopLoop
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.asyncio.sleep", stop_after_one)
+
+    with contextlib.suppress(_StopLoop):
+        asyncio.run(watch(_ptz_args()))
+
+    assert len(calls) == 1
+    # pan 90deg over a -180..180 source mapped into a -1..1 camera range -> 0.5;
+    # tilt 45deg over a -90..90 source mapped into -1..1 -> 0.5.
+    assert calls[0].Position["PanTilt"]["x"] == pytest.approx(0.5)
+    assert calls[0].Position["PanTilt"]["y"] == pytest.approx(0.5)
+    assert calls[0].ProfileToken == "profile-1"
+
+
+def test_watch_holds_position_without_moving_when_no_cue_is_available(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setitem(sys.modules, "onvif", _fake_onvif_module(absolute_move_calls=calls))
+    monkeypatch.setattr(
+        "app.adapters.onvif_ptz_bridge.fetch_cue",
+        lambda api_url, track_id, camera_sensor_id, api_key="": None,
+    )
+
+    async def stop_after_one(_seconds):
+        raise _StopLoop
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.asyncio.sleep", stop_after_one)
+
+    with contextlib.suppress(_StopLoop):
+        asyncio.run(watch(_ptz_args()))
+
+    assert calls == []
+    assert "holding position" in capsys.readouterr().out
+
+
 def test_fetch_cue_reraises_other_http_errors():
     def raise_500(request, timeout=None):
         raise urllib.error.HTTPError(request.full_url, 500, "Server Error", {}, None)
@@ -92,3 +210,49 @@ def test_fetch_cue_reraises_other_http_errors():
             fetch_cue("http://127.0.0.1:8000", track_id=1, camera_sensor_id="cam-1")
     finally:
         urllib_request_module.urlopen = orig
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+
+    async def fake_watch(args):
+        captured_args.update(vars(args))
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.watch", fake_watch)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "onvif_ptz_bridge", "--track-id", "42", "--cueing-camera-sensor-id", "ptz-cam-1",
+            "--camera-host", "192.168.1.50", "--camera-user", "admin", "--camera-password", "secret",
+            "--poll-interval", "2.5",
+        ],
+    )
+
+    main()
+
+    assert captured_args["track_id"] == 42
+    assert captured_args["cueing_camera_sensor_id"] == "ptz-cam-1"
+    assert captured_args["camera_host"] == "192.168.1.50"
+    assert captured_args["poll_interval"] == 2.5
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+
+    async def fake_watch(args):
+        captured_args.update(vars(args))
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.watch", fake_watch)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "onvif_ptz_bridge", "--track-id", "1", "--cueing-camera-sensor-id", "ptz-cam-1",
+            "--camera-host", "192.168.1.50", "--camera-user", "admin", "--camera-password", "secret",
+        ],
+    )
+
+    main()
+
+    assert captured_args["camera_port"] == 80
+    assert captured_args["poll_interval"] == 1.0
+    assert captured_args["api_url"] == "http://127.0.0.1:8000"

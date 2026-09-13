@@ -1,7 +1,11 @@
+import sys
+import types
+
 from app.adapters.astm_remote_id import (
     ASD_STAN_WIFI_VENDOR_OUI,
     DIRECT_REMOTE_ID_APPLICATION_CODE,
     build_detection_payload,
+    extract_message_fields,
     merge_fields,
     parse_wifi_vendor_ie,
 )
@@ -105,3 +109,115 @@ def test_parse_wifi_vendor_ie_rejects_too_short_a_payload():
 def test_parse_wifi_vendor_ie_handles_an_empty_message_pack():
     info = _wifi_vendor_ie(ASD_STAN_WIFI_VENDOR_OUI, DIRECT_REMOTE_ID_APPLICATION_CODE, counter=0, message_pack=b"")
     assert parse_wifi_vendor_ie(info) == b""
+
+
+def _install_fake_dtpyodid(monkeypatch):
+    """dtpyodid (requirements-remoteid.txt, an optional extra) isn't
+    installed in this environment -- extract_message_fields() does real
+    isinstance() checks against its message classes, so a bare mock
+    object won't do; these fakes are genuine classes it can instantiate.
+    """
+
+    class BasicID:
+        def __init__(self, uas_id, ua_type):
+            self.uas_id = uas_id
+            self.ua_type = ua_type
+
+    class Location:
+        def __init__(
+            self, latitude, longitude, height, altitude_geo, altitude_baro, speed_horizontal, direction, status
+        ):
+            self.latitude = latitude
+            self.longitude = longitude
+            self.height = height
+            self.altitude_geo = altitude_geo
+            self.altitude_baro = altitude_baro
+            self.speed_horizontal = speed_horizontal
+            self.direction = direction
+            self.status = status
+
+    class OperatorID:
+        def __init__(self, operator_id):
+            self.operator_id = operator_id
+
+    class SelfID:
+        def __init__(self, desc):
+            self.desc = desc
+
+    class System:
+        def __init__(self, latitude, longitude):
+            self.latitude = latitude
+            self.longitude = longitude
+
+    basicid_mod = types.ModuleType("dtpyodid.messages.basicid")
+    basicid_mod.BasicID = BasicID
+    location_mod = types.ModuleType("dtpyodid.messages.location")
+    location_mod.Location = Location
+    operatorid_mod = types.ModuleType("dtpyodid.messages.operatorid")
+    operatorid_mod.OperatorID = OperatorID
+    selfid_mod = types.ModuleType("dtpyodid.messages.selfid")
+    selfid_mod.SelfID = SelfID
+    system_mod = types.ModuleType("dtpyodid.messages.system")
+    system_mod.System = System
+
+    monkeypatch.setitem(sys.modules, "dtpyodid", types.ModuleType("dtpyodid"))
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages", types.ModuleType("dtpyodid.messages"))
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages.basicid", basicid_mod)
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages.location", location_mod)
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages.operatorid", operatorid_mod)
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages.selfid", selfid_mod)
+    monkeypatch.setitem(sys.modules, "dtpyodid.messages.system", system_mod)
+
+    return types.SimpleNamespace(
+        BasicID=BasicID, Location=Location, OperatorID=OperatorID, SelfID=SelfID, System=System,
+    )
+
+
+def test_extract_message_fields_from_basic_id(monkeypatch):
+    classes = _install_fake_dtpyodid(monkeypatch)
+    message = classes.BasicID(uas_id="1581F582N9K2K12345\0\0", ua_type=2)
+    assert extract_message_fields(message) == {"uas_id": "1581F582N9K2K12345", "ua_type": 2}
+
+
+def test_extract_message_fields_unwraps_a_tuple_wrapped_ua_type(monkeypatch):
+    # Some dtpyodid parses hand back ua_type as a single-element tuple
+    # rather than a bare int -- must not leak the tuple into the payload.
+    classes = _install_fake_dtpyodid(monkeypatch)
+    message = classes.BasicID(uas_id="1581F582N9K2K12345", ua_type=(2,))
+    assert extract_message_fields(message)["ua_type"] == 2
+
+
+def test_extract_message_fields_from_location(monkeypatch):
+    classes = _install_fake_dtpyodid(monkeypatch)
+    status = types.SimpleNamespace(name="AIRBORNE")
+    message = classes.Location(
+        latitude=51.5, longitude=-0.1, height=50.0, altitude_geo=100.0, altitude_baro=98.0,
+        speed_horizontal=12.5, direction=270.0, status=status,
+    )
+    assert extract_message_fields(message) == {
+        "latitude": 51.5, "longitude": -0.1, "height_m": 50.0, "altitude_geo_m": 100.0,
+        "altitude_baro_m": 98.0, "speed_horizontal_mps": 12.5, "direction_deg": 270.0, "status": "AIRBORNE",
+    }
+
+
+def test_extract_message_fields_from_system(monkeypatch):
+    classes = _install_fake_dtpyodid(monkeypatch)
+    message = classes.System(latitude=51.501, longitude=-0.099)
+    assert extract_message_fields(message) == {"operator_latitude": 51.501, "operator_longitude": -0.099}
+
+
+def test_extract_message_fields_from_operator_id(monkeypatch):
+    classes = _install_fake_dtpyodid(monkeypatch)
+    message = classes.OperatorID(operator_id="OP12345678\0\0")
+    assert extract_message_fields(message) == {"operator_id": "OP12345678"}
+
+
+def test_extract_message_fields_from_self_id(monkeypatch):
+    classes = _install_fake_dtpyodid(monkeypatch)
+    message = classes.SelfID(desc="Surveying operation\0\0")
+    assert extract_message_fields(message) == {"description": "Surveying operation"}
+
+
+def test_extract_message_fields_returns_none_for_an_unrecognized_message_type(monkeypatch):
+    _install_fake_dtpyodid(monkeypatch)
+    assert extract_message_fields(object()) is None

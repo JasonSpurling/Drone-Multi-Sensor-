@@ -260,3 +260,31 @@ def require_role(*roles: str):
         return authenticate_key(x_api_key, required, missing_key_detail="Missing X-API-Key header")
 
     return dependency
+
+
+def require_role_allow_query_key(*roles: str):
+    """Same checks as require_role() above, plus one more credential path:
+    an `api_key` query parameter, for the one kind of client that can't
+    set a custom X-API-Key header at all -- a browser <img>/<video>
+    element (app/api/camera_live.py's live-view proxy), the same
+    limitation app/api/live.py's WebSocket endpoint already works around
+    this same way (see authenticate_key()'s docstring). A same-origin
+    <img> tag *does* send cookies automatically, so the SSO
+    session-cookie path here is identical to require_role()'s, unlike
+    the header path.
+    """
+    required = set(roles)
+
+    def dependency(
+        request: Request, x_api_key: str | None = Header(default=None), api_key: str | None = None
+    ) -> Principal:
+        credential = x_api_key or api_key
+        if credential is None:
+            session_principal = _try_session_cookie(request, required)
+            if session_principal is not None:
+                return session_principal
+        return authenticate_key(
+            credential, required, missing_key_detail="Missing X-API-Key header or api_key query parameter"
+        )
+
+    return dependency

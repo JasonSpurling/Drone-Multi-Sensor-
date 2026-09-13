@@ -74,6 +74,13 @@ track = Table(
     # docstring. Read-time staleness decay is applied in app/api/tracks.py,
     # not stored here.
     Column("classification_confidence", Float),
+    # An operator's deliberate "stop alerting on this" suppression -- see
+    # app.models.Track.ignored's docstring.
+    Column("ignored", Integer, nullable=False, server_default="0"),
+    # When an ignore (above) expires and reverts on its own -- NULL means
+    # either not ignored, or ignored with no expiry. See
+    # app.models.Track.ignored_until's docstring.
+    Column("ignored_until", String(40)),
     # list_tracks(status=...) -- called on essentially every detection
     # ingested (expire_stale_tracks scans ACTIVE/LOST tracks) and on every
     # dashboard poll (GET /api/tracks, unfiltered, every few seconds) --
@@ -196,6 +203,12 @@ sensor_registry = Table(
     Column("altitude_m", Float),
     Column("azimuth_reference_deg", Float, nullable=False, server_default="0.0"),
     Column("active", Integer, nullable=False, server_default="1"),
+    # An RTSP/HTTP source URL for GET /api/sensors/{id}/live to proxy as an
+    # MJPEG stream (app/api/camera_live.py) -- kept server-side only and
+    # never returned by GET /api/sensor-registrations (see
+    # SensorRegistration.camera_stream_url's docstring for why), since it
+    # commonly embeds the camera's own login credentials in the URL itself.
+    Column("camera_stream_url", String(500)),
     Index("idx_sensor_registry_site_id", "site_id"),
 )
 

@@ -76,6 +76,32 @@ def test_flight_level_floor_converted_via_hundreds_of_feet():
     assert zones[1].min_altitude_m == pytest.approx(7000 * 0.3048)
 
 
+def test_missing_altitude_value_with_no_code_is_none_not_a_fabricated_cap():
+    # No LOWER_CODE (not UNLTD, not SFC) and no LOWER_VAL at all -- a
+    # genuinely missing/unusable value, distinct from the explicit UNLTD
+    # case above.
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature", "properties": {"CLASS": "D", "NAME": "TEST"},
+            "geometry": {"type": "Polygon", "coordinates": [[[-0.5, 51.3], [-0.4, 51.3], [-0.4, 51.4]]]},
+        }],
+    }
+    zones = geojson_to_zones(geojson)
+    assert zones[0].min_altitude_m is None
+
+
+def test_polygon_features_with_no_coordinate_rings_are_skipped():
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature", "properties": {"CLASS": "D"},
+            "geometry": {"type": "Polygon", "coordinates": []},
+        }],
+    }
+    assert geojson_to_zones(geojson) == []
+
+
 def test_zone_name_includes_label_and_class():
     zones = geojson_to_zones(SAMPLE_GEOJSON)
     assert "EXAMPLE MUNI" in zones[0].name

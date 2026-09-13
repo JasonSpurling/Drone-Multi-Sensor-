@@ -92,6 +92,8 @@ _TABLE_MIGRATION_COLUMNS = {
         "site_id": "INTEGER",
         "aircraft_category": "VARCHAR(2)",
         "classification_confidence": "REAL",
+        "ignored": "INTEGER DEFAULT 0",
+        "ignored_until": "VARCHAR(40)",
     },
     "authorized_operator": {
         "public_key": "VARCHAR(64)",
@@ -104,7 +106,7 @@ _TABLE_MIGRATION_COLUMNS = {
     },
     "zone": {"site_id": "INTEGER"},
     "incident": {"site_id": "INTEGER", "related_track_id": "INTEGER"},
-    "sensor_registry": {"site_id": "INTEGER"},
+    "sensor_registry": {"site_id": "INTEGER", "camera_stream_url": "VARCHAR(500)"},
 }
 
 
@@ -629,11 +631,11 @@ def create_track(track: Track) -> Track:
                     (site_id, track_uid, first_seen, last_seen, status, classification,
                      latitude, longitude, altitude_m, heading_deg, speed_mps,
                      position_uncertainty_m, maneuver_probability, aircraft_category,
-                     classification_confidence)
+                     classification_confidence, ignored, ignored_until)
                 VALUES (:site_id, :track_uid, :first_seen, :last_seen, :status, :classification,
                         :latitude, :longitude, :altitude_m, :heading_deg, :speed_mps,
                         :position_uncertainty_m, :maneuver_probability, :aircraft_category,
-                        :classification_confidence)
+                        :classification_confidence, :ignored, :ignored_until)
                 RETURNING id
                 """
             ),
@@ -653,6 +655,8 @@ def create_track(track: Track) -> Track:
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
+                "ignored": int(track.ignored),
+                "ignored_until": track.ignored_until.isoformat() if track.ignored_until else None,
             },
         ).one()
         track.id = row.id
@@ -670,7 +674,8 @@ def update_track(track: Track) -> Track:
                     heading_deg = :heading_deg, speed_mps = :speed_mps,
                     position_uncertainty_m = :position_uncertainty_m,
                     maneuver_probability = :maneuver_probability, aircraft_category = :aircraft_category,
-                    classification_confidence = :classification_confidence
+                    classification_confidence = :classification_confidence, ignored = :ignored,
+                    ignored_until = :ignored_until
                 WHERE id = :id
                 """
             ),
@@ -687,6 +692,8 @@ def update_track(track: Track) -> Track:
                 "maneuver_probability": track.maneuver_probability,
                 "aircraft_category": track.aircraft_category,
                 "classification_confidence": track.classification_confidence,
+                "ignored": int(track.ignored),
+                "ignored_until": track.ignored_until.isoformat() if track.ignored_until else None,
                 "id": track.id,
             },
         )
@@ -720,6 +727,16 @@ def list_tracks(
 
 
 def _row_to_track(row) -> Track:
+    ignored_until = datetime.fromisoformat(row["ignored_until"]) if row["ignored_until"] else None
+    # An expired timed ignore reads back as not-ignored on its own, here at
+    # the one shared hydration point every track read goes through --
+    # app.incidents' suppression check and app.risk's scoring both just
+    # read track.ignored, with no separate expiry-sweep job needed. The
+    # raw ignored_until timestamp itself is left alone (not cleared) so it
+    # still reports honestly if this row is read again before its next
+    # write; a later update_track call naturally persists the now-False
+    # ignored flag.
+    ignored = bool(row["ignored"]) and (ignored_until is None or ignored_until > utcnow())
     return Track(
         id=row["id"],
         site_id=row["site_id"],
@@ -737,6 +754,8 @@ def _row_to_track(row) -> Track:
         maneuver_probability=row["maneuver_probability"],
         aircraft_category=row["aircraft_category"],
         classification_confidence=row["classification_confidence"],
+        ignored=ignored,
+        ignored_until=ignored_until,
     )
 
 
@@ -1113,6 +1132,7 @@ def upsert_sensor_registration(
     altitude_m: float | None,
     azimuth_reference_deg: float,
     active: bool = True,
+    camera_stream_url: str | None = None,
 ) -> None:
     with db_session() as conn:
         conn.execute(
@@ -1120,15 +1140,16 @@ def upsert_sensor_registration(
                 """
                 INSERT INTO sensor_registry
                     (sensor_id, site_id, sensor_type, latitude, longitude, altitude_m,
-                     azimuth_reference_deg, active)
+                     azimuth_reference_deg, active, camera_stream_url)
                 VALUES (:sensor_id, :site_id, :sensor_type, :latitude, :longitude, :altitude_m,
-                        :azimuth_reference_deg, :active)
+                        :azimuth_reference_deg, :active, :camera_stream_url)
                 ON CONFLICT (sensor_id) DO UPDATE SET
                     site_id = excluded.site_id, sensor_type = excluded.sensor_type,
                     latitude = excluded.latitude, longitude = excluded.longitude,
                     altitude_m = excluded.altitude_m,
                     azimuth_reference_deg = excluded.azimuth_reference_deg,
-                    active = excluded.active
+                    active = excluded.active,
+                    camera_stream_url = excluded.camera_stream_url
                 """
             ),
             {
@@ -1140,6 +1161,7 @@ def upsert_sensor_registration(
                 "altitude_m": altitude_m,
                 "azimuth_reference_deg": azimuth_reference_deg,
                 "active": int(active),
+                "camera_stream_url": camera_stream_url,
             },
         )
 

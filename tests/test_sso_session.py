@@ -64,3 +64,12 @@ def test_create_session_token_raises_a_clear_error_for_a_malformed_secret(monkey
     monkeypatch.setattr(sso_session.config, "OIDC_SESSION_SECRET", "not-a-valid-fernet-key")
     with pytest.raises(RuntimeError, match="not a valid Fernet key"):
         sso_session.create_session_token(role="viewer", site=None, label=None)
+
+
+def test_verify_returns_none_for_a_validly_sealed_but_non_json_payload():
+    # A token this app itself never creates -- but decrypt()+ttl succeeding
+    # doesn't guarantee the plaintext is JSON, so this path must fail
+    # closed (None) rather than let json.JSONDecodeError escape.
+    fernet = Fernet(sso_session.config.OIDC_SESSION_SECRET.encode())
+    token = fernet.encrypt(b"not valid json{{{").decode()
+    assert sso_session.verify_session_token(token) is None

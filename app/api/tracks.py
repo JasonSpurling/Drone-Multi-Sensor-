@@ -1,14 +1,37 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.auth import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, Principal, require_role
-from app.db import get_sensor_registration, get_track, list_detections, list_tracks
+from app.config import INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
+from app.db import (
+    get_sensor_registration,
+    get_track,
+    list_detections,
+    list_open_incidents_for_track,
+    list_tracks,
+    record_audit,
+    update_track,
+)
 from app.export import to_csv, to_gpx, to_kml
-from app.fusion import decay_classification_confidence
-from app.models import Detection, Track, TrackStatus
+from app.fusion import contributing_sensor_types, decay_classification_confidence
+from app.live import publish as publish_live_event
+from app.models import (
+    Classification,
+    Detection,
+    Track,
+    TrackClassificationInput,
+    TrackIgnoreInput,
+    TrackStatus,
+    VisualVerificationInput,
+    ZoneType,
+)
+from app.risk import assess_risk, is_approaching_zone
 from app.slew_to_cue import compute_camera_cue
 from app.tracking import expire_stale_tracks
 from app.util import utcnow
+from app.zones import nearest_restricted_zone_distance_m, zones_containing_point
 
 router = APIRouter()
 
@@ -34,6 +57,41 @@ def _with_decayed_confidence(track: Track) -> Track:
     return track
 
 
+def _with_computed_fields(track: Track) -> Track:
+    """_with_decayed_confidence plus the read-time-only fields
+    (corroborating_sensor_types, verified, contributing_sensor_types,
+    risk_score, risk_factors, zone_status) GET /api/tracks and GET
+    /api/tracks/{id} both need for the dashboard's Verified/Unverified
+    grouping, risk-sorted priority queue, and zone-status badge -- a
+    couple of extra queries per track (list_recent_detections via
+    contributing_sensor_types, list_open_incidents_for_track and
+    zones_containing_point for risk/zone status), the same cost
+    app.incidents already pays once per opened incident, just now also
+    paid per read here.
+    """
+    track = _with_decayed_confidence(track)
+    types = contributing_sensor_types(track)
+    track.contributing_sensor_types = sorted(types)
+    track.corroborating_sensor_types = len(types)
+    track.verified = track.corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES
+    if track.id is not None and track.site_id is not None:
+        open_incidents = list_open_incidents_for_track(track.id, track.site_id)
+        zone_distance = None
+        if track.latitude is not None and track.longitude is not None:
+            zone_distance = nearest_restricted_zone_distance_m(track.latitude, track.longitude, track.site_id)
+            inside_restricted = any(
+                z.zone_type == ZoneType.RESTRICTED
+                for z in zones_containing_point(track.latitude, track.longitude, track.site_id, track.altitude_m)
+            )
+            track.zone_status = (
+                "inside" if inside_restricted else ("approaching" if is_approaching_zone(zone_distance) else "none")
+            )
+        assessment = assess_risk(track, open_incidents, zone_distance)
+        track.risk_score = assessment.score
+        track.risk_factors = assessment.factors
+    return track
+
+
 @router.get("/tracks", response_model=list[Track])
 def get_tracks(
     status: TrackStatus | None = Query(default=None),
@@ -45,7 +103,7 @@ def get_tracks(
     tracks = list_tracks(
         site_id=principal.site_id, status=status.value if status else None, limit=limit, offset=offset
     )
-    return [_with_decayed_confidence(t) for t in tracks]
+    return [_with_computed_fields(t) for t in tracks]
 
 
 @router.get("/tracks/{track_id}", response_model=Track)
@@ -54,7 +112,107 @@ def get_track_by_id(track_id: int, principal: Principal = Depends(require_role(*
     track = get_track(track_id, principal.site_id)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return _with_decayed_confidence(track)
+    return _with_computed_fields(track)
+
+
+@router.post("/tracks/{track_id}/classify", response_model=Track)
+def classify_track(
+    track_id: int,
+    body: TrackClassificationInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> Track:
+    """An operator's deliberate override -- "that's our security team's
+    drone" (friendly), "confirmed hostile" (drone), or "Neutral" (clear my
+    own earlier call, go back to unclassified) -- distinct from the
+    automated fusion ratchet that normally sets Track.classification (see
+    that field's own docstring for why it's upgrade-only and never just
+    manually reset there). Since a human just looked at this and made the
+    FRIENDLY/DRONE call, classification_confidence is set to 1.0 -- the
+    same "nothing left to be uncertain about" reasoning an acknowledged
+    incident's status carries, not a guess at how confident to report.
+    UNKNOWN gets None instead, per that field's own docstring ("no
+    meaningful confidence in not knowing") -- "Neutral" is reverting the
+    override, not a confident claim of its own.
+    """
+    track = get_track(track_id, principal.site_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    track.classification = body.classification
+    track.classification_confidence = None if body.classification == Classification.UNKNOWN else 1.0
+    updated = update_track(track)
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.classify",
+        target=str(track_id),
+        detail=body.classification.value,
+    )
+    if updated.site_id is not None:
+        publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
+    return _with_computed_fields(updated)
+
+
+@router.post("/tracks/{track_id}/ignore", response_model=Track)
+def ignore_track(
+    track_id: int,
+    body: TrackIgnoreInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> Track:
+    """An operator's deliberate "stop alerting on this" suppression -- see
+    Track.ignored's docstring for what it actually changes (new incidents
+    only; nothing about the track itself is hidden or altered).
+    `duration_minutes` set means "expires on its own after that long"; left
+    out means "Indefinitely," same as this endpoint's original behavior.
+    Toggled back off with ignored=false, which always clears any expiry too.
+    """
+    track = get_track(track_id, principal.site_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    track.ignored = body.ignored
+    track.ignored_until = (
+        utcnow() + timedelta(minutes=body.duration_minutes)
+        if body.ignored and body.duration_minutes is not None
+        else None
+    )
+    updated = update_track(track)
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.ignore" if body.ignored else "track.unignore",
+        target=str(track_id),
+        detail=f"for {body.duration_minutes}m" if body.ignored and body.duration_minutes else "",
+    )
+    if updated.site_id is not None:
+        publish_live_event(updated.site_id, {"type": "track_update", "track": updated.model_dump(mode="json")})
+    return _with_computed_fields(updated)
+
+
+@router.post("/tracks/{track_id}/verify-visual", status_code=204)
+def verify_visual(
+    track_id: int,
+    body: VisualVerificationInput,
+    principal: Principal = Depends(require_role(ROLE_OPERATOR, ROLE_ADMIN)),
+) -> None:
+    """Records a human operator's structured visual-verification judgment
+    -- confirmed / a different object / a false detection / unable to
+    determine, plus an optional note -- after they actually compared the
+    camera feed or a snapshot to what the sensors reported. This never
+    touches Track.classification or risk_score itself: it's a record of
+    what a person concluded, not a new automated signal, so it can't be
+    mistaken for the fusion system's own evidence. Kept in the audit log
+    (surfaced on the Timeline tab for admins) rather than a new table,
+    the same place every other operator decision on a track already lives.
+    """
+    if get_track(track_id, principal.site_id) is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    detail = body.result if not body.note else f"{body.result}: {body.note}"
+    record_audit(
+        site_id=principal.site_id,
+        actor=principal.name,
+        action="track.visual_verify",
+        target=str(track_id),
+        detail=detail,
+    )
 
 
 @router.get("/tracks/{track_id}/history", response_model=list[Detection])

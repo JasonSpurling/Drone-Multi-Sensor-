@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ml.train_acoustic import load_dataset, load_wav_mono, train
+from app.ml.train_acoustic import load_dataset, load_wav_mono, main, train
 
 pytest.importorskip("sklearn")
 
@@ -87,6 +87,58 @@ def test_load_wav_mono_averages_multichannel_files(tmp_path):
     _write_tone_wav(path, 150.0, n_channels=2)
     samples, _ = load_wav_mono(path)
     assert samples.ndim == 1
+
+
+def _write_8bit_tone_wav(path: Path, frequency_hz: float, duration_s: float = 0.3) -> None:
+    n_samples = int(duration_s * SAMPLE_RATE_HZ)
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(1)  # 8-bit PCM is unsigned, centered on 128
+        f.setframerate(SAMPLE_RATE_HZ)
+        frames = bytearray()
+        for i in range(n_samples):
+            value = math.sin(2 * math.pi * frequency_hz * i / SAMPLE_RATE_HZ)
+            frames.append(int(128 + value * 100))
+        f.writeframes(bytes(frames))
+
+
+def test_load_wav_mono_rejects_an_unsupported_sample_width(tmp_path):
+    path = tmp_path / "tone24.wav"
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(3)  # 24-bit PCM -- not one of the supported 8/16/32-bit widths
+        f.setframerate(SAMPLE_RATE_HZ)
+        f.writeframes(b"\x00\x00\x00" * 100)
+    with pytest.raises(SystemExit, match="unsupported WAV sample width"):
+        load_wav_mono(path)
+
+
+def test_load_wav_mono_centers_unsigned_8_bit_pcm_on_zero(tmp_path):
+    path = tmp_path / "tone8.wav"
+    _write_8bit_tone_wav(path, 150.0)
+    samples, sample_rate_hz = load_wav_mono(path)
+    assert sample_rate_hz == SAMPLE_RATE_HZ
+    # 8-bit PCM is unsigned (0-255, centered on 128) -- if it weren't
+    # re-centered before scaling, this would sit entirely above zero
+    # instead of oscillating around it like every other sample width.
+    assert samples.mean() == pytest.approx(0.0, abs=0.05)
+    assert samples.min() < 0.0
+
+
+def test_load_dataset_skips_a_recording_too_short_for_any_mfcc_frame(tmp_path, capsys):
+    (tmp_path / "drone").mkdir()
+    _write_tone_wav(tmp_path / "drone" / "real.wav", 150.0)
+    # A handful of samples -- far shorter than a single MFCC analysis
+    # frame, so extract_mfcc produces zero frames to summarize.
+    _write_tone_wav(tmp_path / "drone" / "too_short.wav", 150.0, duration_s=0.001)
+
+    features_list, labels = load_dataset(str(tmp_path))
+
+    assert len(features_list) == 1  # only the real recording contributed features
+    assert labels == ["drone"]
+    output = capsys.readouterr().out
+    assert "too_short.wav" in output
+    assert "too short" in output
 
 
 def test_load_dataset_rejects_an_unrecognized_label_directory(tmp_path):
@@ -172,3 +224,44 @@ def test_train_prints_feature_importances(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "Feature importances" in output
     assert "acoustic_mfcc" in output
+
+
+def test_main_parses_args_and_invokes_train(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "app.ml.train_acoustic.train",
+        lambda data_dir, out_path, test_size, random_state: captured.update(
+            data_dir=data_dir, out_path=out_path, test_size=test_size, random_state=random_state
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "train_acoustic", "--data-dir", str(tmp_path), "--out", str(tmp_path / "model.joblib"),
+            "--test-size", "0.3", "--random-state", "7",
+        ],
+    )
+
+    main()
+
+    assert captured == {
+        "data_dir": str(tmp_path), "out_path": str(tmp_path / "model.joblib"),
+        "test_size": 0.3, "random_state": 7,
+    }
+
+
+def test_main_uses_documented_defaults(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "app.ml.train_acoustic.train",
+        lambda data_dir, out_path, test_size, random_state: captured.update(
+            test_size=test_size, random_state=random_state
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["train_acoustic", "--data-dir", str(tmp_path), "--out", str(tmp_path / "model.joblib")]
+    )
+
+    main()
+
+    assert captured == {"test_size": 0.2, "random_state": 42}

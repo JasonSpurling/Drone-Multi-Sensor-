@@ -6,6 +6,7 @@ real training data.
 """
 
 import csv
+from typing import ClassVar
 
 import pytest
 
@@ -150,3 +151,32 @@ def test_predict_returns_a_label_when_threshold_is_permissive(tmp_path, monkeypa
 
     assert ml_model.predict(_detection(confidence=0.97)) == Classification.DRONE
     assert ml_model.predict(_detection(confidence=0.02)) == Classification.BIRD
+
+
+class _FakeModelWithBadLabel:
+    """A model whose winning class isn't a Classification value at all --
+    e.g. a stale model file trained against an older label set. Must fall
+    back gracefully (None), not crash the detection-ingest path.
+    """
+
+    classes_: ClassVar = ["not-a-real-classification"]
+
+    def predict_proba(self, features):
+        import numpy as np
+
+        return np.array([[1.0]])
+
+
+def test_predict_returns_none_and_warns_for_a_model_producing_an_unrecognized_label(tmp_path, monkeypatch, caplog):
+    # A real (if empty) file so _load_model()'s existence check passes and
+    # it serves this pre-populated cache entry instead of actually loading.
+    model_path = tmp_path / "model.joblib"
+    model_path.write_bytes(b"")
+    monkeypatch.setattr(ml_model, "ML_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(ml_model, "_model_cache", _FakeModelWithBadLabel())
+    monkeypatch.setattr(ml_model, "_model_cache_path", str(model_path))
+
+    with caplog.at_level("WARNING"):
+        assert ml_model.predict(_detection()) is None
+
+    assert "unusable prediction" in caplog.text

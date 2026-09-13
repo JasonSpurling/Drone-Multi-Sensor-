@@ -93,6 +93,18 @@ def test_no_shadowing_with_insufficient_positioned_detections():
     assert detect_shadowing([make_detection(0, 51.5, -0.1)], [make_detection(0, 51.5, -0.1)]) is False
 
 
+def test_shadowing_picks_the_longest_of_several_close_runs_separated_by_gaps():
+    # A short close run (15s, alone below the 60s threshold), a gap wider
+    # than max_time_gap_s that must reset the run, then a second close run
+    # long enough on its own (70s) to cross the threshold -- proves the
+    # function tracks the longest *contiguous* run rather than summing
+    # every close moment across the whole timeline.
+    times = [0, 5, 10, 15, *range(100, 171, 5)]
+    track_a = [make_detection(t, 51.5, -0.1) for t in times]
+    track_b = [make_detection(t, 51.5001, -0.1001) for t in times]  # ~15m away throughout
+    assert detect_shadowing(track_a, track_b, max_distance_m=30.0, min_duration_s=60.0, max_time_gap_s=10.0) is True
+
+
 # --- Formations ------------------------------------------------------------
 
 def test_two_tracks_moving_together_form_a_group():

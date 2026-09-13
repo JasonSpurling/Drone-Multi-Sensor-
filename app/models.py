@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -84,6 +85,14 @@ class IncidentSeverity(StrEnum):
 class IncidentStatus(StrEnum):
     OPEN = "open"
     ACKNOWLEDGED = "acknowledged"
+    # An operator's deliberate "I'm actively working this one" step,
+    # between just having seen it (acknowledged) and calling it handled
+    # (resolved) -- distinct from acknowledged the same way "assigned to
+    # someone" differs from "seen by someone." Purely a manual transition
+    # (POST /api/incidents/{id}/investigate); nothing in app.incidents'
+    # auto-close logic ever sets or requires it, since every "still open"
+    # query below already means status != resolved.
+    INVESTIGATING = "investigating"
     RESOLVED = "resolved"
 
 
@@ -201,6 +210,119 @@ class Track(BaseModel):
         "on top of the as-of-last-detection value stored here. None for an UNKNOWN track -- there's "
         "no meaningful confidence in not knowing.",
     )
+    corroborating_sensor_types: int | None = Field(
+        default=None,
+        description="How many distinct sensor types have contributed a detection to this track's "
+        "recent history (app.fusion.corroborating_sensor_type_count's corroboration window) -- "
+        "computed fresh by GET /api/tracks/GET /api/tracks/{id}, not stored. Not populated on a "
+        "Track built any other way (e.g. inside app.tracking's own commit path), since it's a "
+        "read-time-only view, not part of a track's actual persisted state.",
+    )
+    verified: bool | None = Field(
+        default=None,
+        description="corroborating_sensor_types >= INCIDENT_CORROBORATION_MIN_SENSOR_TYPES -- the "
+        "same corroboration threshold app.incidents already uses to escalate incident severity, "
+        "not a second, differently-tuned definition of 'verified' invented just for this field. "
+        "The dashboard's Verified/Unverified track grouping is exactly this.",
+    )
+    contributing_sensor_types: list[str] | None = Field(
+        default=None,
+        description="Which distinct sensor types (the same recent-detection window "
+        "app.fusion.corroborating_sensor_type_count considers) have actually contributed a "
+        "detection to this track -- e.g. ['radar', 'camera']. Read-time-only, same as "
+        "corroborating_sensor_types/verified above (its len() is that count); not populated on "
+        "a Track built any other way.",
+    )
+    risk_score: int | None = Field(
+        default=None,
+        description="app.risk.compute_risk_score's 0-10 point score -- how urgent this track is to "
+        "look at, composed entirely from classification + verified + the worst open incident's "
+        "severity, all already-shown fields, never a proprietary/opaque ML score this app has no "
+        "trained model to actually back. Read-time-only, same as corroborating_sensor_types/verified "
+        "above; 0 for an ignored track regardless of the rest.",
+    )
+    risk_factors: list[str] | None = Field(
+        default=None,
+        description="app.risk.assess_risk's plain-English reasons behind risk_score, one per factor "
+        "that actually contributed (never a zero-point one) -- e.g. ['Classified as drone (+4)', "
+        "'Within 80m of a protected zone (+1)']. Powers the dashboard's risk-explanation display; "
+        "read-time-only, same as risk_score.",
+    )
+    zone_status: str | None = Field(
+        default=None,
+        description="This track's relationship to the nearest active restricted zone right now: "
+        "'inside' (a real point-in-polygon containment, app.zones.zones_containing_point), "
+        "'approaching' (outside, but within the same proximity range app.risk's zone-proximity bonus "
+        "uses), or 'none'. Read-time-only, same as risk_score.",
+    )
+    ignored: bool = Field(
+        default=False,
+        description="An operator's deliberate 'stop alerting on this' suppression -- unlike "
+        "`classification`, this is persisted (POST /api/tracks/{id}/ignore), not read-time-only. "
+        "A zone/behavioral incident is never opened for an ignored track (app.incidents._open_incident "
+        "and ._open_behavioral_incident both check it first); the track itself keeps updating and "
+        "showing up everywhere else exactly as before -- ignoring never hides or deletes data, only "
+        "suppresses new incidents from it. Reflects current effective state, not just the raw stored "
+        "flag: app.db._row_to_track resolves an expired ignored_until back to False on every read, so "
+        "this is never stale past whatever last actually loaded the row.",
+    )
+    ignored_until: datetime | None = Field(
+        default=None,
+        description="When this track's Ignore expires and reverts to normal alerting on its own -- "
+        "None means either not ignored, or ignored with no expiry (an operator picked 'Indefinitely', "
+        "meaning 'until I manually Unignore it'). Set via POST /api/tracks/{id}/ignore's "
+        "duration_minutes.",
+    )
+
+
+class TrackClassificationInput(BaseModel):
+    """Body for POST /api/tracks/{id}/classify -- a deliberate operator
+    override ("that's our security team's drone", "confirmed hostile", or
+    "never mind, forget that call and let automatic classification start
+    fresh"), distinct from the automated fusion ratchet that normally sets
+    Track.classification (see that field's own docstring). Restricted to
+    FRIENDLY, DRONE, and UNKNOWN, not the full Classification enum: an
+    operator watching the dashboard is making one of three calls -- this
+    is ours (friendly), this is the thing we're watching for (confirmed
+    drone), or clear my own earlier call and go back to unclassified (the
+    "Neutral" action) -- never reclassifying a track as a bird or an
+    aircraft, which is what the sensor evidence itself is for, not an
+    operator's manual say-so. Mirrors the same "automatic system decision
+    vs. a human's deliberate override" split already established between
+    app.incidents' auto-close logic and the operator-driven POST
+    /api/incidents/{id}/resolve.
+    """
+
+    classification: Literal[Classification.FRIENDLY, Classification.DRONE, Classification.UNKNOWN]
+
+
+class TrackIgnoreInput(BaseModel):
+    """Body for POST /api/tracks/{id}/ignore -- see Track.ignored's docstring.
+
+    `duration_minutes` only matters when `ignored=True`: omitted or None means
+    "Indefinitely" (until manually unignored); a number means the ignore
+    expires and reverts to normal alerting on its own after that many
+    minutes. Ignored when `ignored=False` -- unignoring always clears any
+    expiry along with the flag itself.
+    """
+
+    ignored: bool
+    duration_minutes: int | None = Field(default=None, gt=0)
+
+
+class VisualVerificationInput(BaseModel):
+    """Body for POST /api/tracks/{id}/verify-visual -- a human operator's
+    structured judgment after actually looking at the camera feed/snapshot
+    next to what the sensors reported, not a single button that
+    automatically declares the track "verified." Deliberately not a
+    closed-loop auto-tracking confirmation (this app has no visual object
+    tracking to auto-confirm anything) -- just a real record of what a
+    person concluded, and when, kept in the audit log alongside every
+    other operator decision (classify, ignore, acknowledge, resolve).
+    """
+
+    result: Literal["confirmed", "different_object", "false_detection", "unable_to_determine"]
+    note: str | None = Field(default=None, max_length=500)
 
 
 class Incident(BaseModel):
@@ -289,6 +411,18 @@ class SensorRegistrationInput(BaseModel):
         description="Compass bearing (degrees) the sensor's azimuth_deg=0 points to",
     )
     active: bool = True
+    camera_stream_url: str | None = Field(
+        default=None,
+        max_length=500,
+        description="An RTSP/HTTP source URL for GET /api/sensors/{id}/live "
+        "(app/api/camera_live.py) to open and re-proxy as an MJPEG stream, so the dashboard shows "
+        "a real live view without the browser ever connecting to the camera directly. Write-only "
+        "in practice: GET /api/sensor-registrations and the PUT response below always report this "
+        "as null regardless of what's actually stored (see app/api/sensor_registry.py) since a "
+        "camera's stream URL commonly embeds its own login credentials -- there's no legitimate "
+        "reason a dashboard viewer needs it back once it's set, only the proxy endpoint that "
+        "already holds it server-side.",
+    )
 
 
 class SensorRegistration(SensorRegistrationInput):
