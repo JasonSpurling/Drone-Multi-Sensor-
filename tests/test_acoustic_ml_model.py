@@ -9,6 +9,7 @@ import random
 import struct
 import wave
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -177,3 +178,47 @@ def test_classify_audio_returns_none_when_top_class_probability_is_below_thresho
     monkeypatch.setattr(acoustic_model, "ACOUSTIC_ML_MODEL_PATH", str(model_path))
     monkeypatch.setattr(acoustic_model, "ACOUSTIC_ML_CONFIDENCE_THRESHOLD", 1.01)
     assert acoustic_model.classify_audio(_tone(120.0), SAMPLE_RATE_HZ) is None
+
+
+class _FakeModelWithoutDroneClass:
+    """A model that was never trained on any "drone" examples -- e.g. a
+    stale model file trained against a different label set entirely.
+    classify_audio() must fall back gracefully (None), not crash on a
+    missing class.
+    """
+
+    classes_: ClassVar = ["bird", "aircraft"]
+
+    def predict_proba(self, features):
+        return np.array([[0.6, 0.4]])
+
+
+def _use_fake_cached_model(tmp_path, monkeypatch, model):
+    model_path = tmp_path / "model.joblib"
+    model_path.write_bytes(b"")
+    monkeypatch.setattr(acoustic_model, "ACOUSTIC_ML_MODEL_PATH", str(model_path))
+    monkeypatch.setattr(acoustic_model, "_model_cache", model)
+    monkeypatch.setattr(acoustic_model, "_model_cache_path", str(model_path))
+
+
+def test_classify_audio_returns_none_when_the_model_has_no_drone_class(tmp_path, monkeypatch):
+    _use_fake_cached_model(tmp_path, monkeypatch, _FakeModelWithoutDroneClass())
+    assert acoustic_model.classify_audio(_tone(120.0), SAMPLE_RATE_HZ) is None
+
+
+class _FakeModelThatRaises:
+    classes_: ClassVar = ["drone", "bird"]
+
+    def predict_proba(self, features):
+        raise ValueError("model input shape mismatch")
+
+
+def test_classify_audio_returns_none_and_warns_for_a_model_producing_an_unusable_prediction(
+    tmp_path, monkeypatch, caplog
+):
+    _use_fake_cached_model(tmp_path, monkeypatch, _FakeModelThatRaises())
+
+    with caplog.at_level("WARNING"):
+        assert acoustic_model.classify_audio(_tone(120.0), SAMPLE_RATE_HZ) is None
+
+    assert "unusable prediction" in caplog.text

@@ -107,6 +107,89 @@ def test_live_view_streams_real_mjpeg_framing_with_a_fake_capture(isolated_db, m
     assert b"\xff\xd8fakejpeg\xff\xd9" in body
 
 
+def test_live_view_502s_when_the_stream_never_opens(isolated_db, monkeypatch):
+    class NeverOpensVideoCapture:
+        def __init__(self, url):
+            pass
+
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    fake_cv2 = types.SimpleNamespace(VideoCapture=NeverOpensVideoCapture)
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        with client.stream("GET", "/api/sensors/cam-1/live") as r:
+            assert r.status_code == 200  # headers already committed once streaming starts
+            body = b"".join(r.iter_bytes())
+    assert body == b""  # the connection just ends -- _frames_or_end swallows the RuntimeError
+
+
+def test_live_view_skips_a_frame_that_fails_to_encode(isolated_db, monkeypatch):
+    class FakeVideoCapture:
+        def __init__(self, url):
+            self._read_count = 0
+
+        def isOpened(self):
+            return True
+
+        def read(self):
+            self._read_count += 1
+            if self._read_count > 2:
+                return False, None
+            return True, object()
+
+        def release(self):
+            pass
+
+    encode_calls = []
+
+    def fake_imencode(ext, frame, params):
+        encode_calls.append(frame)
+        if len(encode_calls) == 1:
+            return False, None  # first frame fails to encode -- must be skipped, not crash
+        return True, types.SimpleNamespace(tobytes=lambda: b"\xff\xd8secondframe\xff\xd9")
+
+    fake_cv2 = types.SimpleNamespace(
+        VideoCapture=FakeVideoCapture, imencode=fake_imencode, IMWRITE_JPEG_QUALITY=1
+    )
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        with client.stream("GET", "/api/sensors/cam-1/live") as r:
+            assert r.status_code == 200
+            body = b"".join(r.iter_bytes())
+
+    assert len(encode_calls) == 2
+    assert b"\xff\xd8secondframe\xff\xd9" in body
+
+
+def test_snapshot_502s_when_the_stream_never_opens(isolated_db, monkeypatch):
+    class NeverOpensVideoCapture:
+        def __init__(self, url):
+            pass
+
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    fake_cv2 = types.SimpleNamespace(VideoCapture=NeverOpensVideoCapture, IMWRITE_JPEG_QUALITY=1)
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+
+    with TestClient(app) as client:
+        client.put("/api/sensor-registrations/cam-1", json=CAMERA_REGISTRATION)
+        r = client.get("/api/sensors/cam-1/snapshot")
+        assert r.status_code == 502
+        assert "Could not open camera stream" in r.json()["detail"]
+
+
 @pytest.fixture
 def keys(monkeypatch):
     import json

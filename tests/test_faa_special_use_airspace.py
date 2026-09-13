@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.airspace.faa_special_use_airspace import (
+    _altitude_to_m,
     classify_sua_type,
     fetch_special_use_airspace_geojson,
     geojson_to_zones,
@@ -133,6 +134,38 @@ def test_non_polygon_features_are_skipped():
         }],
     }
     assert geojson_to_zones(geojson) == []
+
+
+def test_polygon_features_with_no_coordinate_rings_are_skipped():
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature", "properties": {"TYPE": "PROHIBITED", "SUAS_IDENT": "P-1"},
+            "geometry": {"type": "Polygon", "coordinates": []},
+        }],
+    }
+    assert geojson_to_zones(geojson) == []
+
+
+def test_altitude_to_m_is_none_for_a_missing_value():
+    assert _altitude_to_m(None) is None
+
+
+def test_altitude_to_m_accepts_an_already_numeric_value():
+    # This layer's own field type per field wasn't confirmed (see module
+    # docstring) -- a real int/float, not just a numeric string, must
+    # still convert correctly.
+    assert _altitude_to_m(18000) == pytest.approx(18000 * 0.3048)
+    assert _altitude_to_m(18000.0) == pytest.approx(18000 * 0.3048)
+
+
+def test_altitude_to_m_is_none_for_an_empty_string():
+    assert _altitude_to_m("") is None
+    assert _altitude_to_m("   ") is None
+
+
+def test_altitude_to_m_is_none_for_unparseable_text():
+    assert _altitude_to_m("not-a-number") is None
 
 
 def test_fetch_builds_bbox_query_and_parses_response(monkeypatch):
