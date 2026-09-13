@@ -65,6 +65,22 @@ def test_no_incident_for_track_outside_zone(site_id):
     assert check_zone_incidents(make_track(site_id, latitude=60.0, longitude=60.0)) == []
 
 
+def test_check_zone_incidents_is_a_noop_for_a_track_with_no_position():
+    track = Track(
+        track_uid="no-position", first_seen=datetime(2026, 1, 1), last_seen=datetime(2026, 1, 1),
+        status=TrackStatus.ACTIVE, classification=Classification.DRONE,
+    )
+    assert check_zone_incidents(track) == []
+
+
+def test_check_zone_incident_resolutions_is_a_noop_for_a_track_with_no_position():
+    track = Track(
+        track_uid="no-position", first_seen=datetime(2026, 1, 1), last_seen=datetime(2026, 1, 1),
+        status=TrackStatus.ACTIVE, classification=Classification.DRONE,
+    )
+    assert check_zone_incident_resolutions(track) == []
+
+
 def test_no_incident_for_an_ignored_track_even_inside_a_restricted_zone(site_id):
     """An operator's Ignore action (Track.ignored, POST /api/tracks/{id}
     /ignore) suppresses new incidents -- checked in _open_incident itself,

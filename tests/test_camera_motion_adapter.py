@@ -5,7 +5,7 @@ import urllib.error
 
 import pytest
 
-from app.adapters.camera_motion import build_detection_payload, should_post, watch
+from app.adapters.camera_motion import build_detection_payload, main, should_post, watch
 
 
 def test_build_detection_payload_shape():
@@ -145,3 +145,36 @@ def test_watch_releases_capture_even_when_the_loop_is_interrupted(monkeypatch):
         watch(_args())
 
     assert capture.released is True
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.camera_motion.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "camera_motion", "--source", "rtsp://cam/x", "--target-lat", "51.5", "--target-lon", "-0.1",
+            "--confidence", "0.7", "--min-area", "800", "--min-interval", "5",
+        ],
+    )
+
+    main()
+
+    assert captured_args["source"] == "rtsp://cam/x"
+    assert captured_args["target_lat"] == 51.5
+    assert captured_args["target_lon"] == -0.1
+    assert captured_args["confidence"] == 0.7
+    assert captured_args["min_area"] == 800.0
+    assert captured_args["min_interval"] == 5.0
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.camera_motion.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr("sys.argv", ["camera_motion", "--target-lat", "51.5", "--target-lon", "-0.1"])
+
+    main()
+
+    assert captured_args["source"] == "0"
+    assert captured_args["sensor_id"] == "camera-1"
+    assert captured_args["confidence"] == 0.5

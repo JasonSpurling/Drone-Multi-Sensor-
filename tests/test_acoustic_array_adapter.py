@@ -7,7 +7,7 @@ import urllib.error
 import numpy as np
 import pytest
 
-from app.adapters.acoustic_array_bridge import build_detection_payload, parse_mic_positions, watch
+from app.adapters.acoustic_array_bridge import build_detection_payload, main, parse_mic_positions, watch
 
 
 def test_payload_reports_azimuth_and_range_not_latlon():
@@ -163,3 +163,50 @@ def test_watch_uses_ml_confidence_when_a_model_is_configured(monkeypatch):
         watch(args)
 
     assert posted[0]["confidence"] == 0.92  # the ML model's opinion, not args.confidence (0.6)
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.acoustic_array_bridge.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "acoustic_array_bridge",
+            "--mic-positions", "[[0.032,0.032],[0.032,-0.032],[-0.032,-0.032],[-0.032,0.032]]",
+            "--assumed-range-m", "150", "--confidence", "0.6",
+        ],
+    )
+
+    main()
+
+    assert captured_args["mic_positions"] == "[[0.032,0.032],[0.032,-0.032],[-0.032,-0.032],[-0.032,0.032]]"
+    assert captured_args["assumed_range_m"] == 150.0
+    assert captured_args["confidence"] == 0.6
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.acoustic_array_bridge.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["acoustic_array_bridge", "--mic-positions", "[[0,0],[0,1]]", "--assumed-range-m", "150"],
+    )
+
+    main()
+
+    assert captured_args["sample_rate"] == 48000.0
+    assert captured_args["block_seconds"] == 0.5
+    assert captured_args["confidence"] == 0.6
+    assert captured_args["sensor_id"] == "acoustic-array-1"
+
+
+def test_main_rejects_a_non_positive_assumed_range(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["acoustic_array_bridge", "--mic-positions", "[[0,0],[0,1]]", "--assumed-range-m", "0"],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "must be positive" in capsys.readouterr().err

@@ -132,6 +132,13 @@ def test_mahalanobis_sq_uses_the_more_permissive_model_not_the_stricter_one():
     assert combined == pytest.approx(maneuver_distance)  # the permissive (min) one, not max
 
 
+def test_inv2x2_rejects_a_singular_matrix():
+    from app.imm import _inv2x2
+
+    with pytest.raises(ValueError, match="singular"):
+        _inv2x2([[1.0, 2.0], [2.0, 4.0]])  # second row is a multiple of the first -> determinant 0
+
+
 def test_combined_state_cache_is_invalidated_by_predict_and_update():
     imm = IMMFilter(x=0.0, y=0.0, vx=5.0, vy=0.0)
     x_before = imm.x

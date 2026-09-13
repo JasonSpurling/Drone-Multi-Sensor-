@@ -138,3 +138,19 @@ def test_format_post_error_includes_the_response_body_for_an_http_error():
 def test_format_post_error_falls_back_to_str_for_a_non_http_error():
     exc = urllib.error.URLError("Connection refused")
     assert format_post_error(exc) == str(exc)
+
+
+def test_format_post_error_survives_a_body_that_fails_to_read(monkeypatch):
+    # The response body isn't always readable a second time (already
+    # consumed, connection dropped) -- must fall back to no body rather
+    # than raise out of error formatting itself.
+    exc = urllib.error.HTTPError(
+        url="http://x/api/detections", code=401, msg="Unauthorized", hdrs=None, fp=io.BytesIO(b"")
+    )
+
+    def raise_oserror():
+        raise OSError("connection already closed")
+
+    monkeypatch.setattr(exc, "read", raise_oserror)
+    message = format_post_error(exc)
+    assert message == "HTTP 401 Unauthorized"

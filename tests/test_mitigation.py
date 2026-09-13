@@ -96,3 +96,21 @@ def test_payload_carries_track_position_and_classification():
 def test_payload_is_json_serializable():
     payload = mitigation.build_mitigation_payload(make_incident(IncidentSeverity.HIGH), make_track())
     json.dumps(payload)  # must not raise
+
+
+def test_survives_a_webhook_delivery_failure(monkeypatch, caplog):
+    # A dead or unreachable mitigation endpoint must not raise out of
+    # notify_mitigation_system -- same tradeoff as the alerting/webhook
+    # integrations, this notifier is best-effort.
+    monkeypatch.setattr("app.mitigation.MITIGATION_WEBHOOK_URL", "https://mitigation.example/webhook")
+    monkeypatch.setattr("app.mitigation.MITIGATION_MIN_SEVERITY", "low")
+
+    def failing_urlopen(request, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", failing_urlopen)
+
+    with caplog.at_level("WARNING"):
+        mitigation.notify_mitigation_system(make_incident(IncidentSeverity.CRITICAL), make_track())  # must not raise
+
+    assert "Mitigation system notification failed" in caplog.text

@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta
 
 from app.db import create_detection, create_track, list_incidents
-from app.incidents import check_formation_incidents, check_loitering_incident, check_shadowing_incidents
-from app.models import Classification, Detection, IncidentType, SensorType, Track, TrackStatus
+from app.incidents import (
+    check_formation_incidents,
+    check_loitering_incident,
+    check_shadowing_incidents,
+    close_incidents_for_closed_track,
+)
+from app.models import Classification, Detection, IncidentSeverity, IncidentType, SensorType, Track, TrackStatus
 
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -39,6 +44,43 @@ def test_loitering_incident_opened_when_track_circles_one_spot(site_id):
     assert incident.incident_type == IncidentType.LOITERING
     assert incident.zone_id is None
     assert incident.track_id == track.id
+
+
+def test_loitering_incident_severity_escalates_when_corroborated(site_id):
+    track = make_track(site_id, "loiterer")
+    for seconds_offset in range(0, 130, 10):
+        create_detection(
+            Detection(
+                site_id=site_id, sensor_id="s1", sensor_type=SensorType.RADAR,
+                timestamp=BASE_TIME + timedelta(seconds=seconds_offset),
+                track_id=track.id, latitude=51.1, longitude=0.0, confidence=0.9,
+            )
+        )
+    # A second, distinct sensor type reporting on the same track.
+    create_detection(
+        Detection(
+            site_id=site_id, sensor_id="rf-1", sensor_type=SensorType.RF, timestamp=BASE_TIME,
+            track_id=track.id, latitude=51.1, longitude=0.0, confidence=0.9,
+        )
+    )
+
+    incident = check_loitering_incident(track)
+
+    assert incident is not None
+    assert incident.severity == IncidentSeverity.HIGH  # MEDIUM escalated one level
+    assert "corroborated by 2 sensor types" in incident.description
+
+
+def test_no_loitering_incident_for_an_ignored_track(site_id):
+    track = make_track(site_id, "loiterer", ignored=True)
+    seed_history(site_id, track.id, [(t, 51.1, 0.0) for t in range(0, 130, 10)])
+    assert check_loitering_incident(track) is None
+
+
+def test_no_loitering_incident_for_an_unpersisted_track(site_id):
+    track = make_track(site_id, "loiterer")
+    track.id = None
+    assert check_loitering_incident(track) is None
 
 
 def test_loitering_incident_not_duplicated_on_repeat_check(site_id):
@@ -130,3 +172,11 @@ def test_no_shadowing_incident_for_distant_tracks(site_id):
     seed_history(site_id, track_a.id, [(t, 51.5, -0.1) for t in range(0, 90, 5)])
     seed_history(site_id, track_b.id, [(t, 52.5, -0.5) for t in range(0, 90, 5)])
     assert check_shadowing_incidents([track_a, track_b]) == []
+
+
+def test_close_incidents_for_closed_track_is_a_noop_for_an_unpersisted_track():
+    track = Track(
+        track_uid="unpersisted", first_seen=BASE_TIME, last_seen=BASE_TIME,
+        status=TrackStatus.CLOSED, classification=Classification.DRONE,
+    )
+    assert close_incidents_for_closed_track(track) == []

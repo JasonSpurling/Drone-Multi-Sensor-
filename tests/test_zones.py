@@ -3,7 +3,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import create_zone
 from app.models import Zone, ZoneType
-from app.zones import nearest_restricted_zone_distance_m, point_in_polygon, zones_containing_point
+from app.zones import (
+    load_zones_from_file,
+    nearest_restricted_zone_distance_m,
+    point_in_polygon,
+    zones_containing_point,
+)
 
 SQUARE = [(51.0, -0.1), (51.0, 0.1), (51.2, 0.1), (51.2, -0.1)]
 
@@ -14,6 +19,14 @@ def test_point_in_polygon_inside():
 
 def test_point_in_polygon_outside():
     assert point_in_polygon(52.0, 0.0, SQUARE) is False
+
+
+def test_load_zones_from_file_warns_and_returns_empty_when_the_seed_file_is_missing(site_id, caplog, tmp_path):
+    missing_path = tmp_path / "no-such-zones.json"
+    with caplog.at_level("WARNING"):
+        result = load_zones_from_file(site_id, path=missing_path)
+    assert result == []
+    assert "Zone seed file not found" in caplog.text
 
 
 def test_zones_containing_point_matches_by_geometry(site_id):

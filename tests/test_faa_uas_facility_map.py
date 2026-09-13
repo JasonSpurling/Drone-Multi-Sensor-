@@ -80,6 +80,17 @@ def test_non_polygon_features_are_skipped():
     assert geojson_to_zones(geojson) == []
 
 
+def test_polygon_features_with_no_coordinate_rings_are_skipped():
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature", "properties": {"CEILING": 100},
+            "geometry": {"type": "Polygon", "coordinates": []},
+        }],
+    }
+    assert geojson_to_zones(geojson) == []
+
+
 def test_zones_import_as_monitoring_type_not_restricted():
     zones = geojson_to_zones(SAMPLE_GEOJSON)
     assert all(zone.zone_type == ZoneType.MONITORING for zone in zones)

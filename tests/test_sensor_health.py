@@ -74,6 +74,20 @@ def test_a_deactivated_registration_with_no_detections_is_not_flagged(site_id):
     assert get_sensor_health(site_id) == []
 
 
+def test_a_sensor_past_the_online_window_but_within_the_stale_window_is_stale(site_id):
+    _post_detection(site_id, "radar-5", BASE_TIME)
+    health = get_sensor_health(site_id, now=BASE_TIME + timedelta(seconds=120))  # > 60s online, <= 300s stale
+    assert len(health) == 1
+    assert health[0].status == SensorStatus.STALE
+
+
+def test_a_sensor_past_the_stale_window_is_offline(site_id):
+    _post_detection(site_id, "radar-6", BASE_TIME)
+    health = get_sensor_health(site_id, now=BASE_TIME + timedelta(seconds=600))  # > 300s stale
+    assert len(health) == 1
+    assert health[0].status == SensorStatus.OFFLINE
+
+
 def test_results_are_sorted_by_sensor_id(site_id):
     _register(site_id, "z-sensor")
     _post_detection(site_id, "a-sensor", BASE_TIME)

@@ -30,6 +30,13 @@ def test_passthrough_when_sensor_not_registered(site_id):
     assert result.latitude is None
 
 
+def test_passthrough_when_detection_has_no_site_id():
+    # Nothing to look a sensor registration up against without a site_id.
+    detection = make_detection(site_id=None, azimuth_deg=90.0, range_m=1000.0)
+    result = georeference(detection)
+    assert result.latitude is None
+
+
 def test_computes_latlon_from_registered_sensor_position(site_id):
     upsert_sensor_registration(
         sensor_id="radar-1",

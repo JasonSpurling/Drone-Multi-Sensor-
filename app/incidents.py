@@ -241,7 +241,9 @@ def check_formation_incidents(tracks: list[Track]) -> list[Incident]:
         for track_id in group:
             track = tracks_by_id.get(track_id)
             if track is None:
-                continue
+                continue  # pragma: no cover -- defensive only: every id detect_formations()
+                # returns is sourced from this same `tracks` list, so tracks_by_id can't
+                # actually miss one; guards against that invariant changing underneath this.
             incident = _open_behavioral_incident(
                 track, IncidentType.FORMATION,
                 f"Track {track.track_uid} moving in formation with: {group_uids}",

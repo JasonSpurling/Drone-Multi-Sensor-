@@ -151,6 +151,16 @@ def test_visual_verification_requires_operator_or_admin_role(monkeypatch):
         assert r.status_code == 403
 
 
+def test_visual_verification_404s_for_a_nonexistent_track(admin_key):
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/tracks/999999/verify-visual",
+            json={"result": "confirmed"},
+            headers={"X-API-Key": admin_key},
+        )
+        assert r.status_code == 404
+
+
 def test_audit_log_requires_admin_role(monkeypatch):
     monkeypatch.setattr("app.config.API_KEY", "")
     monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({"view-key": "viewer"}))

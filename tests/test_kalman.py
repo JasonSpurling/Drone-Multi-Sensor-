@@ -1,6 +1,6 @@
 import pytest
 
-from app.kalman import ConstantVelocityKalmanFilter
+from app.kalman import ConstantVelocityKalmanFilter, _inv2x2
 
 
 def test_predict_advances_position_by_velocity_times_dt():
@@ -69,3 +69,8 @@ def test_mahalanobis_sq_grows_with_distance():
     near = kf.mahalanobis_sq(5.0, 0.0, measurement_variance=25.0)
     far = kf.mahalanobis_sq(500.0, 0.0, measurement_variance=25.0)
     assert far > near
+
+
+def test_inv2x2_rejects_a_singular_matrix():
+    with pytest.raises(ValueError, match="singular"):
+        _inv2x2([[1.0, 2.0], [2.0, 4.0]])  # second row is a multiple of the first -> determinant 0

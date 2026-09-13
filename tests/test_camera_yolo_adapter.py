@@ -3,7 +3,7 @@ import sys
 import types
 import urllib.error
 
-from app.adapters.camera_yolo import build_detection_payload, classify_yolo_detection, watch
+from app.adapters.camera_yolo import build_detection_payload, classify_yolo_detection, main, watch
 
 
 def test_non_aerial_class_is_skipped():
@@ -228,3 +228,36 @@ def test_watch_survives_a_post_failure(monkeypatch, capsys):
 
     assert "ERROR posting detection" in capsys.readouterr().out
     assert capture.released is True
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.camera_yolo.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "camera_yolo", "--source", "1", "--model", "my_model.pt", "--target-lat", "51.5",
+            "--target-lon", "-0.1", "--min-model-confidence", "0.6", "--min-interval", "2",
+            "--snapshot-dir", "/tmp/snaps",
+        ],
+    )
+
+    main()
+
+    assert captured_args["source"] == "1"
+    assert captured_args["model"] == "my_model.pt"
+    assert captured_args["target_lat"] == 51.5
+    assert captured_args["min_model_confidence"] == 0.6
+    assert captured_args["snapshot_dir"] == "/tmp/snaps"
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.camera_yolo.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr("sys.argv", ["camera_yolo", "--target-lat", "51.5", "--target-lon", "-0.1"])
+
+    main()
+
+    assert captured_args["model"] == "yolov8n.pt"
+    assert captured_args["snapshot_dir"] is None
+    assert captured_args["sensor_id"] == "camera-yolo-1"

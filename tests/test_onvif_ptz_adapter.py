@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-from app.adapters.onvif_ptz_bridge import fetch_cue, normalize_to_range, watch
+from app.adapters.onvif_ptz_bridge import fetch_cue, main, normalize_to_range, watch
 
 
 def test_normalize_maps_midpoint_correctly():
@@ -210,3 +210,49 @@ def test_fetch_cue_reraises_other_http_errors():
             fetch_cue("http://127.0.0.1:8000", track_id=1, camera_sensor_id="cam-1")
     finally:
         urllib_request_module.urlopen = orig
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+
+    async def fake_watch(args):
+        captured_args.update(vars(args))
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.watch", fake_watch)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "onvif_ptz_bridge", "--track-id", "42", "--cueing-camera-sensor-id", "ptz-cam-1",
+            "--camera-host", "192.168.1.50", "--camera-user", "admin", "--camera-password", "secret",
+            "--poll-interval", "2.5",
+        ],
+    )
+
+    main()
+
+    assert captured_args["track_id"] == 42
+    assert captured_args["cueing_camera_sensor_id"] == "ptz-cam-1"
+    assert captured_args["camera_host"] == "192.168.1.50"
+    assert captured_args["poll_interval"] == 2.5
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+
+    async def fake_watch(args):
+        captured_args.update(vars(args))
+
+    monkeypatch.setattr("app.adapters.onvif_ptz_bridge.watch", fake_watch)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "onvif_ptz_bridge", "--track-id", "1", "--cueing-camera-sensor-id", "ptz-cam-1",
+            "--camera-host", "192.168.1.50", "--camera-user", "admin", "--camera-password", "secret",
+        ],
+    )
+
+    main()
+
+    assert captured_args["camera_port"] == 80
+    assert captured_args["poll_interval"] == 1.0
+    assert captured_args["api_url"] == "http://127.0.0.1:8000"

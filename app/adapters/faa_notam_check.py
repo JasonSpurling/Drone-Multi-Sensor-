@@ -59,5 +59,8 @@ def main() -> None:
         print(f"- [{notam['number']}] {notam['icao_location']}: {notam['text']}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover -- only executes when this
+    # file is run directly as a script (python -m / a shebang), never when
+    # imported under pytest, so it is structurally unreachable in-process;
+    # main()'s own body is covered by tests that call it directly.
     main()

@@ -13,7 +13,7 @@ import urllib.error
 
 import pytest
 
-from app.adapters.rf_sweep_bridge import load_baseline_noise_floor_db, watch
+from app.adapters.rf_sweep_bridge import load_baseline_noise_floor_db, main, watch
 
 _QUIET_LINE = "2026-01-01, 12:00:00.000000, 2400000000, 2400600000, 200000.0, 3, -70.0, -71.0, -69.0"
 _NOISY_LINE = "2026-01-01, 12:00:00.100000, 2400600000, 2401200000, 200000.0, 2, -30.0, -25.0"
@@ -155,3 +155,33 @@ def test_watch_skips_malformed_lines_without_crashing(monkeypatch):
     watch(_bridge_args())
 
     assert len(posted) == 1
+
+
+def test_main_parses_args_and_invokes_watch(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.rf_sweep_bridge.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "rf_sweep_bridge", "--target-lat", "51.5", "--target-lon", "-0.1", "--threshold-db", "20",
+            "--min-interval", "60",
+        ],
+    )
+
+    main()
+
+    assert captured_args["target_lat"] == 51.5
+    assert captured_args["threshold_db"] == 20.0
+    assert captured_args["min_interval"] == 60.0
+
+
+def test_main_uses_documented_defaults(monkeypatch):
+    captured_args = {}
+    monkeypatch.setattr("app.adapters.rf_sweep_bridge.watch", lambda args: captured_args.update(vars(args)))
+    monkeypatch.setattr("sys.argv", ["rf_sweep_bridge", "--target-lat", "51.5", "--target-lon", "-0.1"])
+
+    main()
+
+    assert captured_args["threshold_db"] == 15.0
+    assert captured_args["baseline_csv"] is None
+    assert captured_args["sensor_id"] == "rf-sweep-1"

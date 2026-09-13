@@ -90,6 +90,19 @@ def test_a_session_cookie_with_an_insufficient_role_is_rejected_with_403(monkeyp
     assert response.status_code == 403
 
 
+def test_oidc_enabled_but_no_cookie_sent_falls_through_to_the_normal_api_key_path(monkeypatch, isolated_db):
+    # Distinct from the tampered-cookie case below -- here there's no
+    # cookie at all, so _try_session_cookie must bail out before ever
+    # calling verify_session_token.
+    _enable_oidc(monkeypatch)
+    monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({API_KEY: "admin"}))
+    monkeypatch.setattr("app.config.API_KEY", "")
+
+    with TestClient(app) as client:
+        response = client.get("/api/tracks")
+    assert response.status_code == 401  # no cookie, no X-API-Key -- falls through and fails normally
+
+
 def test_a_tampered_session_cookie_falls_through_to_the_normal_api_key_path(monkeypatch, isolated_db):
     _enable_oidc(monkeypatch)
     monkeypatch.setattr("app.config.API_KEYS_JSON", json.dumps({API_KEY: "admin"}))
@@ -114,6 +127,21 @@ def test_session_cookie_is_ignored_when_oidc_is_not_configured(monkeypatch, isol
         client.cookies.set(SESSION_COOKIE_NAME, token)
         response = client.get("/api/tracks")
     assert response.status_code == 401
+
+
+def test_a_valid_session_cookie_authenticates_the_query_param_capable_dependency(monkeypatch, isolated_db):
+    # app/api/camera_live.py's live-view proxy uses require_role_allow_
+    # query_key (a browser <img> tag can't set a custom header), which has
+    # its own separate cookie-fallback wiring from the plain require_role
+    # every other endpoint uses -- exercised here via a 404 (sensor not
+    # registered) which only happens once authentication itself succeeds.
+    _enable_oidc(monkeypatch)
+    token = create_session_token(role="viewer", site=None, label="alice@example.com")
+
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE_NAME, token)
+        response = client.get("/api/sensors/does-not-exist/live")
+    assert response.status_code == 404
 
 
 def test_x_api_key_header_takes_priority_over_a_session_cookie(monkeypatch, isolated_db):

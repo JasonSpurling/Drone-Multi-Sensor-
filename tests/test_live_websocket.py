@@ -8,10 +8,12 @@ the WebSocket read happens on the event loop -- if that hand-off were
 broken, this test would hang until its own timeout rather than pass.
 """
 
+import asyncio
 import json
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 
@@ -100,3 +102,51 @@ def test_missing_api_key_is_rejected_when_keys_are_configured(monkeypatch):
 
     assert exc_info.value.code == 4401
     assert "api_key" in exc_info.value.reason
+
+
+class _FakeQueue:
+    def __init__(self, items):
+        self._items = list(items)
+
+    async def get(self):
+        return self._items.pop(0)
+
+
+class _FakeWebSocket:
+    def __init__(self, send_effect: Exception):
+        self.accepted = False
+        self._send_effect = send_effect
+
+    async def accept(self):
+        self.accepted = True
+
+    async def send_text(self, payload):
+        raise self._send_effect
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        pass
+
+
+def test_live_updates_swallows_a_disconnect_that_happens_while_pushing_an_update(monkeypatch, site_id):
+    from app.api.live import live_updates
+
+    monkeypatch.setattr("app.api.live.subscribe", lambda site_id: _FakeQueue(["{}"]))
+    monkeypatch.setattr("app.api.live.unsubscribe", lambda site_id, queue: None)
+    ws = _FakeWebSocket(send_effect=WebSocketDisconnect())
+
+    asyncio.run(live_updates(ws, api_key=None))  # must not raise
+
+    assert ws.accepted
+
+
+def test_live_updates_logs_and_survives_an_unexpected_send_failure(monkeypatch, site_id, caplog):
+    from app.api.live import live_updates
+
+    monkeypatch.setattr("app.api.live.subscribe", lambda site_id: _FakeQueue(["{}"]))
+    monkeypatch.setattr("app.api.live.unsubscribe", lambda site_id, queue: None)
+    ws = _FakeWebSocket(send_effect=RuntimeError("boom"))
+
+    with caplog.at_level("ERROR"):
+        asyncio.run(live_updates(ws, api_key=None))  # must not raise
+
+    assert "Live-update WebSocket connection failed" in caplog.text
