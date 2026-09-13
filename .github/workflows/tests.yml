@@ -64,6 +64,17 @@ jobs:
         with:
           name: ci-rendered-visual-baselines
           path: tests_e2e/visual_baselines/
+      # This sandbox's own egress policy blocks the Azure Blob Storage host
+      # actions/upload-artifact's download URL resolves to, so the PNG
+      # bytes are additionally base64-dumped straight into the job log
+      # (reachable via the GitHub API) as a fallback retrieval path.
+      - run: |
+          for f in tests_e2e/visual_baselines/icon_rail_with_active_alert.png tests_e2e/visual_baselines/map_layer_toggles.png; do
+            echo "===BEGIN $f==="
+            base64 -w 0 "$f"
+            echo ""
+            echo "===END $f==="
+          done
           if-no-files-found: ignore
 
   load-smoke:

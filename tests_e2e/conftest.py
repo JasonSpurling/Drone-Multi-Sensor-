@@ -151,7 +151,9 @@ _PER_PIXEL_TOLERANCE = 40
 _SIZE_TOLERANCE_PX = 3
 
 
-def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
+def _assert_matches_visual_baseline(
+    locator: Locator, name: str, *, diff_ratio_tolerance: float = _DIFF_RATIO_TOLERANCE
+) -> None:
     """Screenshots `locator` and compares it against
     tests_e2e/visual_baselines/{name}.png, the way a human reviewing a
     screenshot would have caught the rail-badge-positioning bug (see
@@ -163,6 +165,16 @@ def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
     in any snapshot-testing setup. Set UPDATE_VISUAL_BASELINES=1 to write
     (or overwrite) the baseline instead of asserting against it, then
     review the PNG with `git diff`/an image viewer before committing it.
+
+    `diff_ratio_tolerance` overrides _DIFF_RATIO_TOLERANCE for elements
+    whose content is demonstrably noisier than this suite's usual noise
+    floor -- see test_visual_regression_icon_rail_with_active_alert's own
+    use of this for why (generic Unicode symbol glyphs with no bundled/
+    embedded font, resolved through the OS's font-fallback chain, which
+    varied enough across three separate CI runs of pixel-identical content
+    to swing between a 1px size change, a 4.3% pixel diff, and an 11.4%
+    pixel diff -- real regressions this suite exists to catch move things
+    by far more than that, see the ratio this test still catches below).
     """
     from PIL import Image, ImageChops
 
@@ -218,7 +230,7 @@ def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
     total_pixels = actual.size[0] * actual.size[1]
     diff_ratio = differing_pixels / total_pixels if total_pixels else 0.0
 
-    if diff_ratio > _DIFF_RATIO_TOLERANCE:
+    if diff_ratio > diff_ratio_tolerance:
         VISUAL_FAILURE_DIR.mkdir(parents=True, exist_ok=True)
         actual_path = VISUAL_FAILURE_DIR / f"{name}.actual.png"
         diff_path = VISUAL_FAILURE_DIR / f"{name}.diff.png"
@@ -226,7 +238,7 @@ def _assert_matches_visual_baseline(locator: Locator, name: str) -> None:
         diff.save(diff_path)
         pytest.fail(
             f"{name}: {diff_ratio:.2%} of pixels differ from the baseline "
-            f"(tolerance {_DIFF_RATIO_TOLERANCE:.2%}). Actual/diff saved to "
+            f"(tolerance {diff_ratio_tolerance:.2%}). Actual/diff saved to "
             f"{actual_path} / {diff_path} for review. If this is an intentional "
             f"UI change, regenerate the baseline with UPDATE_VISUAL_BASELINES=1."
         )
