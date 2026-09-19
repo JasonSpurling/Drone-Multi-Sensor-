@@ -6,4 +6,4 @@ bleak==3.0.2
 firmware-pyodid @ git+https://github.com/dronetag/python-odid@dronetag
 # For astm_remote_id_wifi_bridge.py -- the WiFi Beacon transport only;
 # the BLE bridge doesn't need this.
-scapy==2.6.1
+scapy==2.7.0
