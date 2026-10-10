@@ -10,4 +10,4 @@
 # requirements.txt -- see that file for why it isn't optional the way
 # authlib is.
 -r requirements.txt
-authlib==1.7.2
+authlib==1.8.0
